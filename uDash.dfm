@@ -1,0 +1,374 @@
+object frmDash: TfrmDash
+  Left = 0
+  Top = 0
+  BorderIcons = [biSystemMenu, biMinimize]
+  BorderStyle = bsSingle
+  Caption = 'Plan Manager'
+  ClientHeight = 720
+  ClientWidth = 980
+  Color = clBtnFace
+  Font.Charset = DEFAULT_CHARSET
+  Font.Color = clWindowText
+  Font.Height = -12
+  Font.Name = 'Malgun Gothic'
+  Font.Style = []
+  Position = poScreenCenter
+  OnCloseQuery = FormCloseQuery
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  TextHeight = 15
+  object pnlTop: TPanel
+    Left = 0
+    Top = 0
+    Width = 980
+    Height = 52
+    Align = alTop
+    BevelOuter = bvNone
+    Color = 2039583
+    ParentBackground = False
+    TabOrder = 0
+    object lblApp: TLabel
+      Left = 16
+      Top = 15
+      Width = 39
+      Height = 25
+      Caption = 'Plan'
+      Font.Charset = DEFAULT_CHARSET
+      Font.Color = clWhite
+      Font.Height = -19
+      Font.Name = 'Malgun Gothic'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object btnScheduler: TButton
+      Left = 770
+      Top = 12
+      Width = 190
+      Height = 30
+      Caption = 'scheduler'
+      TabOrder = 0
+      OnClick = btnSchedulerClick
+    end
+    object chkStartup: TCheckBox
+      Left = 560
+      Top = 18
+      Width = 200
+      Height = 17
+      Caption = 'startup'
+      Font.Charset = DEFAULT_CHARSET
+      Font.Color = clWhite
+      Font.Height = -12
+      Font.Name = 'Malgun Gothic'
+      Font.Style = []
+      ParentFont = False
+      TabOrder = 1
+      OnClick = chkStartupClick
+    end
+  end
+  object pgc: TPageControl
+    Left = 0
+    Top = 52
+    Width = 980
+    Height = 668
+    ActivePage = tsMain
+    Align = alClient
+    TabOrder = 1
+    object tsMain: TTabSheet
+      Caption = 'main'
+      object lblWeek: TLabel
+        Left = 12
+        Top = 52
+        Width = 27
+        Height = 15
+        Caption = 'week'
+      end
+      object pnlCalTop: TPanel
+        Left = 0
+        Top = 0
+        Width = 972
+        Height = 44
+        Align = alTop
+        BevelOuter = bvNone
+        TabOrder = 0
+        object lblGStatus: TLabel
+          Left = 300
+          Top = 14
+          Width = 31
+          Height = 15
+          Caption = 'status'
+        end
+        object btnSettings: TButton
+          Left = 12
+          Top = 9
+          Width = 130
+          Height = 27
+          Caption = 'settings'
+          TabOrder = 0
+          OnClick = btnSettingsClick
+        end
+        object btnFetch: TButton
+          Left = 150
+          Top = 9
+          Width = 130
+          Height = 27
+          Caption = 'fetch'
+          TabOrder = 1
+          OnClick = btnFetchClick
+        end
+        object chkAutoFetch: TCheckBox
+          Left = 820
+          Top = 15
+          Width = 140
+          Height = 17
+          Caption = 'auto'
+          TabOrder = 2
+        end
+      end
+      object lvWeek: TListView
+        Left = 12
+        Top = 72
+        Width = 956
+        Height = 250
+        Columns = <
+          item
+            Caption = 'date'
+            Width = 130
+          end
+          item
+            Caption = 'time'
+            Width = 80
+          end
+          item
+            Caption = 'kind'
+            Width = 80
+          end
+          item
+            Caption = 'content'
+            Width = 640
+          end>
+        GridLines = True
+        ReadOnly = True
+        RowSelect = True
+        TabOrder = 1
+        ViewStyle = vsReport
+        OnCustomDrawItem = lvWeekCustomDrawItem
+      end
+      object pnlTodoBtn: TPanel
+        Left = 0
+        Top = 330
+        Width = 972
+        Height = 44
+        BevelOuter = bvNone
+        TabOrder = 2
+        object lblTodo: TLabel
+          Left = 12
+          Top = 14
+          Width = 25
+          Height = 15
+          Caption = 'todo'
+        end
+        object btnTodoAdd: TButton
+          Left = 120
+          Top = 9
+          Width = 70
+          Height = 27
+          Caption = 'add'
+          TabOrder = 0
+          OnClick = btnTodoAddClick
+        end
+        object btnTodoEdit: TButton
+          Left = 196
+          Top = 9
+          Width = 70
+          Height = 27
+          Caption = 'edit'
+          TabOrder = 1
+          OnClick = btnTodoEditClick
+        end
+        object btnTodoDel: TButton
+          Left = 272
+          Top = 9
+          Width = 70
+          Height = 27
+          Caption = 'del'
+          TabOrder = 2
+          OnClick = btnTodoDelClick
+        end
+        object btnTodoDone: TButton
+          Left = 348
+          Top = 9
+          Width = 100
+          Height = 27
+          Caption = 'done'
+          TabOrder = 3
+          OnClick = btnTodoDoneClick
+        end
+        object btnTodoCopy: TButton
+          Left = 454
+          Top = 9
+          Width = 120
+          Height = 27
+          Caption = 'copy'
+          TabOrder = 4
+          OnClick = btnTodoCopyClick
+        end
+      end
+      object lvTodo: TListView
+        Left = 12
+        Top = 380
+        Width = 956
+        Height = 250
+        Columns = <
+          item
+            Caption = 'done'
+          end
+          item
+            Caption = 'day'
+            Width = 110
+          end
+          item
+            Caption = 'time'
+            Width = 80
+          end
+          item
+            Caption = 'todo'
+            Width = 420
+          end
+          item
+            Caption = 'alarm'
+            Width = 60
+          end
+          item
+            Caption = 'ment'
+            Width = 220
+          end>
+        GridLines = True
+        ReadOnly = True
+        RowSelect = True
+        TabOrder = 3
+        ViewStyle = vsReport
+        OnCustomDrawItem = lvTodoCustomDrawItem
+        OnDblClick = lvTodoDblClick
+      end
+    end
+    object tsPcAlarm: TTabSheet
+      Caption = 'alarm'
+      ImageIndex = 1
+      object pnlAlarmBtn: TPanel
+        Left = 0
+        Top = 0
+        Width = 972
+        Height = 44
+        Align = alTop
+        BevelOuter = bvNone
+        TabOrder = 0
+        object btnAlAdd: TButton
+          Left = 12
+          Top = 9
+          Width = 80
+          Height = 27
+          Caption = 'add'
+          TabOrder = 0
+          OnClick = btnAlAddClick
+        end
+        object btnAlEdit: TButton
+          Left = 98
+          Top = 9
+          Width = 80
+          Height = 27
+          Caption = 'edit'
+          TabOrder = 1
+          OnClick = btnAlEditClick
+        end
+        object btnAlDel: TButton
+          Left = 184
+          Top = 9
+          Width = 80
+          Height = 27
+          Caption = 'del'
+          TabOrder = 2
+          OnClick = btnAlDelClick
+        end
+        object btnAlTest: TButton
+          Left = 284
+          Top = 9
+          Width = 120
+          Height = 27
+          Caption = 'preview'
+          TabOrder = 3
+          OnClick = btnAlTestClick
+        end
+      end
+      object lvAlarm: TListView
+        Left = 0
+        Top = 44
+        Width = 972
+        Height = 594
+        Align = alClient
+        Columns = <
+          item
+            Caption = 'on'
+          end
+          item
+            Caption = 'name'
+            Width = 200
+          end
+          item
+            Caption = 'days'
+            Width = 120
+          end
+          item
+            Caption = 'time'
+            Width = 80
+          end
+          item
+            Caption = 'ment'
+            Width = 480
+          end>
+        GridLines = True
+        ReadOnly = True
+        RowSelect = True
+        TabOrder = 1
+        ViewStyle = vsReport
+        OnDblClick = lvAlarmDblClick
+        ExplicitHeight = 580
+      end
+    end
+  end
+  object Timer1: TTimer
+    OnTimer = Timer1Timer
+    Left = 620
+    Top = 120
+  end
+  object TrayIcon1: TTrayIcon
+    PopupMenu = PopupMenu1
+    Visible = True
+    OnDblClick = TrayIcon1DblClick
+    Left = 680
+    Top = 120
+  end
+  object PopupMenu1: TPopupMenu
+    Left = 740
+    Top = 120
+    object miShow: TMenuItem
+      Caption = 'show'
+      OnClick = miShowClick
+    end
+    object miScheduler: TMenuItem
+      Caption = 'scheduler'
+      OnClick = btnSchedulerClick
+    end
+    object miBackup: TMenuItem
+      Caption = 'backup'
+      OnClick = miBackupClick
+    end
+    object miDiag: TMenuItem
+      Caption = 'diag'
+      OnClick = miDiagClick
+    end
+    object miExit: TMenuItem
+      Caption = 'exit'
+      OnClick = miExitClick
+    end
+  end
+end

@@ -1,0 +1,26 @@
+﻿program PlanManager;
+
+uses
+  Vcl.Forms,
+  uDash in 'uDash.pas' {frmDash},
+  uMain in 'uMain.pas' {frmMain},
+  uEditItem in 'uEditItem.pas' {frmEditItem},
+  uPlanEdit in 'uPlanEdit.pas' {frmPlanEdit},
+  uAlarm in 'uAlarm.pas' {frmAlarm},
+  uSchedule in 'uSchedule.pas',
+  uKakaoSend in 'uKakaoSend.pas',
+  uCalendar in 'uCalendar.pas',
+  uPlanData in 'uPlanData.pas',
+  uGoogleTasks in 'uGoogleTasks.pas';
+
+{$R *.res}
+
+begin
+  Application.Initialize;
+  Application.MainFormOnTaskbar := True;
+  Application.Title := '일정관리기';
+  // 메인 폼은 일정관리기. 카카오톡 스케줄러(frmMain)는 자동 생성하지 않고
+  // 일정관리기의 '스케줄러 열기' 버튼에서 필요할 때 생성한다.
+  Application.CreateForm(TfrmDash, frmDash);
+  Application.Run;
+end.

@@ -1,0 +1,1408 @@
+﻿unit uDash;
+
+{
+  일정관리기 (메인 화면)
+  - 탭1: 오늘/이번주 구글 캘린더(ICS) 일정
+  - 탭2: 내 할일 (로컬, 알람+멘트)
+  - 탭3: PC 알람 (요일/시간 반복, 최상단 팝업+멘트복사)
+  - 우상단: 카카오톡 스케줄러 열기
+
+  구글 캘린더는 ICS URL 구독 방식. 날짜가 지정된 구글 '할일'은
+  캘린더에 표시되어 이 피드에 함께 들어온다.
+}
+
+interface
+
+uses
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes,
+  System.IOUtils, System.DateUtils, System.StrUtils, System.JSON,
+  System.Generics.Collections, System.Generics.Defaults, System.Win.Registry,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls,
+  Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.Menus, Vcl.Clipbrd,
+  uCalendar, uPlanData, uPlanEdit, uAlarm, uGoogleTasks, uGSettings;
+
+type
+  TfrmDash = class(TForm)
+    pnlTop: TPanel;
+    lblApp: TLabel;
+    btnScheduler: TButton;
+    chkStartup: TCheckBox;
+    pgc: TPageControl;
+    tsMain: TTabSheet;
+    pnlCalTop: TPanel;
+    lblGStatus: TLabel;
+    btnSettings: TButton;
+    btnFetch: TButton;
+    chkAutoFetch: TCheckBox;
+    lblWeek: TLabel;
+    lvWeek: TListView;
+    pnlTodoBtn: TPanel;
+    lblTodo: TLabel;
+    btnTodoAdd: TButton;
+    btnTodoEdit: TButton;
+    btnTodoDel: TButton;
+    btnTodoDone: TButton;
+    btnTodoCopy: TButton;
+    lvTodo: TListView;
+    tsPcAlarm: TTabSheet;
+    pnlAlarmBtn: TPanel;
+    btnAlAdd: TButton;
+    btnAlEdit: TButton;
+    btnAlDel: TButton;
+    btnAlTest: TButton;
+    lvAlarm: TListView;
+    Timer1: TTimer;
+    TrayIcon1: TTrayIcon;
+    PopupMenu1: TPopupMenu;
+    miShow: TMenuItem;
+    miScheduler: TMenuItem;
+    miBackup: TMenuItem;
+    miDiag: TMenuItem;
+    miExit: TMenuItem;
+    procedure FormCreate(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
+    procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure Timer1Timer(Sender: TObject);
+    procedure btnSchedulerClick(Sender: TObject);
+    procedure chkStartupClick(Sender: TObject);
+    procedure btnFetchClick(Sender: TObject);
+    procedure btnSettingsClick(Sender: TObject);
+    procedure btnTodoAddClick(Sender: TObject);
+    procedure btnTodoEditClick(Sender: TObject);
+    procedure btnTodoDelClick(Sender: TObject);
+    procedure btnTodoDoneClick(Sender: TObject);
+    procedure btnTodoCopyClick(Sender: TObject);
+    procedure lvTodoDblClick(Sender: TObject);
+    procedure lvWeekCustomDrawItem(Sender: TCustomListView;
+      Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
+    procedure lvTodoCustomDrawItem(Sender: TCustomListView;
+      Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
+    procedure btnAlAddClick(Sender: TObject);
+    procedure btnAlEditClick(Sender: TObject);
+    procedure btnAlDelClick(Sender: TObject);
+    procedure btnAlTestClick(Sender: TObject);
+    procedure lvAlarmDblClick(Sender: TObject);
+    procedure TrayIcon1DblClick(Sender: TObject);
+    procedure miShowClick(Sender: TObject);
+    procedure miBackupClick(Sender: TObject);
+    procedure miDiagClick(Sender: TObject);
+    procedure miExitClick(Sender: TObject);
+  private
+    FDir: string;
+    FTodoFile: string;
+    FAlarmFile: string;
+    FTaskAlarmFile: string;
+    FCfgFile: string;
+    FTodos: TTodoList;
+    FAlarms: TPcAlarmList;
+    FTaskAlarms: TTaskAlarmList;
+    FCalCache: TCalEventList;   // 마지막으로 받은 캘린더 이벤트
+    FGAuth: TGoogleAuth;
+    FGTasks: TGoogleTaskList;   // 마지막으로 받은 구글 할일
+    FWeekDates: TList<TDateTime>;   // 주간뷰 행별 날짜(강조 판단용)
+    FTodoDates: TList<TDateTime>;   // 할일 목록 행별 날짜(강조 판단용)
+    FCalUrl: string;                // 구글 캘린더 ICS 주소 (설정창에서 관리)
+    FDuplicate: Boolean;            // 두 번째로 생성된 중복 인스턴스인지
+    FLoading: Boolean;
+    FReallyClose: Boolean;
+    FLastFetch: TDateTime;
+    FAlarmStack: Integer;
+    FIcon: TIcon;
+    FLastBackup: TDate;
+    procedure ApplyCaptions;
+    procedure ShutdownAll;
+    procedure DoBackup(AManual: Boolean);
+    procedure CleanOldBackups;
+    procedure SetStartup(AEnable: Boolean);
+    function IsStartupSet: Boolean;
+    procedure CenterOnScreen;
+    procedure BuildIcon;
+    procedure LoadCfg;
+    procedure SaveCfg;
+    procedure RefreshCalendarViews;
+    procedure FetchGoogleTasks;
+    procedure UpdateGoogleStatus;
+    procedure RefreshTodo;
+    procedure RefreshAlarm;
+    function SelTodo: TTodoItem;
+    function SelGoogleTask: TGoogleTask;
+    procedure AttachAlarmToNewest(const ATitle: string; ASrc: TTaskAlarm);
+    function SelAlarm: TPcAlarm;
+    procedure FireAlarm(const ATitle, AMent: string);
+    procedure CheckAlarms;
+  public
+    /// 다른 폼(스케줄러)에서 트레이 풍선 알림을 띄울 때 사용
+    procedure Notify(const ATitle, AText: string);
+  end;
+
+var
+  frmDash: TfrmDash;
+
+implementation
+
+{$R *.dfm}
+
+uses uMain;   // 카카오톡 스케줄러 폼
+
+type
+  { 내 할일 목록 정렬용 행 정보 }
+  TTodoRow = record
+    Grp: Integer;        // 0=오늘/미래, 1=지난일정, 2=기한없음
+    SortDate: TDateTime;
+    IsGoogle: Boolean;
+    Local: TTodoItem;
+    GTask: TGoogleTask;
+  end;
+
+var
+  GDashCreated: Boolean = False;   // TfrmDash 가 이미 만들어졌는지 (중복 생성 차단용)
+
+{ ---------- 시작프로그램 등록 ---------- }
+
+const
+  RUN_KEY   = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  RUN_VALUE = 'PlanManager';
+
+function TfrmDash.IsStartupSet: Boolean;
+var
+  Reg: TRegistry;
+begin
+  Result := False;
+  Reg := TRegistry.Create(KEY_READ);
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKeyReadOnly(RUN_KEY) then
+      Result := Reg.ValueExists(RUN_VALUE);
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure TfrmDash.SetStartup(AEnable: Boolean);
+var
+  Reg: TRegistry;
+begin
+  Reg := TRegistry.Create(KEY_READ or KEY_WRITE);
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKey(RUN_KEY, True) then
+    begin
+      if AEnable then
+        // 부팅 시 실행 - 창을 중앙에 보이게(트레이 최소화 안 함)
+        Reg.WriteString(RUN_VALUE, '"' + ParamStr(0) + '"')
+      else if Reg.ValueExists(RUN_VALUE) then
+        Reg.DeleteValue(RUN_VALUE);
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure TfrmDash.chkStartupClick(Sender: TObject);
+begin
+  if FLoading then Exit;
+  try
+    SetStartup(chkStartup.Checked);
+  except
+    // 레지스트리 접근 실패는 무시
+  end;
+end;
+
+procedure TfrmDash.CenterOnScreen;
+begin
+  // 현재 모니터(마우스가 있는 화면) 중앙에 배치
+  Position := poScreenCenter;
+  Left := Screen.WorkAreaLeft + (Screen.WorkAreaWidth - Width) div 2;
+  Top := Screen.WorkAreaTop + (Screen.WorkAreaHeight - Height) div 2;
+end;
+
+{ ---------- 자동 백업 ---------- }
+
+procedure TfrmDash.DoBackup(AManual: Boolean);
+var
+  BkDir, Stamp, Src, Dst: string;
+  Files: TArray<string>;
+  F: string;
+begin
+  BkDir := TPath.Combine(FDir, 'backup');
+  if not TDirectory.Exists(BkDir) then TDirectory.CreateDirectory(BkDir);
+
+  Stamp := FormatDateTime('yyyymmdd_hhnnss', Now);
+
+  // 대상: 할일 / PC알람 / 카톡예약 / 설정
+  Files := [FTodoFile, FAlarmFile,
+    TPath.Combine(FDir, 'schedules.json'),
+    TPath.Combine(FDir, 'pcalarms.json'),
+    TPath.Combine(FDir, 'todos.json'),
+    TPath.Combine(FDir, 'taskalarms.json'),
+    FCfgFile,
+    TPath.Combine(FDir, 'config.json')];
+
+  for F in Files do
+    if FileExists(F) then
+    begin
+      Src := F;
+      Dst := TPath.Combine(BkDir,
+        Stamp + '_' + TPath.GetFileName(F));
+      try
+        TFile.Copy(Src, Dst, True);
+      except
+      end;
+    end;
+
+  FLastBackup := Date;
+  CleanOldBackups;
+
+  if AManual then
+    ShowMessage('백업 완료: ' + BkDir);
+end;
+
+{ 30일 이상 지난 백업 파일 정리 }
+procedure TfrmDash.CleanOldBackups;
+var
+  BkDir: string;
+  Files: TArray<string>;
+  F: string;
+begin
+  BkDir := TPath.Combine(FDir, 'backup');
+  if not TDirectory.Exists(BkDir) then Exit;
+  try
+    Files := TDirectory.GetFiles(BkDir, '*.json');
+    for F in Files do
+      if DaysBetween(Now, TFile.GetLastWriteTime(F)) > 30 then
+        TFile.Delete(F);
+  except
+  end;
+end;
+
+{ ---------- 캡션 (DFM 대신 코드에서 설정: 한글 인코딩 안전) ---------- }
+
+procedure TfrmDash.ApplyCaptions;
+  procedure Col(LV: TListView; const Names: array of string);
+  var I: Integer;
+  begin
+    for I := 0 to High(Names) do
+      if I < LV.Columns.Count then
+        LV.Columns[I].Caption := Names[I];
+  end;
+begin
+  lblApp.Caption := '일정관리기';
+  btnScheduler.Caption := '카카오톡 스케줄러 열기';
+  chkStartup.Caption := 'PC 시작 시 자동 실행';
+
+  tsMain.Caption := '일정 / 할일';
+  tsPcAlarm.Caption := 'PC 알람';
+
+  btnSettings.Caption := '연동 설정';
+  btnFetch.Caption := '불러오기';
+  chkAutoFetch.Caption := '30분마다 갱신';
+  lblWeek.Caption := '이번주 일정 (오늘/내일 강조)';
+
+  Col(lvWeek, ['날짜', '시각', '구분', '내용']);
+
+  lblTodo.Caption := '내 할일 (+ 구글 Tasks 전체)';
+  btnTodoAdd.Caption := '추가';
+  btnTodoEdit.Caption := '수정';
+  btnTodoDel.Caption := '삭제';
+  btnTodoDone.Caption := '완료 토글';
+  btnTodoCopy.Caption := '멘트 복사';
+  Col(lvTodo, ['완료', '날짜', '시각', '할일', '알람', '멘트']);
+
+  btnAlAdd.Caption := '추가';
+  btnAlEdit.Caption := '수정';
+  btnAlDel.Caption := '삭제';
+  btnAlTest.Caption := '알람 미리보기';
+  Col(lvAlarm, ['사용', '이름', '요일', '시각', '멘트']);
+
+  miShow.Caption := '창 열기';
+  miScheduler.Caption := '카카오톡 스케줄러';
+  miBackup.Caption := '지금 백업';
+  miDiag.Caption := '진단 정보';
+  miExit.Caption := '종료';
+end;
+
+{ ---------- 트레이 아이콘 ---------- }
+
+procedure TfrmDash.BuildIcon;
+var
+  IcoPath: string;
+begin
+  FIcon := TIcon.Create;
+  IcoPath := TPath.Combine(ExtractFilePath(ParamStr(0)), 'PlanManager.ico');
+  try
+    if FileExists(IcoPath) then
+      FIcon.LoadFromFile(IcoPath)          // 실행파일과 같은 폴더의 아이콘
+    else
+      FIcon.Assign(Application.Icon);       // 없으면 기본 아이콘
+  except
+    FIcon.Assign(Application.Icon);
+  end;
+  if not FIcon.Empty then
+    Application.Icon.Assign(FIcon);
+  TrayIcon1.Icon.Assign(FIcon);
+  TrayIcon1.Visible := True;
+end;
+
+{ ---------- 초기화 ---------- }
+
+procedure TfrmDash.FormCreate(Sender: TObject);
+begin
+  // 프로젝트 설정 문제 등으로 이 폼이 두 번 생성되면, 두 번째는 완전히 무력화한다.
+  // (트레이 아이콘·창이 2개씩 뜨는 것을 원천 차단)
+  if GDashCreated then
+  begin
+    FDuplicate := True;
+    FLoading := True;          // 타이머 내용이 절대 실행되지 않도록
+    Timer1.Enabled := False;
+    TrayIcon1.Visible := False;
+    Visible := False;
+    Exit;
+  end;
+  GDashCreated := True;
+  FDuplicate := False;
+
+  FLoading := True;
+  FReallyClose := False;
+  FAlarmStack := 0;
+
+  FDir := TPath.Combine(TPath.GetHomePath, 'KakaoScheduler');
+  if not TDirectory.Exists(FDir) then TDirectory.CreateDirectory(FDir);
+  FTodoFile := TPath.Combine(FDir, 'todos.json');
+  FAlarmFile := TPath.Combine(FDir, 'pcalarms.json');
+  FTaskAlarmFile := TPath.Combine(FDir, 'taskalarms.json');
+  FCfgFile := TPath.Combine(FDir, 'plan_cfg.json');
+
+  BuildIcon;
+  TrayIcon1.Hint := '일정관리기';
+
+  Caption := '일정관리기';
+  ApplyCaptions;
+
+  FTodos := TTodoList.Create(True);
+  FAlarms := TPcAlarmList.Create(True);
+  FTaskAlarms := TTaskAlarmList.Create(True);
+  FCalCache := nil;
+  FGTasks := nil;
+  FWeekDates := TList<TDateTime>.Create;
+  FTodoDates := TList<TDateTime>.Create;
+  FGAuth := TGoogleAuth.Create(TPath.Combine(FDir, 'google_oauth.json'));
+
+  try FTodos.LoadFromFile(FTodoFile); except end;
+  try FAlarms.LoadFromFile(FAlarmFile); except end;
+  try FTaskAlarms.LoadFromFile(FTaskAlarmFile); except end;
+
+  LoadCfg;
+  RefreshTodo;
+  RefreshAlarm;
+
+  FLoading := False;
+
+  // 하루 1회 자동 백업 (오늘 아직 안 했으면)
+  FLastBackup := 0;
+  DoBackup(False);
+
+  // 카카오톡 스케줄러 폼을 미리(숨김) 생성해 둔다.
+  // 그래야 창을 열지 않아도 예약 발송 타이머가 백그라운드에서 동작한다.
+  // Application.CreateForm 을 쓰면 메인 폼이 뒤바뀔 수 있으므로 일반 생성한다.
+  if frmMain = nil then
+  begin
+    frmMain := TfrmMain.Create(Application);
+    // 작업표시줄에 별도 버튼이 생기지 않도록 처리 (아이콘 2개 방지)
+    SetWindowLong(frmMain.Handle, GWL_EXSTYLE,
+      GetWindowLong(frmMain.Handle, GWL_EXSTYLE) or WS_EX_TOOLWINDOW);
+    frmMain.Hide;
+  end;
+
+  // ICS 주소가 있으면 시작 시 한 번 자동으로 불러온다
+  if Trim(FCalUrl) <> '' then
+    btnFetchClick(nil);
+
+  // 구글 Tasks: 연결돼 있으면 시작 시 불러오기
+  UpdateGoogleStatus;
+  if FGAuth.IsConnected then
+    FetchGoogleTasks;
+
+  // 시작프로그램 등록 상태를 체크박스에 반영
+  chkStartup.Checked := IsStartupSet;
+
+  // 이전 버전(스케줄러)이 남긴 시작 항목이 있으면 정리하고,
+  // 시작 등록이 켜져 있으면 현재 exe 경로로 다시 써서 경로 불일치를 막는다
+  try
+    with TRegistry.Create(KEY_READ or KEY_WRITE) do
+    try
+      RootKey := HKEY_CURRENT_USER;
+      if OpenKey(RUN_KEY, False) then
+      begin
+        if ValueExists('KakaoScheduler') then
+          DeleteValue('KakaoScheduler');
+        // PlanManager 항목이 있으면(=시작 등록 상태) 현재 exe 경로로 갱신
+        if ValueExists(RUN_VALUE) then
+          WriteString(RUN_VALUE, '"' + ParamStr(0) + '"');
+      end;
+    finally
+      Free;
+    end;
+  except
+  end;
+
+  // /tray 스위치로 실행되면 트레이로, 아니면(부팅 포함) 화면 중앙에 표시
+  if FindCmdLineSwitch('tray', ['/', '-'], True) then
+  begin
+    Hide;
+    Application.ShowMainForm := False;
+  end
+  else
+    CenterOnScreen;
+end;
+
+procedure TfrmDash.FormDestroy(Sender: TObject);
+begin
+  if FDuplicate then Exit;   // 중복 인스턴스는 초기화된 게 없으므로 정리도 하지 않는다
+  SaveCfg;
+  FTodos.Free;
+  FAlarms.Free;
+  FTaskAlarms.Free;
+  FCalCache.Free;
+  FGTasks.Free;
+  FGAuth.Free;
+  FWeekDates.Free;
+  FTodoDates.Free;
+  FIcon.Free;
+end;
+
+{ ---------- 설정 ---------- }
+
+procedure TfrmDash.LoadCfg;
+var
+  V: TJSONValue;
+  O: TJSONObject;
+begin
+  if not FileExists(FCfgFile) then Exit;
+  V := nil;
+  try
+    V := TJSONObject.ParseJSONValue(TFile.ReadAllText(FCfgFile, TEncoding.UTF8));
+    if V is TJSONObject then
+    begin
+      O := TJSONObject(V);
+      FCalUrl := O.GetValue<string>('calUrl', '');
+      chkAutoFetch.Checked := O.GetValue<Boolean>('autoFetch', False);
+    end;
+  except
+  end;
+  V.Free;
+end;
+
+procedure TfrmDash.SaveCfg;
+var
+  O: TJSONObject;
+begin
+  O := TJSONObject.Create;
+  try
+    O.AddPair('calUrl', Trim(FCalUrl));
+    O.AddPair('autoFetch', TJSONBool.Create(chkAutoFetch.Checked));
+    TFile.WriteAllText(FCfgFile, O.ToJSON, TEncoding.UTF8);
+  except
+  end;
+  O.Free;
+end;
+
+{ ---------- 캘린더 ---------- }
+
+procedure TfrmDash.btnFetchClick(Sender: TObject);
+var
+  Err: string;
+  New: TCalEventList;
+begin
+  if Trim(FCalUrl) = '' then
+  begin
+    ShowMessage('구글 캘린더 ICS 주소를 입력하세요.' + sLineBreak +
+      '(구글 캘린더 → 설정 → 해당 캘린더 → "비공개 주소(iCal 형식)")');
+    Exit;
+  end;
+
+  btnFetch.Enabled := False;
+  btnFetch.Caption := '불러오는 중...';
+  Application.ProcessMessages;
+  try
+    New := TCalendarFetcher.Fetch(FCalUrl, Err);
+    if New = nil then
+    begin
+      ShowMessage('캘린더를 불러오지 못했습니다.' + sLineBreak + Err);
+      Exit;
+    end;
+    FCalCache.Free;
+    FCalCache := New;
+    FLastFetch := Now;
+    RefreshCalendarViews;
+    SaveCfg;
+  finally
+    btnFetch.Enabled := True;
+    btnSettings.Caption := '연동 설정';
+  btnFetch.Caption := '불러오기';
+  end;
+end;
+
+{ ---------- 구글 Tasks ---------- }
+
+procedure TfrmDash.UpdateGoogleStatus;
+begin
+  if FGAuth.ClientId = '' then
+  begin
+    lblGStatus.Caption := '구글 Tasks: 미설정 ([연동 설정]에서 등록)';
+    lblGStatus.Font.Color := clGrayText;
+  end
+  else if FGAuth.IsConnected then
+  begin
+    lblGStatus.Caption := '구글 Tasks: 연결됨';
+    lblGStatus.Font.Color := clGreen;
+  end
+  else
+  begin
+    lblGStatus.Caption := '구글 Tasks: 로그인 필요';
+    lblGStatus.Font.Color := clRed;
+  end;
+end;
+
+{ 연동 설정 창 - ICS 주소 / 구글 Tasks 로그인을 한곳에서 관리 }
+procedure TfrmDash.btnSettingsClick(Sender: TObject);
+var
+  Url: string;
+  TasksChanged: Boolean;
+begin
+  Url := FCalUrl;
+  if TfrmGSettings.Edit(FGAuth, Url, TasksChanged) then
+  begin
+    FCalUrl := Url;
+    SaveCfg;
+    if Trim(FCalUrl) <> '' then
+      btnFetchClick(nil);
+  end;
+
+  // 로그인/로그아웃이 있었으면 할일 목록 갱신
+  if TasksChanged then
+  begin
+    if FGAuth.IsConnected then
+      FetchGoogleTasks
+    else
+    begin
+      FreeAndNil(FGTasks);
+      RefreshTodo;
+    end;
+  end;
+  UpdateGoogleStatus;
+end;
+
+procedure TfrmDash.FetchGoogleTasks;
+var
+  Err: string;
+  New: TGoogleTaskList;
+begin
+  if not FGAuth.IsConnected then Exit;
+  New := TGoogleTasksFetcher.FetchAll(FGAuth, Err);
+  if New = nil then Exit;
+  if (Err <> '') and (New.Count = 0) then
+  begin
+    // 오류지만 조용히 로그만 (팝업 남발 방지). 상태만 갱신.
+    New.Free;
+    UpdateGoogleStatus;
+    Exit;
+  end;
+  FGTasks.Free;
+  FGTasks := New;
+  RefreshTodo;
+end;
+
+procedure TfrmDash.RefreshCalendarViews;
+var
+  Today, WeekEnd: TDateTime;
+  Ev: TCalEvent;
+  LI: TListItem;
+begin
+  lvWeek.Items.Clear;
+  FWeekDates.Clear;
+
+  Today := DateOf(Now);
+  WeekEnd := Today + 7;
+
+  // 이번주 뷰에는 구글 캘린더 일정만 표시 (구글 Tasks 는 하단 '내 할일'로)
+  if FCalCache <> nil then
+    for Ev in FCalCache do
+      if (Ev.StartTime >= Today) and (Ev.StartTime < WeekEnd) then
+      begin
+        LI := lvWeek.Items.Add;
+        LI.Caption := FormatDateTime('mm-dd(ddd)', Ev.StartTime);
+        LI.SubItems.Add(Ev.TimeText);
+        LI.SubItems.Add('일정');
+        LI.SubItems.Add(Ev.Summary);
+        FWeekDates.Add(DateOf(Ev.StartTime));
+      end;
+
+  lblWeek.Caption := Format('이번주 일정 %d건 (오늘/내일 강조)', [lvWeek.Items.Count]);
+end;
+
+{ 오늘=주황, 내일=노랑으로 한 줄 강조 }
+procedure TfrmDash.lvWeekCustomDrawItem(Sender: TCustomListView;
+  Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
+var
+  D, Today: TDateTime;
+begin
+  DefaultDraw := True;
+  if (Item.Index < 0) or (Item.Index >= FWeekDates.Count) then Exit;
+  D := FWeekDates[Item.Index];
+  Today := DateOf(Now);
+
+  if SameDate(D, Today) then
+  begin
+    Sender.Canvas.Brush.Color := $0060A8FF;   // 주황(오늘)
+    Sender.Canvas.Font.Style := [fsBold];
+  end
+  else if SameDate(D, Today + 1) then
+  begin
+    Sender.Canvas.Brush.Color := $0080FFFF;   // 노랑(내일)
+    Sender.Canvas.Font.Style := [fsBold];
+  end
+  else
+  begin
+    Sender.Canvas.Brush.Color := clWindow;
+    Sender.Canvas.Font.Style := [];
+  end;
+end;
+
+{ ---------- 할일 ---------- }
+
+{ 내 할일: 오늘=주황, 내일=노랑 강조 }
+procedure TfrmDash.lvTodoCustomDrawItem(Sender: TCustomListView;
+  Item: TListItem; State: TCustomDrawState; var DefaultDraw: Boolean);
+var
+  D, Today: TDateTime;
+begin
+  DefaultDraw := True;
+  if (Item.Index < 0) or (Item.Index >= FTodoDates.Count) then Exit;
+  D := FTodoDates[Item.Index];
+  if D = 0 then
+  begin
+    Sender.Canvas.Brush.Color := clWindow;
+    Sender.Canvas.Font.Style := [];
+    Exit;
+  end;
+  Today := DateOf(Now);
+
+  if SameDate(D, Today) then
+  begin
+    Sender.Canvas.Brush.Color := $0060A8FF;   // 주황(오늘)
+    Sender.Canvas.Font.Style := [fsBold];
+  end
+  else if SameDate(D, Today + 1) then
+  begin
+    Sender.Canvas.Brush.Color := $0080FFFF;   // 노랑(내일)
+    Sender.Canvas.Font.Style := [fsBold];
+  end
+  else
+  begin
+    Sender.Canvas.Brush.Color := clWindow;
+    Sender.Canvas.Font.Style := [];
+  end;
+end;
+
+procedure TfrmDash.RefreshTodo;
+var
+  It: TTodoItem;
+  Tk: TGoogleTask;
+  A: TTaskAlarm;
+  LI: TListItem;
+  Idx, I: Integer;
+  Rows: TList<TTodoRow>;
+  R: TTodoRow;
+  Today: TDateTime;
+
+  { 날짜에 따라 정렬 그룹을 정한다 }
+  procedure FillGroup(var ARow: TTodoRow; AHasDue: Boolean; ADue: TDateTime);
+  begin
+    if not AHasDue then
+    begin
+      ARow.Grp := 2;               // 기한없음 -> 맨 아래
+      ARow.SortDate := 0;
+    end
+    else if DateOf(ADue) >= Today then
+    begin
+      ARow.Grp := 0;               // 오늘/미래 -> 맨 위
+      ARow.SortDate := DateOf(ADue);
+    end
+    else
+    begin
+      ARow.Grp := 1;               // 지난 일정 -> 중간
+      ARow.SortDate := DateOf(ADue);
+    end;
+  end;
+
+begin
+  Idx := lvTodo.ItemIndex;
+  Today := DateOf(Now);
+  Rows := TList<TTodoRow>.Create;
+  lvTodo.Items.BeginUpdate;
+  try
+    lvTodo.Items.Clear;
+    FTodoDates.Clear;
+
+    // 1) 로컬 할일 수집
+    for It in FTodos do
+    begin
+      R.IsGoogle := False;
+      R.Local := It;
+      R.GTask := nil;
+      FillGroup(R, True, It.RunDate);
+      Rows.Add(R);
+    end;
+
+    // 2) 구글 Tasks 수집 (기한 없는 것 포함)
+    if FGTasks <> nil then
+      for Tk in FGTasks do
+      begin
+        R.IsGoogle := True;
+        R.Local := nil;
+        R.GTask := Tk;
+        FillGroup(R, Tk.HasDue, Tk.Due);
+        Rows.Add(R);
+      end;
+
+    // 3) 정렬: 오늘/미래(가까운 날짜부터) -> 지난일정(최근부터) -> 기한없음
+    Rows.Sort(TComparer<TTodoRow>.Construct(
+      function(const X, Y: TTodoRow): Integer
+      begin
+        Result := X.Grp - Y.Grp;
+        if Result <> 0 then Exit;
+        case X.Grp of
+          0: Result := CompareDateTime(X.SortDate, Y.SortDate);   // 오름차순
+          1: Result := CompareDateTime(Y.SortDate, X.SortDate);   // 내림차순(최근 과거 우선)
+        else
+          Result := 0;
+        end;
+      end));
+
+    // 4) 화면에 채우기
+    for I := 0 to Rows.Count - 1 do
+    begin
+      R := Rows[I];
+      LI := lvTodo.Items.Add;
+
+      if not R.IsGoogle then
+      begin
+        It := R.Local;
+        LI.Caption := IfThen(It.Done, '완료', '');
+        LI.SubItems.Add(It.DaysText);
+        LI.SubItems.Add(IfThen(It.HasTime, FormatDateTime('hh:nn', It.RunTime), '-'));
+        LI.SubItems.Add(It.Title);
+        LI.SubItems.Add(IfThen(It.Alarm, 'ON', ''));
+        LI.SubItems.Add(Copy(StringReplace(It.Ment, sLineBreak, ' ', [rfReplaceAll]), 1, 60));
+        LI.Data := It;
+        FTodoDates.Add(DateOf(It.RunDate));
+      end
+      else
+      begin
+        Tk := R.GTask;
+        A := FTaskAlarms.FindById(Tk.Id);
+        LI.Caption := '';
+        if Tk.HasDue then
+          LI.SubItems.Add(FormatDateTime('mm-dd(ddd)', Tk.Due))
+        else
+          LI.SubItems.Add('기한없음');
+        if (A <> nil) and A.Alarm then
+          LI.SubItems.Add(FormatDateTime('hh:nn', A.RunTime))
+        else
+          LI.SubItems.Add('-');
+        LI.SubItems.Add('[구글] ' + Tk.Title);
+        if (A <> nil) and A.Alarm then
+          LI.SubItems.Add('ON')
+        else
+          LI.SubItems.Add('');
+        if (A <> nil) and (Trim(A.Ment) <> '') then
+          LI.SubItems.Add(Copy(StringReplace(A.Ment, sLineBreak, ' ', [rfReplaceAll]), 1, 60))
+        else
+          LI.SubItems.Add(Copy(StringReplace(Tk.Notes, sLineBreak, ' ', [rfReplaceAll]), 1, 60));
+        LI.Data := Tk;
+        if Tk.HasDue then
+          FTodoDates.Add(DateOf(Tk.Due))
+        else
+          FTodoDates.Add(0);
+      end;
+    end;
+  finally
+    lvTodo.Items.EndUpdate;
+    Rows.Free;
+  end;
+  if (Idx >= 0) and (Idx < lvTodo.Items.Count) then
+    lvTodo.ItemIndex := Idx;
+end;
+
+function TfrmDash.SelTodo: TTodoItem;
+var
+  P: Pointer;
+begin
+  Result := nil;
+  if lvTodo.Selected = nil then Exit;
+  P := lvTodo.Selected.Data;
+  // Data 가 로컬 할일 목록에 실제로 있을 때만 반환 (구글 항목 배제)
+  if (P <> nil) and (FTodos.IndexOf(TTodoItem(P)) >= 0) then
+    Result := TTodoItem(P);
+end;
+
+function TfrmDash.SelGoogleTask: TGoogleTask;
+var
+  P: Pointer;
+begin
+  Result := nil;
+  if (lvTodo.Selected = nil) or (FGTasks = nil) then Exit;
+  P := lvTodo.Selected.Data;
+  if (P <> nil) and (FGTasks.IndexOf(TGoogleTask(P)) >= 0) then
+    Result := TGoogleTask(P);
+end;
+
+procedure TfrmDash.btnTodoAddClick(Sender: TObject);
+var
+  It: TTodoItem;
+  Title, Notes, Err: string;
+  Due: TDateTime;
+  HasDue: Boolean;
+  Tmp: TTaskAlarm;
+begin
+  // 구글이 연결돼 있으면 구글 Tasks 에만 등록한다 (중복 생성 방지).
+  // 알람 설정은 task id 에 매핑해 로컬에 따로 보관.
+  if FGAuth.IsConnected then
+  begin
+    Title := '';
+    Notes := '';
+    Due := Date;
+    HasDue := True;
+    Tmp := TTaskAlarm.Create;
+    try
+      if not TfrmPlanEdit.EditGoogleTask('할일 추가 (구글 Tasks)',
+        Title, Notes, Due, HasDue, Tmp) then Exit;
+      if Trim(Title) = '' then Exit;
+
+      if not HasDue then Due := 0;
+      if not TGoogleTasksFetcher.InsertTask(FGAuth, '', Title, Notes, Due, Err) then
+      begin
+        ShowMessage('구글 할일 추가 실패:' + sLineBreak + Err);
+        Exit;
+      end;
+
+      // 새로 만든 항목의 id 를 알기 위해 목록을 다시 받아온 뒤 매핑 저장
+      FetchGoogleTasks;
+      if Tmp.Alarm or (Trim(Tmp.Ment) <> '') then
+        AttachAlarmToNewest(Title, Tmp);
+    finally
+      Tmp.Free;
+    end;
+    Exit;
+  end;
+
+  // 구글 미연결 시에는 기존처럼 로컬 할일로 저장
+  It := TTodoItem.Create;
+  if TfrmPlanEdit.EditTodo(It) then
+  begin
+    FTodos.Add(It);
+    FTodos.SaveToFile(FTodoFile);
+    RefreshTodo;
+  end
+  else
+    It.Free;
+end;
+
+{ 방금 만든 구글 항목(제목이 같은 것)에 알람 설정을 붙인다 }
+procedure TfrmDash.AttachAlarmToNewest(const ATitle: string; ASrc: TTaskAlarm);
+var
+  Tk, Found: TGoogleTask;
+  A: TTaskAlarm;
+begin
+  if FGTasks = nil then Exit;
+  Found := nil;
+  for Tk in FGTasks do
+    if Tk.Title = ATitle then
+      Found := Tk;          // 동명이 여럿이면 마지막(가장 최근) 것
+  if Found = nil then Exit;
+
+  A := FTaskAlarms.EnsureById(Found.Id);
+  A.Alarm := ASrc.Alarm;
+  A.RunTime := ASrc.RunTime;
+  A.Ment := ASrc.Ment;
+  FTaskAlarms.SaveToFile(FTaskAlarmFile);
+  RefreshTodo;
+end;
+
+procedure TfrmDash.btnTodoEditClick(Sender: TObject);
+var
+  It: TTodoItem;
+  Gt: TGoogleTask;
+  A: TTaskAlarm;
+  Title, Notes, Err: string;
+  Due: TDateTime;
+  HasDue: Boolean;
+begin
+  // 1) 구글 Tasks 항목 수정
+  Gt := SelGoogleTask;
+  if Gt <> nil then
+  begin
+    Title := Gt.Title;
+    Notes := Gt.Notes;
+    Due := Gt.Due;
+    HasDue := Gt.HasDue;
+    A := FTaskAlarms.EnsureById(Gt.Id);
+
+    if not TfrmPlanEdit.EditGoogleTask('할일 수정 (구글 Tasks)',
+      Title, Notes, Due, HasDue, A) then Exit;
+    if Trim(Title) = '' then Exit;
+
+    if TGoogleTasksFetcher.UpdateTask(FGAuth, Gt.ListId, Gt.Id,
+      Title, Notes, Due, HasDue, Err) then
+    begin
+      FTaskAlarms.SaveToFile(FTaskAlarmFile);
+      FetchGoogleTasks;
+    end
+    else
+      ShowMessage('구글 수정 실패:' + sLineBreak + Err);
+    Exit;
+  end;
+
+  // 2) 로컬 할일 수정
+  It := SelTodo;
+  if It = nil then
+  begin
+    ShowMessage('수정할 할일을 선택하세요.');
+    Exit;
+  end;
+  if TfrmPlanEdit.EditTodo(It) then
+  begin
+    FTodos.SaveToFile(FTodoFile);
+    RefreshTodo;
+  end;
+end;
+
+procedure TfrmDash.lvTodoDblClick(Sender: TObject);
+begin
+  btnTodoEditClick(nil);
+end;
+
+procedure TfrmDash.btnTodoDelClick(Sender: TObject);
+var
+  It: TTodoItem;
+  Gt: TGoogleTask;
+  A: TTaskAlarm;
+  Err: string;
+begin
+  Gt := SelGoogleTask;
+  if Gt <> nil then
+  begin
+    if MessageDlg('구글 할일 "' + Gt.Title + '" 을 삭제할까요?',
+      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+    if TGoogleTasksFetcher.DeleteTask(FGAuth, Gt.ListId, Gt.Id, Err) then
+    begin
+      A := FTaskAlarms.FindById(Gt.Id);
+      if A <> nil then
+      begin
+        FTaskAlarms.Remove(A);
+        FTaskAlarms.SaveToFile(FTaskAlarmFile);
+      end;
+      FetchGoogleTasks;
+    end
+    else
+      ShowMessage('구글 삭제 실패:' + sLineBreak + Err);
+    Exit;
+  end;
+
+  It := SelTodo;
+  if It = nil then
+  begin
+    ShowMessage('삭제할 할일을 선택하세요.');
+    Exit;
+  end;
+  if MessageDlg('이 할일을 삭제할까요?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+  FTodos.Remove(It);
+  FTodos.SaveToFile(FTodoFile);
+  RefreshTodo;
+end;
+
+procedure TfrmDash.btnTodoDoneClick(Sender: TObject);
+var
+  It: TTodoItem;
+  Gt: TGoogleTask;
+  Err: string;
+begin
+  It := SelTodo;
+  if It <> nil then
+  begin
+    It.Done := not It.Done;
+    FTodos.SaveToFile(FTodoFile);
+    RefreshTodo;
+    Exit;
+  end;
+
+  // 구글 항목이면 구글에 완료 처리 (구글 완료는 되돌리기 없음 안내)
+  Gt := SelGoogleTask;
+  if Gt <> nil then
+  begin
+    if MessageDlg('구글 할일 "' + Gt.Title + '" 을 완료 처리할까요?' + sLineBreak +
+      '(완료하면 목록에서 사라집니다)',
+      mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+    if TGoogleTasksFetcher.CompleteTask(FGAuth, Gt.ListId, Gt.Id, Err) then
+      FetchGoogleTasks
+    else
+      ShowMessage('구글 완료 처리 실패: ' + Err);
+  end;
+end;
+
+procedure TfrmDash.btnTodoCopyClick(Sender: TObject);
+var
+  It: TTodoItem;
+begin
+  It := SelTodo;
+  if It = nil then Exit;
+  if Trim(It.Ment) = '' then
+  begin
+    ShowMessage('이 할일에는 저장된 멘트가 없습니다.');
+    Exit;
+  end;
+  Clipboard.AsText := It.Ment;
+  ShowMessage('멘트를 복사했습니다. 카톡에 붙여넣으세요.');
+end;
+
+{ ---------- PC 알람 ---------- }
+
+procedure TfrmDash.RefreshAlarm;
+var
+  It: TPcAlarm;
+  LI: TListItem;
+  Idx: Integer;
+begin
+  Idx := lvAlarm.ItemIndex;
+  lvAlarm.Items.BeginUpdate;
+  try
+    lvAlarm.Items.Clear;
+    for It in FAlarms do
+    begin
+      LI := lvAlarm.Items.Add;
+      LI.Caption := IfThen(It.Enabled, 'ON', 'OFF');
+      LI.SubItems.Add(It.Title);
+      LI.SubItems.Add(It.DaysText);
+      LI.SubItems.Add(FormatDateTime('hh:nn', It.RunTime));
+      LI.SubItems.Add(Copy(StringReplace(It.Ment, sLineBreak, ' ', [rfReplaceAll]), 1, 80));
+      LI.Data := It;
+    end;
+  finally
+    lvAlarm.Items.EndUpdate;
+  end;
+  if (Idx >= 0) and (Idx < lvAlarm.Items.Count) then
+    lvAlarm.ItemIndex := Idx;
+end;
+
+function TfrmDash.SelAlarm: TPcAlarm;
+begin
+  Result := nil;
+  if lvAlarm.Selected <> nil then
+    Result := TPcAlarm(lvAlarm.Selected.Data);
+end;
+
+procedure TfrmDash.btnAlAddClick(Sender: TObject);
+var
+  It: TPcAlarm;
+begin
+  It := TPcAlarm.Create;
+  if TfrmPlanEdit.EditAlarm(It) then
+  begin
+    FAlarms.Add(It);
+    FAlarms.SaveToFile(FAlarmFile);
+    RefreshAlarm;
+  end
+  else
+    It.Free;
+end;
+
+procedure TfrmDash.btnAlEditClick(Sender: TObject);
+var
+  It: TPcAlarm;
+begin
+  It := SelAlarm;
+  if It = nil then Exit;
+  if TfrmPlanEdit.EditAlarm(It) then
+  begin
+    FAlarms.SaveToFile(FAlarmFile);
+    RefreshAlarm;
+  end;
+end;
+
+procedure TfrmDash.lvAlarmDblClick(Sender: TObject);
+begin
+  btnAlEditClick(nil);
+end;
+
+procedure TfrmDash.btnAlDelClick(Sender: TObject);
+var
+  It: TPcAlarm;
+begin
+  It := SelAlarm;
+  if It = nil then Exit;
+  if MessageDlg('이 알람을 삭제할까요?', mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+  FAlarms.Remove(It);
+  FAlarms.SaveToFile(FAlarmFile);
+  RefreshAlarm;
+end;
+
+procedure TfrmDash.btnAlTestClick(Sender: TObject);
+var
+  It: TPcAlarm;
+begin
+  It := SelAlarm;
+  if It = nil then
+  begin
+    ShowMessage('미리볼 알람을 선택하세요.');
+    Exit;
+  end;
+  FireAlarm(It.Title, It.Ment);
+end;
+
+{ ---------- 알람 발생 ---------- }
+
+procedure TfrmDash.FireAlarm(const ATitle, AMent: string);
+begin
+  TfrmAlarm.Popup(ATitle, AMent, FAlarmStack);
+  Inc(FAlarmStack);
+  if FAlarmStack > 4 then FAlarmStack := 0;   // 화면 넘침 방지
+end;
+
+procedure TfrmDash.CheckAlarms;
+var
+  N: TDateTime;
+  Todo: TTodoItem;
+  Al: TPcAlarm;
+  Ev: TCalEvent;
+  Tk: TGoogleTask;
+  TA: TTaskAlarm;
+begin
+  N := Now;
+
+  // 1) 로컬 할일 알람
+  for Todo in FTodos do
+    if Todo.DueAlarm(N) then
+    begin
+      Todo.LastAlarm := N;
+      FireAlarm('[할일] ' + Todo.Title, Todo.Ment);
+      FTodos.SaveToFile(FTodoFile);
+      RefreshTodo;
+    end;
+
+  // 2) PC 알람 (반복)
+  for Al in FAlarms do
+    if Al.DueNow(N) then
+    begin
+      Al.LastFire := N;
+      FireAlarm('[알람] ' + Al.Title, Al.Ment);
+      FAlarms.SaveToFile(FAlarmFile);
+      RefreshAlarm;
+    end;
+
+  // 3) 구글 Tasks 알람 (기한 당일, 지정 시각)
+  if FGTasks <> nil then
+    for Tk in FGTasks do
+    begin
+      TA := FTaskAlarms.FindById(Tk.Id);
+      if (TA <> nil) and TA.DueAlarm(N, Tk.Due, Tk.HasDue) then
+      begin
+        TA.LastAlarm := N;
+        FireAlarm('[할일] ' + Tk.Title, TA.Ment);
+        FTaskAlarms.SaveToFile(FTaskAlarmFile);
+      end;
+    end;
+
+  // 4) 구글 캘린더 일정 알람 (시간이 지정된 항목, 정시)
+  if FCalCache <> nil then
+    for Ev in FCalCache do
+      if Ev.HasTime and SameDate(Ev.StartTime, DateOf(N)) and
+         (HourOf(Ev.StartTime) = HourOf(N)) and
+         (MinuteOf(Ev.StartTime) = MinuteOf(N)) and
+         (SecondOf(N) < 2) then
+        FireAlarm('[구글] ' + Ev.Summary, '');
+end;
+
+procedure TfrmDash.Timer1Timer(Sender: TObject);
+begin
+  if FLoading then Exit;
+  CheckAlarms;
+
+  // 날짜가 바뀌면 자동 백업 (하루 1회)
+  if FLastBackup <> Date then
+    DoBackup(False);
+
+  // 자동 갱신 (30분): 캘린더 + 구글 할일
+  if chkAutoFetch.Checked and (MinutesBetween(Now, FLastFetch) >= 30) then
+  begin
+    if Trim(FCalUrl) <> '' then
+      btnFetchClick(nil);
+    if FGAuth.IsConnected then
+      FetchGoogleTasks;
+    FLastFetch := Now;
+  end;
+end;
+
+{ ---------- 스케줄러 열기 ---------- }
+
+procedure TfrmDash.btnSchedulerClick(Sender: TObject);
+begin
+  if frmMain = nil then
+    frmMain := TfrmMain.Create(Application);
+  frmMain.Show;
+  frmMain.WindowState := wsNormal;
+  frmMain.BringToFront;
+end;
+
+{ ---------- 트레이 / 종료 ---------- }
+
+{ 종료 시 남아있는 알람 팝업과 타이머를 모두 정리한다 }
+procedure TfrmDash.ShutdownAll;
+var
+  I: Integer;
+  F: TForm;
+begin
+  Timer1.Enabled := False;
+
+  // 떠 있는 알람 팝업 전부 닫기 (StayOnTop 창이 남아 종료를 막는 것 방지)
+  for I := Screen.FormCount - 1 downto 0 do
+  begin
+    F := Screen.Forms[I];
+    if (F <> Self) and (F is TfrmAlarm) then
+    begin
+      TfrmAlarm(F).StopAlarm;
+      F.Close;
+    end;
+  end;
+
+  // 스케줄러 폼 타이머 정지 후 해제
+  if frmMain <> nil then
+  begin
+    frmMain.StopTimer;
+    frmMain.Hide;
+  end;
+
+  TrayIcon1.Visible := False;
+end;
+
+procedure TfrmDash.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+begin
+  if FDuplicate then
+  begin
+    CanClose := True;   // 중복 인스턴스는 그냥 닫히게 둔다
+    Exit;
+  end;
+  if FReallyClose then
+  begin
+    CanClose := True;
+    Exit;
+  end;
+  case MessageDlg('창을 닫습니다.' + sLineBreak +
+    '[예] 트레이로 최소화 (알람 계속 동작)' + sLineBreak +
+    '[아니오] 완전 종료',
+    mtConfirmation, [mbYes, mbNo, mbCancel], 0) of
+    mrYes:
+      begin
+        CanClose := False;
+        Hide;
+        TrayIcon1.BalloonTitle := '일정관리기';
+        TrayIcon1.BalloonHint := '트레이에서 계속 실행 중입니다.';
+        TrayIcon1.ShowBalloonHint;
+      end;
+    mrNo:
+      begin
+        FReallyClose := True;
+        ShutdownAll;
+        CanClose := True;
+        // 남은 창이 있어도 확실히 프로세스를 끝낸다
+        Application.Terminate;
+      end;
+  else
+    CanClose := False;
+  end;
+end;
+
+procedure TfrmDash.TrayIcon1DblClick(Sender: TObject);
+begin
+  miShowClick(nil);
+end;
+
+procedure TfrmDash.miShowClick(Sender: TObject);
+begin
+  if FDuplicate then Exit;
+  Show;
+  WindowState := wsNormal;
+  Application.BringToFront;
+end;
+
+procedure TfrmDash.Notify(const ATitle, AText: string);
+begin
+  if not TrayIcon1.Visible then Exit;
+  TrayIcon1.BalloonTitle := ATitle;
+  TrayIcon1.BalloonHint := AText;
+  TrayIcon1.ShowBalloonHint;
+end;
+
+{ 실행 중인 폼과 트레이 아이콘을 실제로 세어 보여준다 (중복 원인 추적용) }
+procedure TfrmDash.miDiagClick(Sender: TObject);
+var
+  SL: TStringList;
+  I, J, TrayCount: Integer;
+  F: TForm;
+  C: TComponent;
+begin
+  SL := TStringList.Create;
+  try
+    SL.Add('실행 파일: ' + ParamStr(0));
+    SL.Add('프로세스 ID: ' + IntToStr(GetCurrentProcessId));
+    SL.Add('');
+    SL.Add('폼 개수: ' + IntToStr(Screen.FormCount));
+    TrayCount := 0;
+    for I := 0 to Screen.FormCount - 1 do
+    begin
+      F := Screen.Forms[I];
+      SL.Add(Format('  %d) %s (%s)  보임=%s',
+        [I + 1, F.Name, F.ClassName, BoolToStr(F.Visible, True)]));
+      for J := 0 to F.ComponentCount - 1 do
+      begin
+        C := F.Components[J];
+        if C is TTrayIcon then
+        begin
+          Inc(TrayCount);
+          SL.Add(Format('       └ 트레이: %s  표시=%s',
+            [C.Name, BoolToStr(TTrayIcon(C).Visible, True)]));
+        end;
+      end;
+    end;
+    SL.Add('');
+    SL.Add('트레이 아이콘 총 개수: ' + IntToStr(TrayCount));
+    SL.Add('(정상: 폼 2개[frmDash+frmMain] / 트레이 1개)');
+    if TrayCount > 1 then
+    begin
+      SL.Add('');
+      SL.Add('※ 트레이가 2개 이상입니다.');
+      SL.Add('   프로젝트의 .dpr 파일에서');
+      SL.Add('   Application.CreateForm(TfrmDash, frmDash);');
+      SL.Add('   줄이 한 번만 있는지 확인하세요.');
+    end;
+    MessageDlg(SL.Text, mtInformation, [mbOK], 0);
+  finally
+    SL.Free;
+  end;
+end;
+
+procedure TfrmDash.miBackupClick(Sender: TObject);
+begin
+  DoBackup(True);
+end;
+
+procedure TfrmDash.miExitClick(Sender: TObject);
+begin
+  if MessageDlg('프로그램을 종료하면 알람과 예약이 모두 중지됩니다. 종료할까요?',
+    mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+  FReallyClose := True;
+  ShutdownAll;
+  Close;
+  Application.Terminate;
+end;
+
+end.

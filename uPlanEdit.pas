@@ -1,0 +1,299 @@
+﻿unit uPlanEdit;
+
+{
+  하나의 다이얼로그로 두 가지를 편집한다.
+  - 할일(TTodoItem): 요일 그룹 숨김, 날짜/시각/알람/멘트
+  - PC알람(TPcAlarm): 요일 그룹 표시, 시각/멘트
+}
+
+interface
+
+uses
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls,
+  Vcl.ExtCtrls, Vcl.ComCtrls,
+  uPlanData, uGoogleTasks;
+
+type
+  TfrmPlanEdit = class(TForm)
+    lblTitle: TLabel;
+    lblDate: TLabel;
+    dtDate: TDateTimePicker;
+    lblMent: TLabel;
+    lblDays: TLabel;
+    edTitle: TEdit;
+    dtTime: TDateTimePicker;
+    chkAlarm: TCheckBox;
+    chkNoDue: TCheckBox;
+    chkRepeat: TCheckBox;
+    gbDays: TGroupBox;
+    chkD1: TCheckBox;
+    chkD2: TCheckBox;
+    chkD3: TCheckBox;
+    chkD4: TCheckBox;
+    chkD5: TCheckBox;
+    chkD6: TCheckBox;
+    chkD7: TCheckBox;
+    btnWeekday: TButton;
+    btnEveryday: TButton;
+    mMent: TMemo;
+    btnOK: TButton;
+    btnCancel: TButton;
+    procedure FormCreate(Sender: TObject);
+    procedure btnOKClick(Sender: TObject);
+    procedure btnWeekdayClick(Sender: TObject);
+    procedure btnEverydayClick(Sender: TObject);
+    procedure chkRepeatClick(Sender: TObject);
+    procedure chkNoDueClick(Sender: TObject);
+  private
+    FDaysRequired: Boolean;   // True = PC알람(요일 필수) / False = 할일(요일 없음)
+    function DayCheck(I: Integer): TCheckBox;
+    procedure SetDays(const S: string);
+    function GetDays: string;
+    procedure UpdateDayEnable;
+  public
+    class function EditTodo(AItem: TTodoItem): Boolean;
+    class function EditAlarm(AItem: TPcAlarm): Boolean;
+    /// 구글 Tasks 항목 편집(신규/수정 공용).
+    /// ATitle/ANotes/ADue/AHasDue 는 입출력, 알람 설정은 AAl 에 반영.
+    class function EditGoogleTask(const ACaption: string;
+      var ATitle, ANotes: string; var ADue: TDateTime; var AHasDue: Boolean;
+      AAl: TTaskAlarm): Boolean;
+  end;
+
+implementation
+
+{$R *.dfm}
+
+procedure TfrmPlanEdit.FormCreate(Sender: TObject);
+var
+  I: Integer;
+begin
+  lblTitle.Caption := '제목';
+  lblDate.Caption := '날짜';
+  lblDays.Caption := '요일';
+  lblMent.Caption := '카톡 멘트';
+  chkAlarm.Caption := '이 시각에 알람';
+  chkNoDue.Caption := '기한 없음';
+  btnWeekday.Caption := '평일';
+  btnEveryday.Caption := '매일';
+  btnOK.Caption := '확인';
+  btnCancel.Caption := '취소';
+  for I := 1 to 7 do
+    DayCheck(I).Caption := DAY_NAMES[I];
+end;
+
+function TfrmPlanEdit.DayCheck(I: Integer): TCheckBox;
+begin
+  case I of
+    1: Result := chkD1;
+    2: Result := chkD2;
+    3: Result := chkD3;
+    4: Result := chkD4;
+    5: Result := chkD5;
+    6: Result := chkD6;
+  else
+    Result := chkD7;
+  end;
+end;
+
+procedure TfrmPlanEdit.SetDays(const S: string);
+var I: Integer;
+begin
+  for I := 1 to 7 do
+    DayCheck(I).Checked := Pos(IntToStr(I), S) > 0;
+end;
+
+function TfrmPlanEdit.GetDays: string;
+var I: Integer;
+begin
+  Result := '';
+  for I := 1 to 7 do
+    if DayCheck(I).Checked then
+      Result := Result + IntToStr(I);
+end;
+
+procedure TfrmPlanEdit.btnWeekdayClick(Sender: TObject);
+begin
+  SetDays('23456');
+end;
+
+procedure TfrmPlanEdit.btnEverydayClick(Sender: TObject);
+begin
+  SetDays('1234567');
+end;
+
+procedure TfrmPlanEdit.chkRepeatClick(Sender: TObject);
+begin
+  UpdateDayEnable;
+end;
+
+procedure TfrmPlanEdit.UpdateDayEnable;
+var
+  I: Integer;
+  En: Boolean;
+begin
+  // 할일: 요일 UI 자체를 안 쓴다. PC알람: 항상 요일 선택 가능.
+  En := FDaysRequired;
+  gbDays.Enabled := En;
+  for I := 1 to 7 do
+    DayCheck(I).Enabled := En;
+  btnWeekday.Enabled := En;
+  btnEveryday.Enabled := En;
+end;
+
+class function TfrmPlanEdit.EditTodo(AItem: TTodoItem): Boolean;
+var
+  F: TfrmPlanEdit;
+begin
+  F := TfrmPlanEdit.Create(nil);
+  try
+    F.Caption := '할일 편집';
+    F.FDaysRequired := False;   // 할일은 요일 불필요
+    // 할일은 지정한 날짜에 1회만 알람 - 요일 반복 UI 는 숨긴다
+    F.chkRepeat.Visible := False;
+    F.gbDays.Visible := False;
+    F.lblDays.Visible := False;
+    // 요일 영역이 비었으므로 멘트를 위로 당긴다
+    F.lblMent.Top := 108;
+    F.mMent.Top := 105;
+    F.mMent.Height := 240;
+
+    F.edTitle.Text := AItem.Title;
+    if AItem.RunDate > 0 then
+      F.dtDate.Date := AItem.RunDate
+    else
+      F.dtDate.Date := Date;
+    F.dtTime.Time := AItem.RunTime;
+    F.chkAlarm.Checked := AItem.Alarm;
+    F.mMent.Lines.Text := AItem.Ment;
+
+    Result := F.ShowModal = mrOk;
+    if Result then
+    begin
+      AItem.Title := Trim(F.edTitle.Text);
+      AItem.RunDate := F.dtDate.Date;
+      AItem.RunTime := F.dtTime.Time;
+      AItem.HasTime := True;
+      AItem.Alarm := F.chkAlarm.Checked;
+      AItem.Repeats := False;       // 항상 지정일 1회
+      AItem.WeekDays := '';
+      AItem.Ment := F.mMent.Lines.Text;
+    end;
+  finally
+    F.Free;
+  end;
+end;
+
+class function TfrmPlanEdit.EditAlarm(AItem: TPcAlarm): Boolean;
+var
+  F: TfrmPlanEdit;
+begin
+  F := TfrmPlanEdit.Create(nil);
+  try
+    F.Caption := 'PC 알람 편집';
+    F.FDaysRequired := True;    // PC알람은 요일 필수
+    F.chkAlarm.Visible := False;   // 알람 자체가 목적이므로 불필요
+    F.chkRepeat.Visible := False;  // PC알람은 항상 요일 반복
+    F.dtDate.Visible := False;
+    F.lblDate.Visible := False;
+    F.lblDays.Caption := '요일';
+
+    F.edTitle.Text := AItem.Title;
+    F.dtTime.Time := AItem.RunTime;
+    F.SetDays(AItem.WeekDays);
+    F.mMent.Lines.Text := AItem.Ment;
+    F.UpdateDayEnable;
+
+    Result := F.ShowModal = mrOk;
+    if Result then
+    begin
+      AItem.Title := Trim(F.edTitle.Text);
+      AItem.RunTime := F.dtTime.Time;
+      AItem.WeekDays := F.GetDays;
+      AItem.Ment := F.mMent.Lines.Text;
+    end;
+  finally
+    F.Free;
+  end;
+end;
+
+procedure TfrmPlanEdit.chkNoDueClick(Sender: TObject);
+begin
+  dtDate.Enabled := not chkNoDue.Checked;
+end;
+
+class function TfrmPlanEdit.EditGoogleTask(const ACaption: string;
+  var ATitle, ANotes: string; var ADue: TDateTime; var AHasDue: Boolean;
+  AAl: TTaskAlarm): Boolean;
+var
+  F: TfrmPlanEdit;
+begin
+  F := TfrmPlanEdit.Create(nil);
+  try
+    F.Caption := ACaption;
+    F.FDaysRequired := False;
+    // 구글 Tasks 는 요일 반복 개념이 없다
+    F.chkRepeat.Visible := False;
+    F.gbDays.Visible := False;
+    F.lblDays.Visible := False;
+    F.chkNoDue.Visible := True;
+    F.lblMent.Top := 108;
+    F.mMent.Top := 105;
+    F.mMent.Height := 240;
+    F.lblMent.Caption := '메모 / 멘트';
+
+    F.edTitle.Text := ATitle;
+    F.chkNoDue.Checked := not AHasDue;
+    if AHasDue and (ADue > 0) then F.dtDate.Date := ADue else F.dtDate.Date := Date;
+    F.dtDate.Enabled := AHasDue;
+    if AAl <> nil then
+    begin
+      F.dtTime.Time := AAl.RunTime;
+      F.chkAlarm.Checked := AAl.Alarm;
+      // 멘트가 있으면 멘트를, 없으면 구글 메모를 보여준다
+      if Trim(AAl.Ment) <> '' then
+        F.mMent.Lines.Text := AAl.Ment
+      else
+        F.mMent.Lines.Text := ANotes;
+    end
+    else
+      F.mMent.Lines.Text := ANotes;
+
+    Result := F.ShowModal = mrOk;
+    if Result then
+    begin
+      ATitle := Trim(F.edTitle.Text);
+      ANotes := F.mMent.Lines.Text;
+      AHasDue := not F.chkNoDue.Checked;
+      if AHasDue then ADue := F.dtDate.Date else ADue := 0;
+      if AAl <> nil then
+      begin
+        AAl.Alarm := F.chkAlarm.Checked;
+        AAl.RunTime := F.dtTime.Time;
+        AAl.Ment := F.mMent.Lines.Text;
+      end;
+    end;
+  finally
+    F.Free;
+  end;
+end;
+
+procedure TfrmPlanEdit.btnOKClick(Sender: TObject);
+begin
+  if Trim(edTitle.Text) = '' then
+  begin
+    ShowMessage('제목을 입력하세요.');
+    edTitle.SetFocus;
+    Exit;
+  end;
+  // 요일은 PC 알람에서만 필수. 할일은 날짜로 지정하므로 검사하지 않는다.
+  if FDaysRequired and (GetDays = '') then
+  begin
+    ShowMessage('요일을 하나 이상 선택하세요.');
+    Exit;
+  end;
+  ModalResult := mrOk;
+end;
+
+end.

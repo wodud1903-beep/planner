@@ -1,0 +1,209 @@
+object frmPlanEdit: TfrmPlanEdit
+  Left = 0
+  Top = 0
+  BorderStyle = bsDialog
+  Caption = 'Edit'
+  ClientHeight = 430
+  ClientWidth = 500
+  Color = clBtnFace
+  Font.Charset = DEFAULT_CHARSET
+  Font.Color = clWindowText
+  Font.Height = -12
+  Font.Name = 'Malgun Gothic'
+  Font.Style = []
+  Position = poMainFormCenter
+  OnCreate = FormCreate
+  TextHeight = 15
+  object lblTitle: TLabel
+    Left = 16
+    Top = 20
+    Width = 20
+    Height = 15
+    Caption = 'title'
+  end
+  object lblDate: TLabel
+    Left = 16
+    Top = 60
+    Width = 23
+    Height = 15
+    Caption = 'date'
+  end
+  object lblMent: TLabel
+    Left = 16
+    Top = 200
+    Width = 28
+    Height = 15
+    Caption = 'ment'
+  end
+  object lblDays: TLabel
+    Left = 16
+    Top = 118
+    Width = 24
+    Height = 15
+    Caption = 'days'
+  end
+  object edTitle: TEdit
+    Left = 100
+    Top = 17
+    Width = 384
+    Height = 23
+    TabOrder = 0
+  end
+  object dtDate: TDateTimePicker
+    Left = 100
+    Top = 56
+    Width = 130
+    Height = 23
+    Date = 45000.000000000000000000
+    Time = 45000.000000000000000000
+    TabOrder = 1
+  end
+  object dtTime: TDateTimePicker
+    Left = 329
+    Top = 56
+    Width = 100
+    Height = 23
+    Date = 45000.000000000000000000
+    Time = 0.375000000000000000
+    Kind = dtkTime
+    TabOrder = 8
+  end
+  object chkNoDue: TCheckBox
+    Left = 237
+    Top = 60
+    Width = 90
+    Height = 17
+    Caption = 'nodue'
+    TabOrder = 9
+    Visible = False
+    OnClick = chkNoDueClick
+  end
+  object chkAlarm: TCheckBox
+    Left = 329
+    Top = 81
+    Width = 200
+    Height = 17
+    Caption = 'alarm'
+    Checked = True
+    State = cbChecked
+    TabOrder = 2
+  end
+  object chkRepeat: TCheckBox
+    Left = 100
+    Top = 82
+    Width = 85
+    Height = 17
+    Caption = 'repeat'
+    TabOrder = 7
+    Visible = False
+    OnClick = chkRepeatClick
+  end
+  object gbDays: TGroupBox
+    Left = 100
+    Top = 104
+    Width = 384
+    Height = 90
+    TabOrder = 3
+    object chkD1: TCheckBox
+      Left = 12
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D1'
+      TabOrder = 0
+    end
+    object chkD2: TCheckBox
+      Left = 65
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D2'
+      TabOrder = 1
+    end
+    object chkD3: TCheckBox
+      Left = 118
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D3'
+      TabOrder = 2
+    end
+    object chkD4: TCheckBox
+      Left = 171
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D4'
+      TabOrder = 3
+    end
+    object chkD5: TCheckBox
+      Left = 224
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D5'
+      TabOrder = 4
+    end
+    object chkD6: TCheckBox
+      Left = 277
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D6'
+      TabOrder = 5
+    end
+    object chkD7: TCheckBox
+      Left = 330
+      Top = 24
+      Width = 45
+      Height = 17
+      Caption = 'D7'
+      TabOrder = 6
+    end
+    object btnWeekday: TButton
+      Left = 12
+      Top = 52
+      Width = 100
+      Height = 26
+      Caption = 'Weekdays'
+      TabOrder = 7
+      OnClick = btnWeekdayClick
+    end
+    object btnEveryday: TButton
+      Left = 120
+      Top = 52
+      Width = 100
+      Height = 26
+      Caption = 'Everyday'
+      TabOrder = 8
+      OnClick = btnEverydayClick
+    end
+  end
+  object mMent: TMemo
+    Left = 100
+    Top = 197
+    Width = 384
+    Height = 150
+    ScrollBars = ssVertical
+    TabOrder = 4
+  end
+  object btnOK: TButton
+    Left = 300
+    Top = 392
+    Width = 90
+    Height = 28
+    Caption = 'OK'
+    TabOrder = 5
+    OnClick = btnOKClick
+  end
+  object btnCancel: TButton
+    Left = 394
+    Top = 392
+    Width = 90
+    Height = 28
+    Cancel = True
+    Caption = 'Cancel'
+    ModalResult = 2
+    TabOrder = 6
+  end
+end
