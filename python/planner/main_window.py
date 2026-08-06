@@ -80,7 +80,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(config.APP_NAME)
-        self.resize(980, 720)
+        # 최대화 버튼 제거 + 크기 고정 (가로폭만 조금 넓힘)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
+        self.setFixedSize(1040, 720)
 
         # 데이터
         self.todo_file = config.data_file("todos.json")
