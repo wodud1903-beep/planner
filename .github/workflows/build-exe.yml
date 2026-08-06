@@ -10,6 +10,8 @@ on:
     paths:
       - 'python/**'
       - '.github/workflows/build-exe.yml'
+    tags:
+      - 'v*'
   workflow_dispatch:
   release:
     types: [created]
