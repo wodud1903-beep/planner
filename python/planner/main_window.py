@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
     # 백그라운드 스레드 → UI 마샬링
     sig_tasks_done = Signal(object, str)
     sig_events_done = Signal(object, str)
+    sig_fetch_done = Signal()
     sig_toast = Signal(str, str)
 
     def __init__(self):
@@ -112,6 +113,7 @@ class MainWindow(QMainWindow):
 
         self.sig_tasks_done.connect(self._on_tasks_done)
         self.sig_events_done.connect(self._on_events_done)
+        self.sig_fetch_done.connect(self._on_fetch_done)
         self.sig_toast.connect(self._toast)
 
         self.refresh_todo()
@@ -120,9 +122,16 @@ class MainWindow(QMainWindow):
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
 
         # 시작 시 자동 백업 + 연결돼 있으면 불러오기
+        self._startup_brief_pending = True
         self._backup(manual=False)
         if self.gauth.is_connected():
+            # 로딩(수 초)이 끝난 뒤 브리핑을 띄운다 (0건으로 뜨는 것 방지).
+            # 네트워크 지연 대비: 최대 12초 뒤에는 강제로 표시.
             self.fetch_all_async()
+            QTimer.singleShot(12000, self._do_startup_brief)
+        else:
+            # 구글 미연결이면 로딩할 게 없으니 바로 표시
+            QTimer.singleShot(600, self._do_startup_brief)
 
         self.chk_startup.setChecked(_startup_set())
 
@@ -136,8 +145,12 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._on_tick)
         self.timer.start(1000)
 
-        # 시작 브리핑
-        QTimer.singleShot(600, lambda: self.show_briefing(manual=False))
+    def _do_startup_brief(self):
+        """시작 브리핑을 한 번만 표시 (데이터 로딩 후 또는 타임아웃 시)."""
+        if not self._startup_brief_pending:
+            return
+        self._startup_brief_pending = False
+        self.show_briefing(manual=False)
 
     def _on_hotkey(self):
         self.show_window()
@@ -329,8 +342,14 @@ class MainWindow(QMainWindow):
                 self.sig_tasks_done.emit(tasks, "")
             except Exception as e:
                 self.sig_tasks_done.emit(None, str(e))
+            # 캘린더·할일 두 갱신 신호가 처리된 뒤 마지막으로 완료 신호
+            self.sig_fetch_done.emit()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_fetch_done(self):
+        # 시작 브리핑이 대기 중이면 데이터가 채워진 지금 표시
+        self._do_startup_brief()
 
     def _on_events_done(self, events, err: str):
         self.btn_fetch.setEnabled(True)
