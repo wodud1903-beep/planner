@@ -1,7 +1,9 @@
 ﻿program PlanManager;
 
 uses
+  Winapi.Windows,
   Vcl.Forms,
+  System.SysUtils,
   uDash in 'uDash.pas' {frmDash},
   uMain in 'uMain.pas' {frmMain},
   uEditItem in 'uEditItem.pas' {frmEditItem},
@@ -11,19 +13,36 @@ uses
   uKakaoSend in 'uKakaoSend.pas',
   uCalendar in 'uCalendar.pas',
   uPlanData in 'uPlanData.pas',
+  uGoogleTasks in 'uGoogleTasks.pas',
+  uGSettings in 'uGSettings.pas' {frmGSettings},
+  uGoogleDrive in 'uGoogleDrive.pas',
   Vcl.Themes,
   Vcl.Styles;
 
 {$R *.res}
-{$R PlanManagerIcons.rc}
+
+var
+  hMutex: THandle;
 
 begin
+  // 이미 실행 중이면 두 번째 인스턴스는 그냥 종료 (프로그램 2개 실행 방지)
+  hMutex := CreateMutex(nil, True, 'PlanManager_SingleInstance_Mutex');
+  if (hMutex <> 0) and (GetLastError = ERROR_ALREADY_EXISTS) then
+  begin
+    CloseHandle(hMutex);
+    Halt(0);
+  end;
+
   Application.Initialize;
   Application.MainFormOnTaskbar := True;
+  TStyleManager.TrySetStyle('Tablet Light');
   Application.Title := '일정관리기';
   // 메인 폼은 일정관리기. 카카오톡 스케줄러(frmMain)는 자동 생성하지 않고
   // 일정관리기의 '스케줄러 열기' 버튼에서 필요할 때 생성한다.
   AApplication.CreateForm(TfrmDash, frmDash);
   Application.CreateForm(TfrmDash, frmDash);
   pplication.Run;
+
+  if hMutex <> 0 then
+    CloseHandle(hMutex);
 end.

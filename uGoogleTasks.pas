@@ -33,7 +33,8 @@ uses
   IdHTTPServer, IdContext, IdCustomHTTPServer, IdGlobal;
 
 const
-  GTASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
+  // Tasks(읽기/쓰기) + Drive(이 앱이 만든 파일만) — 공백으로 구분
+  GTASKS_SCOPE = 'https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/drive.file';
   AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
   TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
   TASKLISTS_URL = 'https://tasks.googleapis.com/tasks/v1/users/@me/lists';

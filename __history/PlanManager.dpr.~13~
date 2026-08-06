@@ -1,7 +1,7 @@
 ﻿program PlanManager;
 
 uses
-  Winapi.Windows, Vcl.Forms, Vcl.Themes, Vcl.Styles, System.SysUtils, System.IOUtils,
+  Winapi.Windows, Vcl.Forms, System.SysUtils,
   uDash in 'uDash.pas' {frmDash},
   uMain in 'uMain.pas' {frmMain},
   uEditItem in 'uEditItem.pas' {frmEditItem},
@@ -30,24 +30,6 @@ begin
   end;
 
   Application.Initialize;
-
-  // ----- VCL 스타일 'Tablet Light' 자동 적용 -----
-  // 1순위: 프로젝트에 포함된 스타일 리소스에서 적용
-  // 2순위: 실행 파일 옆의 TabletLight.vsf 파일에서 로드
-  if not TStyleManager.TrySetStyle('Tablet Light', False) then
-  begin
-    try
-      if FileExists(TPath.Combine(ExtractFilePath(ParamStr(0)), 'TabletLight.vsf')) then
-      begin
-        TStyleManager.LoadFromFile(
-          TPath.Combine(ExtractFilePath(ParamStr(0)), 'TabletLight.vsf'));
-        TStyleManager.TrySetStyle('Tablet Light', False);
-      end;
-    except
-      // 스타일 적용 실패해도 기본 모양으로 정상 실행
-    end;
-  end;
-
   Application.MainFormOnTaskbar := True;
   Application.Title := '일정관리기';
   // 메인 폼은 일정관리기. 카카오톡 스케줄러(frmMain)는 자동 생성하지 않고

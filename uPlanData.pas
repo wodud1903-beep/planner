@@ -91,10 +91,51 @@ type
     procedure LoadFromFile(const AFile: string);
   end;
 
+  { 프로그램 전역 설정 (설정창에서 편집) }
+  TAppSettings = record
+    CalUrl: string;          // 구글 캘린더 ICS 주소
+    // 계약 후 팔로업
+    FollowOn: Boolean;
+    FollowKeyword: string;   // 캘린더에서 찾을 키워드 (기본 '출고')
+    FollowMonths: Integer;   // 몇 개월 뒤에 팔로업할지 (기본 1)
+    FollowAlarm: Boolean;    // True=알람도 울림 / False=목록에만 추가
+    FollowTime: TTime;       // 생성될 할일의 알람 시각
+    FollowMent: string;      // 멘트 템플릿 (%s = 고객명)
+    // 전역 단축키
+    HotOn: Boolean;
+    HotCtrl: Boolean;
+    HotAlt: Boolean;
+    HotShift: Boolean;
+    HotKeyName: string;      // 'A'~'Z' 또는 'F1'~'F12'
+    procedure SetDefaults;
+  end;
+
 const
   DAY_NAMES: array[1..7] of string = ('일', '월', '화', '수', '목', '금', '토');
+  DEF_FOLLOW_MENT =
+    '%s 고객님, 안녕하세요.' + sLineBreak +
+    '차량 출고 후 한 달이 지났는데 이용에 불편한 점은 없으신지요?' + sLineBreak +
+    '필요하신 부분 있으시면 언제든 편하게 연락 주세요.';
 
 implementation
+
+{ ---------- TAppSettings ---------- }
+
+procedure TAppSettings.SetDefaults;
+begin
+  CalUrl := '';
+  FollowOn := True;
+  FollowKeyword := '출고';
+  FollowMonths := 1;
+  FollowAlarm := True;
+  FollowTime := EncodeTime(10, 0, 0, 0);
+  FollowMent := DEF_FOLLOW_MENT;
+  HotOn := True;
+  HotCtrl := True;
+  HotAlt := True;
+  HotShift := False;
+  HotKeyName := 'A';
+end;
 
 { ---------- JSON 헬퍼 ---------- }
 

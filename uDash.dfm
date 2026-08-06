@@ -30,8 +30,8 @@ object frmDash: TfrmDash
     object lblApp: TLabel
       Left = 16
       Top = 15
-      Width = 39
-      Height = 25
+      Width = 130
+      Height = 23
       Caption = 'Plan'
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clWhite
@@ -41,18 +41,18 @@ object frmDash: TfrmDash
       ParentFont = False
     end
     object btnScheduler: TButton
-      Left = 770
+      Left = 800
       Top = 12
-      Width = 190
+      Width = 160
       Height = 30
       Caption = 'scheduler'
       TabOrder = 0
       OnClick = btnSchedulerClick
     end
     object chkStartup: TCheckBox
-      Left = 560
+      Left = 630
       Top = 18
-      Width = 200
+      Width = 160
       Height = 17
       Caption = 'startup'
       Font.Charset = DEFAULT_CHARSET
@@ -75,13 +75,6 @@ object frmDash: TfrmDash
     TabOrder = 1
     object tsMain: TTabSheet
       Caption = 'main'
-      object lblWeek: TLabel
-        Left = 12
-        Top = 52
-        Width = 27
-        Height = 15
-        Caption = 'week'
-      end
       object pnlCalTop: TPanel
         Left = 0
         Top = 0
@@ -91,38 +84,45 @@ object frmDash: TfrmDash
         BevelOuter = bvNone
         TabOrder = 0
         object lblGStatus: TLabel
-          Left = 300
+          Left = 296
           Top = 14
-          Width = 31
+          Width = 480
           Height = 15
           Caption = 'status'
         end
         object btnSettings: TButton
           Left = 12
           Top = 9
-          Width = 130
+          Width = 110
           Height = 27
           Caption = 'settings'
           TabOrder = 0
           OnClick = btnSettingsClick
         end
         object btnFetch: TButton
-          Left = 150
+          Left = 130
           Top = 9
-          Width = 130
+          Width = 110
           Height = 27
           Caption = 'fetch'
           TabOrder = 1
           OnClick = btnFetchClick
         end
         object chkAutoFetch: TCheckBox
-          Left = 820
+          Left = 828
           Top = 15
-          Width = 140
+          Width = 130
           Height = 17
           Caption = 'auto'
           TabOrder = 2
         end
+      end
+      object lblWeek: TLabel
+        Left = 12
+        Top = 52
+        Width = 100
+        Height = 15
+        Caption = 'week'
       end
       object lvWeek: TListView
         Left = 12
@@ -147,6 +147,7 @@ object frmDash: TfrmDash
             Width = 640
           end>
         GridLines = True
+        OwnerData = False
         ReadOnly = True
         RowSelect = True
         TabOrder = 1
@@ -163,7 +164,7 @@ object frmDash: TfrmDash
         object lblTodo: TLabel
           Left = 12
           Top = 14
-          Width = 25
+          Width = 100
           Height = 15
           Caption = 'todo'
         end
@@ -197,16 +198,16 @@ object frmDash: TfrmDash
         object btnTodoDone: TButton
           Left = 348
           Top = 9
-          Width = 100
+          Width = 70
           Height = 27
           Caption = 'done'
           TabOrder = 3
           OnClick = btnTodoDoneClick
         end
         object btnTodoCopy: TButton
-          Left = 454
+          Left = 424
           Top = 9
-          Width = 120
+          Width = 100
           Height = 27
           Caption = 'copy'
           TabOrder = 4
@@ -218,9 +219,11 @@ object frmDash: TfrmDash
         Top = 380
         Width = 956
         Height = 250
+        Checkboxes = True
         Columns = <
           item
-            Caption = 'done'
+            Caption = 'sel'
+            Width = 50
           end
           item
             Caption = 'day'
@@ -303,11 +306,12 @@ object frmDash: TfrmDash
         Left = 0
         Top = 44
         Width = 972
-        Height = 594
+        Height = 580
         Align = alClient
         Columns = <
           item
             Caption = 'on'
+            Width = 50
           end
           item
             Caption = 'name'
@@ -331,11 +335,11 @@ object frmDash: TfrmDash
         TabOrder = 1
         ViewStyle = vsReport
         OnDblClick = lvAlarmDblClick
-        ExplicitHeight = 580
       end
     end
   end
   object Timer1: TTimer
+    Interval = 1000
     OnTimer = Timer1Timer
     Left = 620
     Top = 120
@@ -358,9 +362,17 @@ object frmDash: TfrmDash
       Caption = 'scheduler'
       OnClick = btnSchedulerClick
     end
+    object miBrief: TMenuItem
+      Caption = 'brief'
+      OnClick = miBriefClick
+    end
     object miBackup: TMenuItem
       Caption = 'backup'
       OnClick = miBackupClick
+    end
+    object miDrive: TMenuItem
+      Caption = 'drive'
+      OnClick = miDriveClick
     end
     object miDiag: TMenuItem
       Caption = 'diag'

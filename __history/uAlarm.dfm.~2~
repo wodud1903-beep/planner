@@ -2,7 +2,7 @@ object frmAlarm: TfrmAlarm
   Left = 0
   Top = 0
   BorderStyle = bsNone
-  ClientHeight = 462
+  ClientHeight = 230
   ClientWidth = 620
   Color = 3487029
   FormStyle = fsStayOnTop
@@ -59,7 +59,7 @@ object frmAlarm: TfrmAlarm
     Left = 18
     Top = 96
     Width = 584
-    Height = 300
+    Height = 76
     Color = 4210752
     Font.Charset = DEFAULT_CHARSET
     Font.Color = clWhite
@@ -73,7 +73,7 @@ object frmAlarm: TfrmAlarm
   end
   object btnCopy: TButton
     Left = 18
-    Top = 406
+    Top = 182
     Width = 186
     Height = 38
     Caption = 'Copy'
@@ -88,7 +88,7 @@ object frmAlarm: TfrmAlarm
   end
   object btnSnooze: TButton
     Left = 214
-    Top = 406
+    Top = 182
     Width = 186
     Height = 38
     Caption = 'Snooze'
@@ -103,7 +103,7 @@ object frmAlarm: TfrmAlarm
   end
   object btnDismiss: TButton
     Left = 410
-    Top = 406
+    Top = 182
     Width = 192
     Height = 38
     Caption = 'Dismiss'

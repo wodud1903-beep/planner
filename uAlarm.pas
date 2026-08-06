@@ -22,21 +22,28 @@ type
     lblTitle: TLabel;
     mMent: TMemo;
     btnCopy: TButton;
+    btnSnooze: TButton;
     btnDismiss: TButton;
     Timer1: TTimer;
+    TimerSnooze: TTimer;
     procedure FormCreate(Sender: TObject);
     procedure btnCloseClick(Sender: TObject);
     procedure btnCopyClick(Sender: TObject);
+    procedure btnSnoozeClick(Sender: TObject);
     procedure btnDismissClick(Sender: TObject);
+    procedure TimerSnoozeTimer(Sender: TObject);
     procedure Timer1Timer(Sender: TObject);
   private
     FBlink: Integer;
     FStackIndex: Integer;
+    FSnoozeLeft: Integer;   // 남은 스누즈 초
+    FSiren: Boolean;        // False = 조용한 안내 팝업(브리핑 등)
   protected
     procedure CreateParams(var Params: TCreateParams); override;
   public
     procedure StopAlarm;
-    class procedure Popup(const ATitle, AMent: string; AStackIndex: Integer);
+    class procedure Popup(const ATitle, AMent: string; AStackIndex: Integer;
+      ASiren: Boolean = True);
   end;
 
 implementation
@@ -58,12 +65,14 @@ end;
 procedure TfrmAlarm.FormCreate(Sender: TObject);
 begin
   btnCopy.Caption := '멘트 복사';
+  btnSnooze.Caption := '5분 뒤 다시';
   btnDismiss.Caption := '확인';
   lblHead.Caption := '일정 알람';
   FBlink := 0;
 end;
 
-class procedure TfrmAlarm.Popup(const ATitle, AMent: string; AStackIndex: Integer);
+class procedure TfrmAlarm.Popup(const ATitle, AMent: string; AStackIndex: Integer;
+  ASiren: Boolean);
 var
   F: TfrmAlarm;
   ScreenW: Integer;
@@ -72,14 +81,30 @@ begin
   F.FStackIndex := AStackIndex;
   F.lblTitle.Caption := ATitle;
 
+  F.FSiren := ASiren;
+  F.Timer1.Enabled := ASiren;      // 조용한 안내면 깜빡임/소리 없음
+  if not ASiren then
+  begin
+    F.pnlBar.Color := $001F1F1F;
+    F.btnSnooze.Visible := False;
+  end;
+
   if Trim(AMent) = '' then
   begin
     F.mMent.Visible := False;
     F.btnCopy.Visible := False;
     F.ClientHeight := 150;
+    F.btnSnooze.Top := 100;
+    F.btnSnooze.Left := 18;
+    F.btnSnooze.Width := 284;
     F.btnDismiss.Top := 100;
-    F.btnDismiss.Left := 18;
-    F.btnDismiss.Width := 584;
+    F.btnDismiss.Left := 318;
+    F.btnDismiss.Width := 284;
+    if not ASiren then
+    begin
+      F.btnDismiss.Left := 18;
+      F.btnDismiss.Width := 584;
+    end;
   end
   else
     F.mMent.Lines.Text := AMent;
@@ -95,7 +120,8 @@ begin
   F.Visible := True;
   SetWindowPos(F.Handle, HWND_TOPMOST, F.Left, F.Top, 0, 0,
     SWP_NOACTIVATE or SWP_NOSIZE);
-  MessageBeep(MB_ICONINFORMATION);
+  if ASiren then
+    MessageBeep(MB_ICONINFORMATION);
 end;
 
 procedure TfrmAlarm.Timer1Timer(Sender: TObject);
@@ -133,20 +159,46 @@ begin
   end;
 end;
 
+procedure TfrmAlarm.btnSnoozeClick(Sender: TObject);
+begin
+  // 5분 동안 숨겼다가 다시 울린다
+  Timer1.Enabled := False;
+  FSnoozeLeft := 5 * 60;
+  TimerSnooze.Enabled := True;
+  Hide;
+end;
+
+procedure TfrmAlarm.TimerSnoozeTimer(Sender: TObject);
+begin
+  Dec(FSnoozeLeft);
+  if FSnoozeLeft > 0 then Exit;
+
+  TimerSnooze.Enabled := False;
+  FBlink := 0;
+  Timer1.Enabled := FSiren;
+  ShowWindow(Handle, SW_SHOWNOACTIVATE);
+  Visible := True;
+  SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0,
+    SWP_NOACTIVATE or SWP_NOMOVE or SWP_NOSIZE);
+  if FSiren then
+    MessageBeep(MB_ICONEXCLAMATION);
+end;
+
 procedure TfrmAlarm.StopAlarm;
 begin
   Timer1.Enabled := False;
+  TimerSnooze.Enabled := False;
 end;
 
 procedure TfrmAlarm.btnDismissClick(Sender: TObject);
 begin
-  Timer1.Enabled := False;
+  StopAlarm;
   Close;
 end;
 
 procedure TfrmAlarm.btnCloseClick(Sender: TObject);
 begin
-  Timer1.Enabled := False;
+  StopAlarm;
   Close;
 end;
 

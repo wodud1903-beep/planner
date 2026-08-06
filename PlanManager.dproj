@@ -127,6 +127,7 @@
         <DCCReference Include="uGSettings.pas">
             <Form>frmGSettings</Form>
         </DCCReference>
+        <DCCReference Include="uGoogleDrive.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
