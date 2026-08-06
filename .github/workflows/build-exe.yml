@@ -1,0 +1,55 @@
+name: Build Windows EXE
+
+# 실행 조건:
+#  - main 브랜치에 python 코드가 바뀌면 자동 빌드 → 아티팩트 업로드
+#  - 수동 실행(Actions 탭 → Run workflow)
+#  - v* 태그를 밀면 릴리스(Release)에 exe 첨부
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'python/**'
+      - '.github/workflows/build-exe.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 의존성 설치
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: EXE 빌드 (PyInstaller)
+        working-directory: python
+        run: pyinstaller planner.spec --noconfirm --clean
+
+      - name: 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: 일정관리기-windows
+          path: python/dist/일정관리기.exe
+          if-no-files-found: error
+
+      - name: 릴리스에 첨부 (태그 빌드일 때만)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: python/dist/일정관리기.exe
