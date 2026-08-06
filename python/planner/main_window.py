@@ -21,12 +21,13 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import alarm_window, config, google_client
+from . import alarm_window, config, followup, google_client, hotkey
 from .edit_dialog import EditDialog
 from .icon import make_icon
 from .models import (
-    PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
+    AppSettings, PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
 )
+from .settings_dialog import SettingsDialog
 
 
 def _startup_set() -> bool:
@@ -72,7 +73,6 @@ def _set_startup(enable: bool):
 
 class MainWindow(QMainWindow):
     # 백그라운드 스레드 → UI 마샬링
-    sig_login_done = Signal(bool, str)
     sig_tasks_done = Signal(object, str)
     sig_events_done = Signal(object, str)
     sig_toast = Signal(str, str)
@@ -86,9 +86,13 @@ class MainWindow(QMainWindow):
         self.todo_file = config.data_file("todos.json")
         self.alarm_file = config.data_file("pcalarms.json")
         self.taskalarm_file = config.data_file("taskalarms.json")
+        self.cfg_file = config.data_file("plan_cfg.json")
+        self.followup_file = config.data_file("followups.json")
         self.todos: list[TodoItem] = load_list(self.todo_file, TodoItem)
         self.alarms: list[PcAlarm] = load_list(self.alarm_file, PcAlarm)
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
+        self.settings = AppSettings.load(self.cfg_file)
+        self.followup_tracker = followup.FollowupTracker(self.followup_file)
         self.gauth = google_client.GoogleAuth(config.data_file("google_token.json"))
         self.cal_events: list[google_client.CalEvent] = []
         self.gtasks: list[google_client.GoogleTask] = []
@@ -104,7 +108,6 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_tray()
 
-        self.sig_login_done.connect(self._on_login_done)
         self.sig_tasks_done.connect(self._on_tasks_done)
         self.sig_events_done.connect(self._on_events_done)
         self.sig_toast.connect(self._toast)
@@ -112,6 +115,7 @@ class MainWindow(QMainWindow):
         self.refresh_todo()
         self.refresh_alarm()
         self.update_google_status()
+        self.chk_autofetch.setChecked(self.settings.auto_fetch)
 
         # 시작 시 자동 백업 + 연결돼 있으면 불러오기
         self._backup(manual=False)
@@ -120,6 +124,11 @@ class MainWindow(QMainWindow):
 
         self.chk_startup.setChecked(_startup_set())
 
+        # 전역 단축키 (Windows)
+        self.hotkeys = hotkey.HotkeyManager(
+            QApplication.instance(), int(self.winId()), self._on_hotkey)
+        QTimer.singleShot(0, lambda: self.hotkeys.apply(self.settings))
+
         # 1초 타이머
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._on_tick)
@@ -127,6 +136,9 @@ class MainWindow(QMainWindow):
 
         # 시작 브리핑
         QTimer.singleShot(600, lambda: self.show_briefing(manual=False))
+
+    def _on_hotkey(self):
+        self.show_window()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -164,9 +176,9 @@ class MainWindow(QMainWindow):
 
         # 상단 조작줄
         row = QHBoxLayout()
-        self.btn_login = QPushButton("Google 로그인")
-        self.btn_login.clicked.connect(self.on_login_click)
-        row.addWidget(self.btn_login)
+        self.btn_settings = QPushButton("설정")
+        self.btn_settings.clicked.connect(self.on_settings_click)
+        row.addWidget(self.btn_settings)
         self.btn_fetch = QPushButton("새로고침")
         self.btn_fetch.clicked.connect(self.fetch_all_async)
         row.addWidget(self.btn_fetch)
@@ -174,6 +186,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.lbl_status)
         row.addStretch()
         self.chk_autofetch = QCheckBox("30분 자동갱신")
+        self.chk_autofetch.toggled.connect(self._on_autofetch_toggled)
         row.addWidget(self.chk_autofetch)
         v.addLayout(row)
 
@@ -262,43 +275,37 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 구글 연동
     def update_google_status(self):
         if self.gauth.is_connected():
-            self.lbl_status.setText("구글: 연결됨")
+            self.lbl_status.setText("구글: 연결됨  (설정에서 로그인/로그아웃)")
             self.lbl_status.setStyleSheet("color:green;")
-            self.btn_login.setText("Google 로그아웃")
         else:
-            self.lbl_status.setText("구글: 로그인 필요")
+            self.lbl_status.setText("구글: 로그인 필요  ([설정] → Google 로그인)")
             self.lbl_status.setStyleSheet("color:#c00;")
-            self.btn_login.setText("Google 로그인")
 
-    def on_login_click(self):
-        if self.gauth.is_connected():
-            if QMessageBox.question(self, config.APP_NAME, "구글 연결을 해제할까요?") == QMessageBox.Yes:
-                self.gauth.disconnect()
+    def _on_autofetch_toggled(self, on: bool):
+        self.settings.auto_fetch = on
+        self.settings.save(self.cfg_file)
+
+    def on_settings_click(self):
+        was_connected = self.gauth.is_connected()
+        dlg = SettingsDialog(self.gauth, self.settings, self)
+        accepted = dlg.exec() == SettingsDialog.Accepted
+        if accepted:
+            self.settings.save(self.cfg_file)
+            self.hotkeys.apply(self.settings)
+            self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
+        self.update_google_status()
+        # 로그인/로그아웃이 있었으면 데이터 갱신
+        if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
+            if self.gauth.is_connected():
+                self.fetch_all_async()
+            else:
                 self.cal_events = []
                 self.gtasks = []
-                self.update_google_status()
                 self.refresh_calendar()
                 self.refresh_todo()
-            return
-        self.btn_login.setEnabled(False)
-        self.btn_login.setText("로그인 중...")
-
-        def worker():
-            try:
-                self.gauth.authorize()
-                self.sig_login_done.emit(True, "")
-            except Exception as e:
-                self.sig_login_done.emit(False, str(e))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_login_done(self, ok: bool, err: str):
-        self.btn_login.setEnabled(True)
-        self.update_google_status()
-        if ok:
-            self.fetch_all_async()
-        else:
-            QMessageBox.warning(self, config.APP_NAME, "로그인 실패:\n" + err)
+        elif accepted:
+            # 설정만 바뀐 경우에도 팔로업 재스캔
+            self._run_followups()
 
     def fetch_all_async(self):
         if not self.gauth.is_connected():
@@ -328,6 +335,17 @@ class MainWindow(QMainWindow):
         if events is not None:
             self.cal_events = events
             self.refresh_calendar()
+            self._run_followups()
+
+    def _run_followups(self):
+        """캘린더에서 팔로업 대상을 찾아 내 할일로 자동 등록."""
+        added = followup.check_followups(
+            self.settings, self.cal_events, self.todos, self.followup_tracker)
+        if added > 0:
+            save_list(self.todo_file, self.todos)
+            self.followup_tracker.save()
+            self.refresh_todo()
+            self.sig_toast.emit("팔로업 자동 등록", f"{added}건을 [내 할일]에 추가했습니다.")
 
     def _on_tasks_done(self, tasks, err: str):
         if tasks is not None:
@@ -806,5 +824,9 @@ class MainWindow(QMainWindow):
 
     def _shutdown(self):
         self.timer.stop()
+        try:
+            self.hotkeys.release()
+        except Exception:
+            pass
         alarm_window.close_all()
         self.tray.hide()

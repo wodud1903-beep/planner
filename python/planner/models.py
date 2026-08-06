@@ -231,6 +231,73 @@ def save_list(path: Path, items) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+@dataclass
+class AppSettings:
+    """전역 설정 (설정창에서 편집, plan_cfg.json 에 저장). 델파이 TAppSettings 호환."""
+    auto_fetch: bool = False
+    # 계약 후 팔로업
+    follow_on: bool = True
+    follow_keyword: str = "출고"
+    follow_months: int = 1
+    follow_alarm: bool = True
+    follow_time: time = field(default_factory=lambda: time(10, 0))
+    follow_ment: str = config.DEF_FOLLOW_MENT
+    # 전역 단축키
+    hot_on: bool = True
+    hot_ctrl: bool = True
+    hot_alt: bool = True
+    hot_shift: bool = False
+    hot_key: str = "A"
+
+    def to_json(self) -> dict:
+        return {
+            "autoFetch": self.auto_fetch,
+            "followOn": self.follow_on,
+            "followKeyword": self.follow_keyword,
+            "followMonths": self.follow_months,
+            "followAlarm": self.follow_alarm,
+            "followTime": _fmt_time(self.follow_time),
+            "followMent": self.follow_ment,
+            "hotOn": self.hot_on,
+            "hotCtrl": self.hot_ctrl,
+            "hotAlt": self.hot_alt,
+            "hotShift": self.hot_shift,
+            "hotKey": self.hot_key,
+        }
+
+    @classmethod
+    def load(cls, path: Path) -> "AppSettings":
+        s = cls()
+        if not path.exists():
+            return s
+        try:
+            o = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return s
+        if not isinstance(o, dict):
+            return s
+        s.auto_fetch = bool(o.get("autoFetch", False))
+        s.follow_on = bool(o.get("followOn", True))
+        s.follow_keyword = o.get("followKeyword", "출고")
+        s.follow_months = int(o.get("followMonths", 1) or 1)
+        s.follow_alarm = bool(o.get("followAlarm", True))
+        s.follow_time = _parse_time(o.get("followTime", "10:00"), time(10, 0))
+        s.follow_ment = o.get("followMent", config.DEF_FOLLOW_MENT)
+        s.hot_on = bool(o.get("hotOn", True))
+        s.hot_ctrl = bool(o.get("hotCtrl", True))
+        s.hot_alt = bool(o.get("hotAlt", True))
+        s.hot_shift = bool(o.get("hotShift", False))
+        s.hot_key = o.get("hotKey", "A")
+        return s
+
+    def save(self, path: Path) -> None:
+        try:
+            path.write_text(json.dumps(self.to_json(), ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        except Exception:
+            pass
+
+
 class TaskAlarmStore:
     """task id -> TaskAlarm 매핑을 관리."""
 
