@@ -233,12 +233,17 @@ class MainWindow(QMainWindow):
             b = QPushButton(text)
             b.clicked.connect(slot)
             trow.addWidget(b)
+        # 전체 선택/해제
+        self.btn_todo_all = QPushButton("전체선택")
+        self.btn_todo_all.clicked.connect(self._toggle_all_todo_checks)
+        trow.addWidget(self.btn_todo_all)
         trow.addStretch()
         v.addLayout(trow)
 
+        # 맨 왼쪽에 체크박스 열(선택) 추가 → 여러 건 일괄 완료
         self.tbl_todo = self._make_table(
-            ["날짜", "시각", "할일", "알람", "멘트"], [120, 80, 400, 60, 220])
-        self.tbl_todo.doubleClicked.connect(lambda _i: self.on_todo_edit())
+            ["선택", "날짜", "시각", "할일", "알람", "멘트"], [46, 120, 80, 360, 60, 220])
+        self.tbl_todo.doubleClicked.connect(self._on_todo_dblclick)
         v.addWidget(self.tbl_todo)
         return w
 
@@ -448,6 +453,8 @@ class MainWindow(QMainWindow):
         # (grp, sortdate, is_google, obj)
         rows = []
         for it in self.todos:
+            if it.done:  # 완료된 항목은 목록에서 숨김(제거된 것처럼)
+                continue
             if it.run_date and it.run_date < today - timedelta(days=7):
                 continue
             grp, sd = self._group(True, it.run_date, today)
@@ -494,11 +501,16 @@ class MainWindow(QMainWindow):
                 vals = [day, tm, "[구글] " + tk.title, on, ment]
                 self.todo_dates.append(tk.due if tk.has_due else None)
                 key = ("google", tk.id)
+            # 0열: 체크박스(선택) — 키를 여기에 저장
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            chk.setCheckState(Qt.Unchecked)
+            chk.setTextAlignment(Qt.AlignCenter)
+            chk.setData(Qt.UserRole, key)
+            self.tbl_todo.setItem(r, 0, chk)
+            # 1열부터 데이터
             for c, val in enumerate(vals):
-                item = QTableWidgetItem(val)
-                if c == 0:
-                    item.setData(Qt.UserRole, key)
-                self.tbl_todo.setItem(r, c, item)
+                self.tbl_todo.setItem(r, c + 1, QTableWidgetItem(val))
             self._colorize_row(self.tbl_todo, r, self.todo_dates[-1])
 
     def _group(self, has_due: bool, due: date | None, today: date):
@@ -600,22 +612,77 @@ class MainWindow(QMainWindow):
         save_list(self.todo_file, self.todos)
         self.refresh_todo()
 
+    # ---- 체크박스 선택 헬퍼 ----
+    def _checked_todo_keys(self) -> list:
+        keys = []
+        for r in range(self.tbl_todo.rowCount()):
+            it = self.tbl_todo.item(r, 0)
+            if it and it.checkState() == Qt.Checked:
+                k = it.data(Qt.UserRole)
+                if k:
+                    keys.append(k)
+        return keys
+
+    def _toggle_all_todo_checks(self):
+        rows = self.tbl_todo.rowCount()
+        any_unchecked = any(
+            self.tbl_todo.item(r, 0) and self.tbl_todo.item(r, 0).checkState() != Qt.Checked
+            for r in range(rows))
+        new = Qt.Checked if any_unchecked else Qt.Unchecked
+        for r in range(rows):
+            it = self.tbl_todo.item(r, 0)
+            if it:
+                it.setCheckState(new)
+        self.btn_todo_all.setText("전체해제" if any_unchecked else "전체선택")
+
+    def _on_todo_dblclick(self, index):
+        # 체크박스 열 더블클릭은 편집 대신 무시(체크 토글은 단일 클릭)
+        if index.column() == 0:
+            return
+        self.on_todo_edit()
+
     def on_todo_done(self):
-        gt = self._sel_gtask()
-        if gt is not None:
+        """체크된(없으면 현재 선택된) 할일을 완료 처리하고 목록에서 제거."""
+        keys = self._checked_todo_keys()
+        if not keys:
+            k = self._sel_todo_key()
+            if k:
+                keys = [k]
+        if not keys:
+            QMessageBox.information(self, config.APP_NAME, "완료할 할일을 체크하거나 선택하세요.")
+            return
+        if len(keys) > 1 and QMessageBox.question(
+                self, config.APP_NAME,
+                f"체크한 {len(keys)}건을 완료 처리할까요?") != QMessageBox.Yes:
+            return
+
+        local_ids = {k[1] for k in keys if k[0] == "local"}
+        google_items = [k[1] for k in keys if k[0] == "google"]
+
+        # 1) 로컬 할일: 완료 = 목록에서 제거
+        if local_ids:
+            self.todos = [t for t in self.todos if id(t) not in local_ids]
+            save_list(self.todo_file, self.todos)
+
+        # 2) 구글 Tasks: 완료 처리(완료되면 미완료 목록에서 사라짐)
+        errors = []
+        for tid in google_items:
+            gt = next((t for t in self.gtasks if t.id == tid), None)
+            if gt is None:
+                continue
             try:
                 google_client.complete_task(self.gauth, gt.list_id, gt.id)
             except Exception as e:
-                QMessageBox.warning(self, config.APP_NAME, "완료 처리 실패:\n" + str(e))
-                return
-            self.fetch_all_async()
-            return
-        it = self._sel_local_todo()
-        if it is None:
-            return
-        it.done = not it.done
-        save_list(self.todo_file, self.todos)
-        self.refresh_todo()
+                errors.append(f"{gt.title}: {e}")
+
+        if google_items:
+            self.fetch_all_async()   # 구글 목록 새로고침(완료분 제외)
+        else:
+            self.refresh_todo()
+
+        if errors:
+            QMessageBox.warning(self, config.APP_NAME,
+                                "일부 완료 처리 실패:\n" + "\n".join(errors))
 
     def on_todo_copy(self):
         it = self._sel_local_todo()
