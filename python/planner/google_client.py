@@ -258,8 +258,12 @@ def _parse_rfc3339(s: str) -> tuple[Optional[datetime], bool]:
             return None, False
 
 
-def fetch_calendar_events(auth: GoogleAuth, days: int = 7) -> list[CalEvent]:
-    """오늘부터 days 일간의 캘린더 이벤트.
+def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
+                          forward_days: int = 7) -> list[CalEvent]:
+    """(오늘-back_days) ~ (오늘+forward_days) 구간의 캘린더 이벤트.
+
+    - forward_days: 주간 뷰 표시용(기본 7일)
+    - back_days: 계약 후 팔로업 스캔용 과거 구간(출고 일정이 과거이므로 필요)
 
     속도 최적화:
       - 보이는(선택된) 캘린더 + 기본 캘린더만 조회 (숨긴 구독/공휴일 제외)
@@ -269,8 +273,9 @@ def fetch_calendar_events(auth: GoogleAuth, days: int = 7) -> list[CalEvent]:
     token = auth.valid_token()  # 병렬 진입 전 토큰 준비(갱신 1회)
     headers = {"Authorization": "Bearer " + token}
     today = date.today()
-    time_min = datetime(today.year, today.month, today.day).astimezone().isoformat()
-    time_max = (datetime(today.year, today.month, today.day) + timedelta(days=days)).astimezone().isoformat()
+    base = datetime(today.year, today.month, today.day)
+    time_min = (base - timedelta(days=back_days)).astimezone().isoformat()
+    time_max = (base + timedelta(days=forward_days)).astimezone().isoformat()
 
     # 1) 캘린더 목록 (선택된 것 위주)
     r = requests.get(config.CALENDAR_LIST_URL, headers=headers, timeout=20,
@@ -290,7 +295,7 @@ def fetch_calendar_events(auth: GoogleAuth, days: int = 7) -> list[CalEvent]:
                 "timeMax": time_max,
                 "singleEvents": "true",
                 "orderBy": "startTime",
-                "maxResults": 100,
+                "maxResults": 250,
                 "fields": "items(start,summary,iCalUID,id)",
             }, timeout=20)
         except Exception:

@@ -49,12 +49,24 @@ REDIRECT_PORT_RANGE = range(49200, 49231)
 # ---------------------------------------------------------------------------
 # 색상 (델파이 TColor 값을 RGB 로 환산)
 # ---------------------------------------------------------------------------
-COLOR_TOPBAR = "#1F1F1F"      # 상단바 어두운 회색
-COLOR_TODAY = "#FFA860"       # 오늘 강조 (주황)  ($0060A8FF)
-COLOR_TOMORROW = "#FFFF80"    # 내일 강조 (노랑)  ($0080FFFF)
-COLOR_ALARM_RED = "#E03C3C"   # 알람 사이렌 빨강  ($003C3CE0)
-COLOR_ALARM_DARK = "#353535"  # 알람 사이렌 어두운 배경
-COLOR_ALARM_YELLOW = "#FFFF60"  # 알람 제목 노랑
+# --- 델파이 스킨 'Tablet Light' 톤 (밝은 청회색 계열) ---
+COLOR_TOPBAR = "#DCE6F0"       # 상단바 (연한 청회색)
+COLOR_TOPBAR_TEXT = "#2C3E50"  # 상단바 글자 (짙은 남회색)
+COLOR_WINDOW_BG = "#F5F7FA"    # 전체 배경
+COLOR_ACCENT = "#5B8FBF"       # 포인트(선택/포커스) 색
+COLOR_SELECT_BG = "#CFE0F4"    # 표 선택 행 배경
+COLOR_BORDER = "#C6D3E0"       # 테두리
+COLOR_HEADER_BG = "#E4ECF4"    # 표 헤더 배경
+
+COLOR_TODAY = "#FFC98A"        # 오늘 강조 (Tablet Light 톤에 맞춘 부드러운 주황)
+COLOR_TOMORROW = "#FFF2A8"     # 내일 강조 (부드러운 노랑)
+
+# 알람 팝업: 사이렌은 주목도를 위해 진한 색 유지, 조용한 안내는 밝은 톤
+COLOR_ALARM_RED = "#E05A5A"    # 알람 사이렌 빨강
+COLOR_ALARM_DARK = "#3A4656"   # 알람 사이렌 어두운 배경(남회색)
+COLOR_ALARM_YELLOW = "#FFE27A"  # 알람 제목 노랑
+COLOR_BRIEF_BG = "#EDF2F8"     # 조용한 브리핑 배경(밝은 청회색)
+COLOR_BRIEF_TEXT = "#2C3E50"   # 브리핑 글자
 
 DAY_NAMES = ["", "일", "월", "화", "수", "목", "금", "토"]  # 1=일 .. 7=토
 

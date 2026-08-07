@@ -10,70 +10,77 @@ from PySide6.QtWidgets import QApplication
 from . import config
 from .main_window import MainWindow
 
-# 전역 둥근 디자인 스타일시트 (버튼/입력/표/탭/대화상자/메시지창)
+# 전역 스타일시트 — 델파이 스킨 'Tablet Light' 톤 (밝은 청회색 + 은은한 라운드)
 GLOBAL_QSS = """
-QWidget { font-family: 'Malgun Gothic'; }
+QWidget { font-family: 'Malgun Gothic'; color: #2C3E50; }
+QMainWindow, QWidget#central { background: #F5F7FA; }
 QPushButton {
-    background: #f2f3f5;
-    border: 1px solid #d0d3d9;
-    border-radius: 8px;
+    background: #EAF1F8;
+    border: 1px solid #B4C6D8;
+    border-radius: 7px;
     padding: 5px 14px;
+    color: #2C3E50;
 }
-QPushButton:hover { background: #e7ebf2; }
-QPushButton:pressed { background: #dbe0ea; }
-QPushButton:default { border-color: #1f6feb; }
-QPushButton:disabled { color: #999; background: #f5f5f5; }
+QPushButton:hover { background: #DCE8F4; }
+QPushButton:pressed { background: #CCDDEE; }
+QPushButton:default { border: 1px solid #5B8FBF; }
+QPushButton:disabled { color: #9AA7B4; background: #EEF1F5; border-color: #D2DBE4; }
 QLineEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit, QTextEdit {
-    border: 1px solid #d0d3d9;
-    border-radius: 8px;
+    border: 1px solid #B4C6D8;
+    border-radius: 7px;
     padding: 4px 8px;
-    background: white;
-    selection-background-color: #1f6feb;
+    background: #FFFFFF;
+    selection-background-color: #5B8FBF;
+    selection-color: #FFFFFF;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
-QDateEdit:focus, QTimeEdit:focus, QTextEdit:focus { border-color: #1f6feb; }
+QDateEdit:focus, QTimeEdit:focus, QTextEdit:focus { border: 1px solid #5B8FBF; }
 QGroupBox {
-    border: 1px solid #d8dbe0;
-    border-radius: 12px;
+    border: 1px solid #C6D3E0;
+    border-radius: 10px;
     margin-top: 10px;
     padding: 10px;
+    background: #FBFCFE;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     left: 12px;
     padding: 0 5px;
-    color: #444;
+    color: #46596B;
     font-weight: bold;
 }
-QTabWidget::pane { border: 1px solid #d8dbe0; border-radius: 10px; top: -1px; }
+QTabWidget::pane { border: 1px solid #C6D3E0; border-radius: 9px; top: -1px; background: #FFFFFF; }
 QTabBar::tab {
-    background: #eef0f3;
-    border: 1px solid #d8dbe0;
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
+    background: #DCE6F0;
+    border: 1px solid #C6D3E0;
+    border-top-left-radius: 9px;
+    border-top-right-radius: 9px;
     padding: 7px 18px;
     margin-right: 3px;
+    color: #46596B;
 }
-QTabBar::tab:selected { background: white; border-bottom-color: white; }
+QTabBar::tab:selected { background: #FFFFFF; color: #2C3E50; border-bottom-color: #FFFFFF; }
 QTableWidget {
-    border: 1px solid #dfe2e7;
-    border-radius: 10px;
-    gridline-color: #eceef1;
-    selection-background-color: #d7e6ff;
-    selection-color: #000;
+    border: 1px solid #C6D3E0;
+    border-radius: 9px;
+    background: #FFFFFF;
+    gridline-color: #E3EAF1;
+    selection-background-color: #CFE0F4;
+    selection-color: #1A2A38;
 }
 QHeaderView::section {
-    background: #f4f6f9;
+    background: #E4ECF4;
+    color: #46596B;
     border: none;
-    border-right: 1px solid #e6e8ec;
-    border-bottom: 1px solid #e0e3e8;
+    border-right: 1px solid #D2DDE8;
+    border-bottom: 1px solid #C6D3E0;
     padding: 6px;
 }
 QCheckBox { spacing: 6px; }
-QDialog, QMessageBox { background: #ffffff; }
+QDialog, QMessageBox { background: #F5F7FA; }
 QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: #c3c8d0; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #aab0ba; }
+QScrollBar::handle:vertical { background: #B8C9DA; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: #9FB4C8; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 

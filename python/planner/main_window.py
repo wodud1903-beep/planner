@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QHBoxLayout, QHeaderView, QLabel,
     QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon, QTabWidget,
@@ -81,9 +81,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(config.APP_NAME)
-        # 최대화 버튼 제거 + 크기 고정 (가로폭만 조금 넓힘)
+        # 최대화 버튼 제거 + 크기 고정. 세로를 늘려 '내 할일'을 더 많이 보이게.
+        # 단, 작은 화면에서도 잘리지 않도록 화면 크기에 맞춰 고정값을 정한다.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
-        self.setFixedSize(1040, 720)
+        _avail = QGuiApplication.primaryScreen().availableGeometry()
+        _w = min(1040, _avail.width() - 20)
+        _h = min(920, _avail.height() - 60)
+        self.setFixedSize(_w, _h)
 
         # 데이터
         self.todo_file = config.data_file("todos.json")
@@ -158,23 +162,29 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         central = QWidget()
+        central.setObjectName("central")
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # 상단 바
+        # 상단 바 (Tablet Light 톤: 밝은 청회색 + 짙은 글자)
         top = QWidget()
         top.setFixedHeight(52)
-        top.setStyleSheet(f"background:{config.COLOR_TOPBAR};")
+        top.setStyleSheet(
+            f"background:{config.COLOR_TOPBAR};"
+            f"border-bottom:1px solid {config.COLOR_BORDER};")
         tl = QHBoxLayout(top)
         tl.setContentsMargins(16, 0, 16, 0)
         title = QLabel(config.APP_NAME)
-        title.setStyleSheet("color:white;font-size:19px;font-weight:bold;")
+        title.setStyleSheet(
+            f"color:{config.COLOR_TOPBAR_TEXT};font-size:19px;font-weight:bold;"
+            "background:transparent;")
         tl.addWidget(title)
         tl.addStretch()
         self.chk_startup = QCheckBox("PC 시작 시 실행")
-        self.chk_startup.setStyleSheet("color:white;")
+        self.chk_startup.setStyleSheet(
+            f"color:{config.COLOR_TOPBAR_TEXT};background:transparent;")
         self.chk_startup.toggled.connect(lambda on: _set_startup(on))
         tl.addWidget(self.chk_startup)
         outer.addWidget(top)
@@ -331,6 +341,11 @@ class MainWindow(QMainWindow):
         self.btn_fetch.setEnabled(False)
         self.last_fetch = datetime.now()
 
+        # 팔로업이 켜져 있으면 과거 출고 일정까지 스캔하도록 과거 구간도 받는다
+        back_days = 0
+        if self.settings.follow_on:
+            back_days = self.settings.follow_months * 31 + 30
+
         def worker():
             from concurrent.futures import ThreadPoolExecutor
             # 토큰을 먼저 확보(갱신 1회) → 캘린더·할일을 동시에 조회
@@ -339,7 +354,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             with ThreadPoolExecutor(max_workers=2) as ex:
-                f_ev = ex.submit(google_client.fetch_calendar_events, self.gauth)
+                f_ev = ex.submit(google_client.fetch_calendar_events, self.gauth, back_days, 7)
                 f_tk = ex.submit(google_client.fetch_tasks, self.gauth)
                 try:
                     self.sig_events_done.emit(f_ev.result(), "")

@@ -38,13 +38,32 @@ class AlarmWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFixedWidth(640)
 
+        # 색상: 사이렌(알람)은 진한 남회색, 조용한 안내(브리핑)는 밝은 Tablet Light 톤
+        if siren:
+            card_bg = config.COLOR_ALARM_DARK
+            title_color = config.COLOR_ALARM_YELLOW
+            memo_css = ("QTextEdit{background:#2f3947;color:#f0f3f7;"
+                        "border:1px solid #556;border-radius:10px;padding:8px;}")
+            btn_css = ("QPushButton{background:#4a5563;color:#fff;border:none;border-radius:10px;"
+                       "padding:6px 14px;font-weight:bold;} QPushButton:hover{background:#5a6675;}")
+            bar_text = "일정 알람"
+        else:
+            card_bg = config.COLOR_BRIEF_BG
+            title_color = config.COLOR_ACCENT
+            memo_css = (f"QTextEdit{{background:#FFFFFF;color:{config.COLOR_BRIEF_TEXT};"
+                        f"border:1px solid {config.COLOR_BORDER};border-radius:10px;padding:8px;}}")
+            btn_css = (f"QPushButton{{background:#EAF1F8;color:{config.COLOR_BRIEF_TEXT};"
+                       f"border:1px solid {config.COLOR_BORDER};border-radius:10px;"
+                       "padding:6px 14px;font-weight:bold;} QPushButton:hover{background:#DCE8F4;}")
+            bar_text = "안내"
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
         # 둥근 카드
         self.card = QWidget()
         self.card.setObjectName("card")
-        self._set_card_bg(config.COLOR_ALARM_DARK)
+        self._set_card_bg(card_bg)
         outer.addWidget(self.card)
 
         root = QVBoxLayout(self.card)
@@ -52,11 +71,12 @@ class AlarmWindow(QWidget):
         root.setSpacing(0)
 
         # 상단 바 (둥근 윗모서리)
-        self.bar = QLabel("일정 알람" if siren else "안내")
+        self.bar = QLabel(bar_text)
         self.bar.setObjectName("bar")
         self.bar.setAlignment(Qt.AlignCenter)
         self.bar.setFixedHeight(34)
-        self._set_bar_bg(config.COLOR_ALARM_DARK)
+        self._bar_text_color = "#dfe6ef" if siren else config.COLOR_TOPBAR_TEXT
+        self._set_bar_bg(card_bg)
         root.addWidget(self.bar)
 
         body = QVBoxLayout()
@@ -65,16 +85,15 @@ class AlarmWindow(QWidget):
 
         self.lbl_title = QLabel(title)
         self.lbl_title.setWordWrap(True)
+        self._title_color_normal = title_color
         self.lbl_title.setStyleSheet(
-            f"color:{config.COLOR_ALARM_YELLOW};font-size:17px;font-weight:bold;background:transparent;")
+            f"color:{title_color};font-size:17px;font-weight:bold;background:transparent;")
         body.addWidget(self.lbl_title)
 
         self.txt = QTextEdit()
         self.txt.setReadOnly(True)
         self.txt.setPlainText(ment)
-        self.txt.setStyleSheet(
-            "QTextEdit{background:#2a2a2a;color:#f0f0f0;border:1px solid #555;"
-            "border-radius:10px;padding:8px;}")
+        self.txt.setStyleSheet(memo_css)
         if ment.strip():
             self.txt.setFixedHeight(self._memo_height(ment, siren))
             body.addWidget(self.txt)
@@ -91,9 +110,7 @@ class AlarmWindow(QWidget):
         self.btn_ok.clicked.connect(self._dismiss)
         for b in (self.btn_copy, self.btn_snooze, self.btn_ok):
             b.setFixedHeight(38)
-            b.setStyleSheet(
-                "QPushButton{background:#4a4a4a;color:#fff;border:none;border-radius:10px;"
-                "padding:6px 14px;font-weight:bold;} QPushButton:hover{background:#5a5a5a;}")
+            b.setStyleSheet(btn_css)
         if ment.strip():
             btns.addWidget(self.btn_copy)
         else:
@@ -139,8 +156,9 @@ class AlarmWindow(QWidget):
             f"#card{{background:{color};border-radius:16px;}}")
 
     def _set_bar_bg(self, color: str):
+        txt = getattr(self, "_bar_text_color", "#dfe6ef")
         self.bar.setStyleSheet(
-            f"#bar{{background:{color};color:#ddd;font-weight:bold;"
+            f"#bar{{background:{color};color:{txt};font-weight:bold;"
             "border-top-left-radius:16px;border-top-right-radius:16px;}")
 
     # ---- 사이렌 깜빡임 ----
