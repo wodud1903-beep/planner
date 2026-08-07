@@ -20,6 +20,7 @@ import socket
 import threading
 import urllib.parse
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -97,6 +98,7 @@ class GoogleAuth:
         self.refresh_token = ""
         self.access_token = ""
         self.token_expiry = datetime.min
+        self._refresh_lock = threading.Lock()
         self._load()
 
     # ---- 토큰 저장 ----
@@ -217,7 +219,11 @@ class GoogleAuth:
     def valid_token(self) -> str:
         if self.access_token and datetime.now() < self.token_expiry:
             return self.access_token
-        self._refresh()
+        # 병렬 요청이 동시에 갱신하지 않도록 잠금 (한 번만 refresh)
+        with self._refresh_lock:
+            if self.access_token and datetime.now() < self.token_expiry:
+                return self.access_token
+            self._refresh()
         return self.access_token
 
     def _headers(self) -> dict:
@@ -253,20 +259,30 @@ def _parse_rfc3339(s: str) -> tuple[Optional[datetime], bool]:
 
 
 def fetch_calendar_events(auth: GoogleAuth, days: int = 7) -> list[CalEvent]:
-    """오늘부터 days 일간의 캘린더 이벤트를 모든 캘린더에서 모은다."""
-    headers = auth._headers()
+    """오늘부터 days 일간의 캘린더 이벤트.
+
+    속도 최적화:
+      - 보이는(선택된) 캘린더 + 기본 캘린더만 조회 (숨긴 구독/공휴일 제외)
+      - 캘린더별 요청을 스레드풀로 병렬 처리
+      - 필요한 필드만(fields) 받아 응답 크기 축소
+    """
+    token = auth.valid_token()  # 병렬 진입 전 토큰 준비(갱신 1회)
+    headers = {"Authorization": "Bearer " + token}
     today = date.today()
     time_min = datetime(today.year, today.month, today.day).astimezone().isoformat()
     time_max = (datetime(today.year, today.month, today.day) + timedelta(days=days)).astimezone().isoformat()
 
-    # 1) 캘린더 목록
-    r = requests.get(config.CALENDAR_LIST_URL, headers=headers, timeout=30)
+    # 1) 캘린더 목록 (선택된 것 위주)
+    r = requests.get(config.CALENDAR_LIST_URL, headers=headers, timeout=20,
+                     params={"fields": "items(id,selected,primary)"})
     if r.status_code != 200:
         raise GoogleError(f"캘린더 목록 조회 실패 (HTTP {r.status_code})")
-    cal_ids = [c["id"] for c in r.json().get("items", []) if c.get("id")]
+    cal_ids = [c["id"] for c in r.json().get("items", [])
+               if c.get("id") and (c.get("selected") or c.get("primary"))]
+    if not cal_ids:  # 선택 정보가 없으면 전부 조회
+        cal_ids = [c["id"] for c in r.json().get("items", []) if c.get("id")]
 
-    events: list[CalEvent] = []
-    for cal_id in cal_ids:
+    def fetch_one(cal_id: str) -> list[CalEvent]:
         url = config.CALENDAR_EVENTS_URL.format(cal_id=urllib.parse.quote(cal_id))
         try:
             er = requests.get(url, headers=headers, params={
@@ -274,55 +290,65 @@ def fetch_calendar_events(auth: GoogleAuth, days: int = 7) -> list[CalEvent]:
                 "timeMax": time_max,
                 "singleEvents": "true",
                 "orderBy": "startTime",
-                "maxResults": 250,
-            }, timeout=30)
+                "maxResults": 100,
+                "fields": "items(start,summary,iCalUID,id)",
+            }, timeout=20)
         except Exception:
-            continue
+            return []
         if er.status_code != 200:
-            continue
+            return []
+        out = []
         for it in er.json().get("items", []):
             start = it.get("start", {})
             s = start.get("dateTime") or start.get("date") or ""
             dt, has_time = _parse_rfc3339(s)
             if dt is None:
                 continue
-            events.append(CalEvent(
+            out.append(CalEvent(
                 start=dt,
                 has_time=has_time,
                 summary=it.get("summary", "(제목 없음)"),
                 uid=it.get("iCalUID", it.get("id", "")),
             ))
+        return out
+
+    events: list[CalEvent] = []
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(cal_ids)))) as ex:
+        for res in ex.map(fetch_one, cal_ids):
+            events.extend(res)
     events.sort(key=lambda e: e.start)
     return events
 
 
 def fetch_tasks(auth: GoogleAuth) -> list[GoogleTask]:
-    """모든 작업목록의 미완료 할일."""
-    headers = auth._headers()
-    r = requests.get(config.TASKLISTS_URL, headers=headers, timeout=30)
+    """모든 작업목록의 미완료 할일 (목록별 병렬 조회)."""
+    token = auth.valid_token()
+    headers = {"Authorization": "Bearer " + token}
+    r = requests.get(config.TASKLISTS_URL, headers=headers, timeout=20,
+                     params={"fields": "items(id,title)"})
     if r.status_code != 200:
         raise GoogleError(f"작업목록 조회 실패 (HTTP {r.status_code})")
-    out: list[GoogleTask] = []
-    for lst in r.json().get("items", []):
-        list_id = lst.get("id", "")
-        list_name = lst.get("title", "")
-        if not list_id:
-            continue
+    lists = [(l.get("id", ""), l.get("title", "")) for l in r.json().get("items", []) if l.get("id")]
+
+    def fetch_one(item):
+        list_id, list_name = item
         try:
             tr = requests.get(config.TASKS_URL.format(list_id=list_id), headers=headers, params={
                 "showCompleted": "false",
                 "maxResults": 100,
-            }, timeout=30)
+                "fields": "items(id,title,notes,due)",
+            }, timeout=20)
         except Exception:
-            continue
+            return []
         if tr.status_code != 200:
-            continue
+            return []
+        res = []
         for t in tr.json().get("items", []):
             title = (t.get("title") or "").strip()
             if not title:
                 continue
             due_dt, _ = _parse_rfc3339(t.get("due", ""))
-            out.append(GoogleTask(
+            res.append(GoogleTask(
                 id=t.get("id", ""),
                 list_id=list_id,
                 title=title,
@@ -331,6 +357,13 @@ def fetch_tasks(auth: GoogleAuth) -> list[GoogleTask]:
                 has_due=due_dt is not None,
                 list_name=list_name,
             ))
+        return res
+
+    out: list[GoogleTask] = []
+    if lists:
+        with ThreadPoolExecutor(max_workers=min(8, len(lists))) as ex:
+            for res in ex.map(fetch_one, lists):
+                out.extend(res)
     return out
 
 

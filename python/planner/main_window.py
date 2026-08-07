@@ -332,16 +332,23 @@ class MainWindow(QMainWindow):
         self.last_fetch = datetime.now()
 
         def worker():
+            from concurrent.futures import ThreadPoolExecutor
+            # 토큰을 먼저 확보(갱신 1회) → 캘린더·할일을 동시에 조회
             try:
-                events = google_client.fetch_calendar_events(self.gauth)
-                self.sig_events_done.emit(events, "")
-            except Exception as e:
-                self.sig_events_done.emit(None, str(e))
-            try:
-                tasks = google_client.fetch_tasks(self.gauth)
-                self.sig_tasks_done.emit(tasks, "")
-            except Exception as e:
-                self.sig_tasks_done.emit(None, str(e))
+                self.gauth.valid_token()
+            except Exception:
+                pass
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f_ev = ex.submit(google_client.fetch_calendar_events, self.gauth)
+                f_tk = ex.submit(google_client.fetch_tasks, self.gauth)
+                try:
+                    self.sig_events_done.emit(f_ev.result(), "")
+                except Exception as e:
+                    self.sig_events_done.emit(None, str(e))
+                try:
+                    self.sig_tasks_done.emit(f_tk.result(), "")
+                except Exception as e:
+                    self.sig_tasks_done.emit(None, str(e))
             # 캘린더·할일 두 갱신 신호가 처리된 뒤 마지막으로 완료 신호
             self.sig_fetch_done.emit()
 
