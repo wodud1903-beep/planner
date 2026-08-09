@@ -198,6 +198,12 @@ class MainWindow(QMainWindow):
         self.refresh_calendar()
         self.refresh_todo()
         self.refresh_alarm()
+        # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
+        if self._cal_win is not None:
+            try:
+                self._cal_win.apply_theme()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------ 계정 / 동기화
     def _start_account_sync(self):

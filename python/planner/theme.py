@@ -6,62 +6,64 @@
 
 from __future__ import annotations
 
+# 라이트: 눈이 편하도록 순백(#FFF) 대신 은은한 오프화이트 톤 사용
 LIGHT = {
-    "topbar": "#DCE6F0",
+    "topbar": "#D7E1EC",
     "topbar_text": "#2C3E50",
-    "window_bg": "#F5F7FA",
-    "panel_bg": "#FFFFFF",
+    "window_bg": "#E7ECF2",     # 전체 배경(약간 낮춘 밝기)
+    "panel_bg": "#F3F6FA",      # 패널(순백 아님)
     "text": "#2C3E50",
-    "subtext": "#46596B",
+    "subtext": "#4A5B6C",
     "accent": "#5B8FBF",
-    "border": "#C6D3E0",
-    "header_bg": "#E4ECF4",
-    "select_bg": "#CFE0F4",
+    "border": "#C3D0DE",
+    "header_bg": "#DDE7F1",
+    "select_bg": "#CDE0F4",
     "select_text": "#1A2A38",
-    "btn_bg": "#EAF1F8",
-    "btn_hover": "#DCE8F4",
-    "btn_pressed": "#CCDDEE",
-    "input_bg": "#FFFFFF",
-    "grid": "#E3EAF1",
-    "tab_bg": "#DCE6F0",
+    "btn_bg": "#E4EDF6",
+    "btn_hover": "#D6E3F1",
+    "btn_pressed": "#C6D9EC",
+    "input_bg": "#F7F9FC",      # 입력창(순백 아님)
+    "grid": "#D8E1EB",
+    "tab_bg": "#D7E1EC",
     "today": "#FFC98A",
     "tomorrow": "#FFF2A8",
-    "row_text": "#000000",     # 강조행 글자색
-    "brief_bg": "#EDF2F8",
+    "row_text": "#1A2430",     # 강조행 글자색
+    "brief_bg": "#E4EBF3",
     "brief_text": "#2C3E50",
     "status_ok": "#2E7D32",
     "status_bad": "#C0392B",
-    "scroll": "#B8C9DA",
-    "scroll_hover": "#9FB4C8",
+    "scroll": "#B3C4D6",
+    "scroll_hover": "#98AEC3",
 }
 
+# 다크: 남색빛을 빼고 더 어두운 차콜 계열로
 DARK = {
-    "topbar": "#2B3543",
-    "topbar_text": "#E6ECF3",
-    "window_bg": "#1F2733",
-    "panel_bg": "#28313D",
-    "text": "#DCE3EC",
-    "subtext": "#AEBBC9",
+    "topbar": "#191C21",
+    "topbar_text": "#E4E9EF",
+    "window_bg": "#121417",     # 전체 배경(더 어둡게)
+    "panel_bg": "#1B1E23",      # 패널
+    "text": "#D4DAE1",
+    "subtext": "#8E98A3",
     "accent": "#6FA8DC",
-    "border": "#3B4757",
-    "header_bg": "#2E3947",
-    "select_bg": "#3A4E66",
+    "border": "#2B2F36",
+    "header_bg": "#20242A",
+    "select_bg": "#2C3742",
     "select_text": "#EAF1F8",
-    "btn_bg": "#313C4A",
-    "btn_hover": "#3B4859",
-    "btn_pressed": "#455467",
-    "input_bg": "#232B36",
-    "grid": "#333E4C",
-    "tab_bg": "#28313D",
-    "today": "#B5732B",       # 어두운 배경에서도 보이는 주황
-    "tomorrow": "#8A7A2E",    # 어두운 노랑
-    "row_text": "#FFFFFF",
-    "brief_bg": "#28313D",
-    "brief_text": "#DCE3EC",
+    "btn_bg": "#23272D",
+    "btn_hover": "#2C3138",
+    "btn_pressed": "#363C44",
+    "input_bg": "#16181C",
+    "grid": "#282C32",
+    "tab_bg": "#1B1E23",
+    "today": "#9C5F22",       # 어두운 배경에서도 보이는 주황
+    "tomorrow": "#6E6224",    # 어두운 노랑
+    "row_text": "#F0F3F7",
+    "brief_bg": "#1B1E23",
+    "brief_text": "#D4DAE1",
     "status_ok": "#7FD18B",
     "status_bad": "#E88",
-    "scroll": "#465262",
-    "scroll_hover": "#586778",
+    "scroll": "#333941",
+    "scroll_hover": "#434A54",
 }
 
 _current = LIGHT
@@ -164,6 +166,10 @@ QCalendarWidget QAbstractItemView:enabled {{
     background: {p['panel_bg']}; color: {p['text']};
     selection-background-color: {p['select_bg']}; selection-color: {p['select_text']};
 }}
-QCalendarWidget QToolButton {{ color: {p['text']}; background: transparent; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {p['header_bg']}; }}
+QCalendarWidget QToolButton {{ color: {p['text']}; background: transparent; border-radius: 6px; padding: 3px 8px; }}
+QCalendarWidget QToolButton:hover {{ background: {p['btn_hover']}; }}
+QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+QCalendarWidget QSpinBox {{ background: {p['input_bg']}; color: {p['text']}; }}
 QCalendarWidget QMenu {{ background: {p['panel_bg']}; color: {p['text']}; }}
 """

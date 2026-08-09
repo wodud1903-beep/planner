@@ -1,14 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller 스펙 — 단일 exe (일정관리기)
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
+
+# holidays 라이브러리는 국가별 서브모듈을 동적으로 import 하므로 모두 포함
+_hidden = collect_submodules('holidays')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
     datas=[('planner.ico', '.')],
-    hiddenimports=[],
+    hiddenimports=_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

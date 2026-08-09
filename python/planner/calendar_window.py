@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QTimeEdit, QVBoxLayout, QWidget,
 )
 
-from . import config, google_client, theme
+from . import config, google_client, holiday, theme
 
 
 class EventCalendar(QCalendarWidget):
@@ -60,9 +60,9 @@ class EventCalendar(QCalendarWidget):
         painter.setPen(QColor(theme.c("grid")))
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
 
-        # 날짜 숫자 (토=파랑, 일=빨강)
+        # 날짜 숫자 (일요일·공휴일(대체공휴일 포함)=빨강, 토=파랑)
         dow = qd.dayOfWeek()  # 1=월 .. 7=일
-        if dow == 7:
+        if dow == 7 or holiday.is_holiday(d):
             numcol = QColor("#D24B4B")
         elif dow == 6:
             numcol = QColor("#3D74C7")
@@ -210,7 +210,9 @@ class CalendarWindow(QWidget):
         v.addWidget(self.cal, 1)   # 남는 공간을 달력이 모두 차지 → 중간 빈칸 없음
 
         self.lbl_day = QLabel("날짜를 선택하면 아래에 그 날의 일정이 보입니다")
-        self.lbl_day.setStyleSheet("font-weight:bold;")
+        # 배경색과 글자색이 겹쳐 안 보이는 문제 방지 → 색을 명시적으로 지정
+        self.lbl_day.setStyleSheet(
+            f"font-weight:bold;background:transparent;color:{theme.c('text')};")
         v.addWidget(self.lbl_day)
         self.lst = QListWidget()
         self.lst.setFixedHeight(120)   # 하단 상세 목록은 고정 높이(달력이 대부분 차지)
@@ -219,7 +221,15 @@ class CalendarWindow(QWidget):
         self.sig_events.connect(self._on_events)
         self.sig_cals.connect(self._on_cals)
         self.sig_added.connect(self._on_added)
+        self.apply_theme()
         self.reload()
+
+    def apply_theme(self):
+        """다크/라이트 전환 시 창 배경·글자색을 현재 테마로 갱신."""
+        self.setStyleSheet(f"#calwin{{background:{theme.c('window_bg')};}}")
+        self.lbl_day.setStyleSheet(
+            f"font-weight:bold;background:transparent;color:{theme.c('text')};")
+        self.cal.updateCells()
 
     # ---- 로드 ----
     def reload(self):
