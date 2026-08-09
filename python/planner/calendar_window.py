@@ -16,11 +16,94 @@ from PySide6.QtCore import QDate, Qt, QTime, Signal
 from PySide6.QtGui import QColor, QTextCharFormat
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QTimeEdit,
-    QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSizePolicy,
+    QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from . import config, google_client, theme
+
+
+class EventCalendar(QCalendarWidget):
+    """월 달력 각 칸에 날짜 + 그 날의 일정명을 함께 그리는 캘린더.
+
+    구글 캘린더처럼 클릭하지 않아도 일정이 칸 안에 보인다.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._by_date: dict = {}   # date -> [(timetext, summary), ...]
+        self.setGridVisible(True)
+        self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.setHorizontalHeaderFormat(QCalendarWidget.ShortDayNames)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def set_events(self, by_date: dict):
+        self._by_date = by_date or {}
+        self.updateCells()
+
+    def paintCell(self, painter, rect, qd):  # noqa: N802
+        d = date(qd.year(), qd.month(), qd.day())
+        today = date.today()
+        in_month = (qd.month() == self.monthShown() and qd.year() == self.yearShown())
+        selected = (qd == self.selectedDate())
+
+        painter.save()
+        # 배경
+        if selected:
+            bg = QColor(theme.c("select_bg"))
+        elif d == today:
+            bg = QColor(theme.c("today"))
+        else:
+            bg = QColor(theme.c("panel_bg") if in_month else theme.c("window_bg"))
+        painter.fillRect(rect, bg)
+        # 칸 테두리
+        painter.setPen(QColor(theme.c("grid")))
+        painter.drawRect(rect.adjusted(0, 0, -1, -1))
+
+        # 날짜 숫자 (토=파랑, 일=빨강)
+        dow = qd.dayOfWeek()  # 1=월 .. 7=일
+        if dow == 7:
+            numcol = QColor("#D24B4B")
+        elif dow == 6:
+            numcol = QColor("#3D74C7")
+        else:
+            numcol = QColor(theme.c("text"))
+        if not in_month:
+            numcol = QColor(theme.c("subtext"))
+        f = painter.font()
+        f.setPointSize(9)
+        f.setBold(d == today)
+        painter.setFont(f)
+        painter.setPen(numcol)
+        painter.drawText(rect.adjusted(5, 3, -4, 0), Qt.AlignLeft | Qt.AlignTop, str(qd.day()))
+
+        # 일정명
+        evs = self._by_date.get(d, [])
+        if evs:
+            fe = painter.font()
+            fe.setPointSize(8)
+            fe.setBold(False)
+            painter.setFont(fe)
+            fm = painter.fontMetrics()
+            line_h = fm.height() + 1
+            top = rect.top() + 20
+            avail = rect.height() - 22
+            maxlines = max(0, avail // line_h)
+            painter.setPen(QColor(theme.c("text")))
+            shown = evs if len(evs) <= maxlines else evs[:max(0, maxlines - 1)]
+            for i, (tm, summ) in enumerate(shown):
+                label = (tm + " " if tm else "") + summ
+                label = fm.elidedText(label, Qt.ElideRight, rect.width() - 8)
+                painter.drawText(rect.left() + 4, top + i * line_h,
+                                 rect.width() - 8, line_h,
+                                 Qt.AlignLeft | Qt.AlignVCenter, label)
+            if len(evs) > maxlines and maxlines >= 1:
+                more = f"+{len(evs) - len(shown)}건"
+                painter.setPen(QColor(theme.c("accent")))
+                painter.drawText(rect.left() + 4, top + len(shown) * line_h,
+                                 rect.width() - 8, line_h,
+                                 Qt.AlignLeft | Qt.AlignVCenter, more)
+        painter.restore()
 
 
 class AddEventDialog(QDialog):
@@ -91,10 +174,16 @@ class CalendarWindow(QWidget):
         self._marked: list[QDate] = []
 
         self.setWindowTitle("구글 캘린더")
-        self.resize(560, 640)
+        self.resize(760, 700)
         self.setWindowIcon(parent.windowIcon() if parent else self.windowIcon())
+        # 뒤 창이 비치지 않도록 불투명 배경 + 스타일 배경 적용
+        self.setObjectName("calwin")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(f"#calwin{{background:{theme.c('window_bg')};}}")
 
         v = QVBoxLayout(self)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
         top = QHBoxLayout()
         self.btn_add = QPushButton("이 날짜에 일정 추가")
         self.btn_add.clicked.connect(self._add_for_selected)
@@ -111,17 +200,16 @@ class CalendarWindow(QWidget):
         top.addWidget(self.btn_close)
         v.addLayout(top)
 
-        self.cal = QCalendarWidget()
-        self.cal.setGridVisible(True)
-        self.cal.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        self.cal = EventCalendar()
         self.cal.clicked.connect(self._on_day_selected)
         self.cal.activated.connect(lambda _d: self._add_for_selected())
-        v.addWidget(self.cal)
+        v.addWidget(self.cal, 1)   # 남는 공간을 달력이 모두 차지 → 중간 빈칸 없음
 
-        self.lbl_day = QLabel("날짜를 선택하세요")
+        self.lbl_day = QLabel("날짜를 선택하면 아래에 그 날의 일정이 보입니다")
         self.lbl_day.setStyleSheet("font-weight:bold;")
         v.addWidget(self.lbl_day)
         self.lst = QListWidget()
+        self.lst.setFixedHeight(120)   # 하단 상세 목록은 고정 높이(달력이 대부분 차지)
         v.addWidget(self.lst)
 
         self.sig_events.connect(self._on_events)
@@ -160,22 +248,13 @@ class CalendarWindow(QWidget):
         self._on_day_selected(self.cal.selectedDate())
 
     def _mark_dates(self):
-        # 이전 표시 초기화
-        blank = QTextCharFormat()
-        for qd in self._marked:
-            self.cal.setDateTextFormat(qd, blank)
-        self._marked = []
-        fmt = QTextCharFormat()
-        fmt.setFontWeight(75)
-        fmt.setForeground(QColor(theme.c("accent")))
-        seen = set()
-        for ev in self.events:
+        # 날짜별 일정명을 달력 칸에 직접 표시하도록 맵 구성
+        by_date: dict = {}
+        for ev in sorted(self.events, key=lambda e: e.start):
             d = ev.start.date()
-            qd = QDate(d.year, d.month, d.day)
-            if qd not in seen:
-                self.cal.setDateTextFormat(qd, fmt)
-                self._marked.append(qd)
-                seen.add(qd)
+            tm = "" if not ev.has_time else ev.start.strftime("%H:%M")
+            by_date.setdefault(d, []).append((tm, ev.summary))
+        self.cal.set_events(by_date)
 
     def _on_day_selected(self, qd: QDate):
         d = date(qd.year(), qd.month(), qd.day())
