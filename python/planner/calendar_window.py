@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import webbrowser
-from datetime import date, time
+from datetime import date, datetime, time
 
 from PySide6.QtCore import QDate, Qt, QTime, Signal
 from PySide6.QtGui import QColor, QTextCharFormat
@@ -81,6 +81,7 @@ class AddEventDialog(QDialog):
 class CalendarWindow(QWidget):
     sig_events = Signal(object, str)   # (list[CalEvent] or None, error)
     sig_cals = Signal(object)          # list[dict]
+    sig_added = Signal(object, str)    # (추가된 CalEvent or None, error)
 
     def __init__(self, auth: google_client.GoogleAuth, parent=None):
         super().__init__(parent)
@@ -101,10 +102,13 @@ class CalendarWindow(QWidget):
         self.btn_refresh.clicked.connect(self.reload)
         self.btn_web = QPushButton("브라우저에서 열기")
         self.btn_web.clicked.connect(lambda: webbrowser.open("https://calendar.google.com/"))
+        self.btn_close = QPushButton("닫기")
+        self.btn_close.clicked.connect(self.close)
         top.addWidget(self.btn_add)
         top.addWidget(self.btn_refresh)
         top.addStretch()
         top.addWidget(self.btn_web)
+        top.addWidget(self.btn_close)
         v.addLayout(top)
 
         self.cal = QCalendarWidget()
@@ -122,6 +126,7 @@ class CalendarWindow(QWidget):
 
         self.sig_events.connect(self._on_events)
         self.sig_cals.connect(self._on_cals)
+        self.sig_added.connect(self._on_added)
         self.reload()
 
     # ---- 로드 ----
@@ -197,25 +202,45 @@ class CalendarWindow(QWidget):
         self.btn_add.setEnabled(False)
 
         def worker():
-            err = ""
             try:
                 google_client.insert_event(
                     self.auth, vals["calendar_id"], vals["title"], d,
                     start_time=None if vals["all_day"] else vals["time"],
                     all_day=vals["all_day"])
             except Exception as e:
-                err = str(e)
-            self._after_add(err)
+                self.sig_added.emit(None, str(e))
+                return
+            # 즉시 화면에 보이도록 낙관적 이벤트 구성
+            if vals["all_day"]:
+                start = datetime(d.year, d.month, d.day)
+                has_time = False
+            else:
+                t = vals["time"]
+                start = datetime(d.year, d.month, d.day, t.hour, t.minute)
+                has_time = True
+            ev = google_client.CalEvent(start=start, has_time=has_time,
+                                        summary=vals["title"], uid="")
+            self.sig_added.emit(ev, "")
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _after_add(self, err: str):
-        # 워커 스레드에서 호출되므로 UI는 시그널로 처리
-        from PySide6.QtCore import QTimer
-        def ui():
-            self.btn_add.setEnabled(True)
-            if err:
-                QMessageBox.warning(self, config.APP_NAME, "일정 추가 실패:\n" + err)
-            else:
-                self.reload()
-        QTimer.singleShot(0, ui)
+    def _on_added(self, ev, err: str):
+        """일정 추가 결과 (UI 스레드)."""
+        self.btn_add.setEnabled(True)
+        if err:
+            QMessageBox.warning(self, config.APP_NAME, "일정 추가 실패:\n" + err)
+            return
+        # 1) 낙관적으로 즉시 반영
+        if ev is not None:
+            self.events.append(ev)
+            self._mark_dates()
+            self._on_day_selected(self.cal.selectedDate())
+        # 2) 서버 기준으로 재조회(정확한 목록으로 갱신)
+        self.reload()
+        # 3) 메인 창의 이번주/할일 목록도 갱신
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "fetch_all_async"):
+            try:
+                parent.fetch_all_async()
+            except Exception:
+                pass
