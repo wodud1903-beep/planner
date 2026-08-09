@@ -5,10 +5,30 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtGui import QFont
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
 from . import config, theme
 from .main_window import MainWindow
+
+# 중복 실행 방지용 로컬 소켓 이름 (한 사용자당 하나만 실행)
+_SINGLE_KEY = "Planner_SingleInstance_v1"
+
+
+def _activate_existing() -> bool:
+    """이미 실행 중인 인스턴스가 있으면 그 창을 띄우도록 신호를 보내고 True."""
+    sock = QLocalSocket()
+    sock.connectToServer(_SINGLE_KEY)
+    if sock.waitForConnected(400):
+        try:
+            sock.write(b"show")
+            sock.flush()
+            sock.waitForBytesWritten(500)
+            sock.disconnectFromServer()
+        except Exception:
+            pass
+        return True
+    return False
 
 # 전역 스타일시트 — 델파이 스킨 'Tablet Light' 톤 (밝은 청회색 + 은은한 라운드)
 GLOBAL_QSS = """
@@ -88,6 +108,16 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
+
+    # ── 중복 실행 방지 ──
+    # 이미 실행 중이면 기존 창만 띄우고 이 프로세스는 즉시 종료한다.
+    if _activate_existing():
+        return 0
+    # 이전 비정상 종료로 남은 소켓 잔재 정리 후 서버로 대기
+    QLocalServer.removeServer(_SINGLE_KEY)
+    _server = QLocalServer()
+    _server.listen(_SINGLE_KEY)
+
     # 트레이로 최소화해도 프로세스가 살아있게
     app.setQuitOnLastWindowClosed(False)
 
@@ -102,6 +132,15 @@ def main() -> int:
     app.setStyleSheet(theme.qss())
 
     win = MainWindow()
+
+    # 두 번째 실행이 신호를 보내오면 기존 창을 앞으로 띄운다.
+    def _on_second_instance():
+        conn = _server.nextPendingConnection()
+        if conn is not None:
+            conn.disconnectFromServer()
+        win.show_window()
+
+    _server.newConnection.connect(_on_second_instance)
 
     # /tray 스위치로 실행되면 트레이로 시작
     if any(a.lstrip("/-").lower() == "tray" for a in sys.argv[1:]):

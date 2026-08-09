@@ -172,4 +172,11 @@ QCalendarWidget QToolButton:hover {{ background: {p['btn_hover']}; }}
 QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
 QCalendarWidget QSpinBox {{ background: {p['input_bg']}; color: {p['text']}; }}
 QCalendarWidget QMenu {{ background: {p['panel_bg']}; color: {p['text']}; }}
+QMenu {{
+    background: {p['panel_bg']}; color: {p['text']};
+    border: 1px solid {p['border']}; border-radius: 8px; padding: 4px;
+}}
+QMenu::item {{ padding: 5px 22px; border-radius: 5px; color: {p['text']}; }}
+QMenu::item:selected {{ background: {p['select_bg']}; color: {p['select_text']}; }}
+QMenu::separator {{ height: 1px; background: {p['border']}; margin: 4px 8px; }}
 """
