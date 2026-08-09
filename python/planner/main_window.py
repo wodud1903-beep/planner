@@ -113,7 +113,7 @@ class MainWindow(QMainWindow):
         self.last_backup: date | None = None
         self.last_fetch = datetime.min
         self._really_close = False
-        self._range = "week"          # 빠른 필터: week/next/all
+        self._range = "all"           # 빠른 필터 기본값: 전체 (week/next/all)
         self._cal_win = None          # 캘린더 창 참조
         self.account_email = ""
         self._app_icon = make_icon()
@@ -439,6 +439,10 @@ class MainWindow(QMainWindow):
         self.cmb_range.addItem("이번주", "week")
         self.cmb_range.addItem("다음주", "next")
         self.cmb_range.addItem("전체", "all")
+        # 시작 기본값: 전체 (초기화 중 새로고침이 두 번 돌지 않도록 시그널 차단 후 설정)
+        self.cmb_range.blockSignals(True)
+        self.cmb_range.setCurrentIndex(self.cmb_range.findData(self._range))
+        self.cmb_range.blockSignals(False)
         self.cmb_range.currentIndexChanged.connect(self._on_range_changed)
         row.addWidget(self.cmb_range)
         self.chk_autofetch = QCheckBox("30분 자동갱신")
@@ -475,6 +479,9 @@ class MainWindow(QMainWindow):
         self.tbl_todo = self._make_table(
             ["선택", "날짜", "시각", "할일", "알람", "멘트"], [46, 120, 80, 360, 60, 220])
         self.tbl_todo.doubleClicked.connect(self._on_todo_dblclick)
+        # 우클릭 컨텍스트 메뉴 (버튼과 동일한 동작)
+        self.tbl_todo.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tbl_todo.customContextMenuRequested.connect(self._todo_context_menu)
         v.addWidget(self.tbl_todo)
         return w
 
@@ -903,6 +910,23 @@ class MainWindow(QMainWindow):
         if index.column() == 0:
             return
         self.on_todo_edit()
+
+    def _todo_context_menu(self, pos):
+        # 우클릭한 행을 선택한 뒤, 버튼과 동일한 메뉴를 띄운다
+        idx = self.tbl_todo.indexAt(pos)
+        if idx.isValid():
+            self.tbl_todo.selectRow(idx.row())
+        menu = QMenu(self)
+        for text, slot in [
+            ("추가", self.on_todo_add),
+            ("수정", self.on_todo_edit),
+            ("삭제", self.on_todo_del),
+            ("완료", self.on_todo_done),
+            ("멘트 복사", self.on_todo_copy),
+        ]:
+            act = menu.addAction(text)
+            act.triggered.connect(slot)
+        menu.exec(self.tbl_todo.viewport().mapToGlobal(pos))
 
     def on_todo_done(self):
         """체크된(없으면 현재 선택된) 할일을 완료 처리하고 목록에서 제거."""
