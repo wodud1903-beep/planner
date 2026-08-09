@@ -70,13 +70,23 @@ def check():
     tag = rel.get("tag_name", "")
     if _parse_ver(tag) <= _parse_ver(config.APP_VERSION):
         return None
+    # 자산 선택: 이름 또는 라벨이 일치하는 것 우선, 없으면 첫 번째 .exe
+    # (GitHub 이 한글 파일명을 default.exe 로 바꾸고 원래 이름을 label 에 넣는 경우 대비)
+    assets = rel.get("assets", [])
     asset_url = ""
-    for a in rel.get("assets", []):
-        if a.get("name") == config.UPDATE_ASSET_NAME:
-            asset_url = a.get("url", "")  # API URL (octet-stream 으로 받으면 비공개도 OK)
+    for a in assets:
+        if a.get("name") == config.UPDATE_ASSET_NAME or a.get("label") == config.UPDATE_ASSET_NAME:
+            asset_url = a.get("url", "")
             break
     if not asset_url:
-        raise RuntimeError(f"릴리스에 '{config.UPDATE_ASSET_NAME}' 자산이 없습니다.")
+        for a in assets:
+            nm = (a.get("name") or "").lower()
+            lb = (a.get("label") or "").lower()
+            if nm.endswith(".exe") or lb.endswith(".exe"):
+                asset_url = a.get("url", "")
+                break
+    if not asset_url:
+        raise RuntimeError("릴리스에 exe 자산이 없습니다.")
     return {"version": tag, "asset_url": asset_url,
             "notes": rel.get("body", ""), "name": rel.get("name", tag)}
 
