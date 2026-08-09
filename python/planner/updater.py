@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,20 +107,36 @@ def download(asset_url: str) -> str:
 
 
 def apply_and_restart(new_exe: str) -> None:
-    """현재 exe 를 새 파일로 교체하고 재실행 (Windows 전용)."""
+    """현재 exe 를 새 파일로 교체하고 재실행 (Windows 전용).
+
+    PyInstaller onefile 자기교체 안정화:
+      - 새 파일을 대상 폴더(같은 볼륨)에 먼저 스테이징
+      - 실행 중인 exe 는 파일이 잠겨 있으므로, copy 가 성공할 때까지(=앱이 완전히
+        종료되어 잠금이 풀릴 때까지) 재시도 → 부분 기록/조기 실행으로 인한 손상 방지
+      - 교체 후 잠시 대기했다가 새 exe 실행
+    """
     if not is_frozen() or sys.platform != "win32":
         raise RuntimeError("실행 파일(exe) 상태에서만 자동 교체할 수 있습니다.")
     target = sys.executable
-    pid = os.getpid()
+    tdir = os.path.dirname(target) or "."
+    staged = os.path.join(tdir, "_update_" + os.path.basename(target))
+    try:
+        if os.path.exists(staged):
+            os.remove(staged)
+    except Exception:
+        pass
+    shutil.move(new_exe, staged)  # 대상과 같은 폴더로 이동(같은 볼륨 보장)
+
     bat = os.path.join(tempfile.gettempdir(), "planner_update.bat")
+    # copy 는 실행 중(잠금)인 exe 를 덮어쓰지 못해 실패 → 앱이 완전히 종료될 때까지 재시도.
+    # 성공 시에는 파일이 온전히 기록된 뒤이므로 조기 실행/손상이 발생하지 않는다.
     script = f"""@echo off
-:waitloop
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-if not errorlevel 1 (
-  timeout /t 1 /nobreak >nul
-  goto waitloop
-)
-move /Y "{new_exe}" "{target}" >nul
+:retry
+timeout /t 1 /nobreak >nul
+copy /Y "{staged}" "{target}" >nul 2>&1
+if errorlevel 1 goto retry
+timeout /t 2 /nobreak >nul
+del "{staged}" >nul 2>&1
 start "" "{target}"
 del "%~f0"
 """
