@@ -128,17 +128,33 @@ def apply_and_restart(new_exe: str) -> None:
     shutil.move(new_exe, staged)  # 대상과 같은 폴더로 이동(같은 볼륨 보장)
 
     bat = os.path.join(tempfile.gettempdir(), "planner_update.bat")
-    # copy 는 실행 중(잠금)인 exe 를 덮어쓰지 못해 실패 → 앱이 완전히 종료될 때까지 재시도.
-    # 성공 시에는 파일이 온전히 기록된 뒤이므로 조기 실행/손상이 발생하지 않는다.
+    # 안정화 포인트:
+    #  - copy 는 실행 중(잠금)인 exe 를 못 덮어씀 → 앱이 완전히 종료될 때까지 재시도
+    #  - 복사본 크기가 원본과 같아질 때까지 확인(부분 기록 방지)
+    #  - 충분히 대기 후, 더블클릭과 동일한 방식(explorer.exe)으로 새 exe 실행
     script = f"""@echo off
+setlocal enabledelayedexpansion
+set "SRC={staged}"
+set "DST={target}"
+set /a N=0
 :retry
+set /a N+=1
+if !N! gtr 180 goto giveup
 timeout /t 1 /nobreak >nul
-copy /Y "{staged}" "{target}" >nul 2>&1
+copy /Y "!SRC!" "!DST!" >nul 2>&1
 if errorlevel 1 goto retry
-timeout /t 2 /nobreak >nul
-del "{staged}" >nul 2>&1
-start "" "{target}"
-del "%~f0"
+set "SZS="
+set "SZD="
+for %%A in ("!SRC!") do set "SZS=%%~zA"
+for %%A in ("!DST!") do set "SZD=%%~zA"
+if not "!SZS!"=="!SZD!" goto retry
+timeout /t 4 /nobreak >nul
+del "!SRC!" >nul 2>&1
+explorer.exe "!DST!"
+goto done
+:giveup
+:done
+del "%~f0" >nul 2>&1
 """
     with open(bat, "w", encoding="utf-8") as f:
         f.write(script)
