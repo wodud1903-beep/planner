@@ -13,6 +13,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '릴리스 태그 (예: v1.1.1). 입력하면 이 태그로 Release 를 만들고 exe 를 첨부. 비우면 빌드만.'
+        required: false
+        default: ''
   release:
     types: [created]
 
@@ -50,8 +55,10 @@ jobs:
           path: python/dist/일정관리기.exe
           if-no-files-found: error
 
-      - name: 릴리스에 첨부 (태그 빌드일 때만)
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
+      - name: 릴리스 배포 (태그 push / release / 수동입력 태그)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: ${{ inputs.release_tag || github.ref_name }}
           files: python/dist/일정관리기.exe
