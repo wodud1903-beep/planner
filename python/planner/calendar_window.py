@@ -174,7 +174,11 @@ class CalendarWindow(QWidget):
         self._marked: list[QDate] = []
 
         self.setWindowTitle("구글 캘린더")
-        self.resize(760, 700)
+        # 메인 프로그램과 동일한 크기로 열어 칸을 크게(내용이 잘리지 않게)
+        if parent is not None:
+            self.resize(parent.width(), parent.height())
+        else:
+            self.resize(1040, 880)
         self.setWindowIcon(parent.windowIcon() if parent else self.windowIcon())
         # 뒤 창이 비치지 않도록 불투명 배경 + 스타일 배경 적용
         self.setObjectName("calwin")
