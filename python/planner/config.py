@@ -16,8 +16,12 @@ APP_VERSION = "1.1.2"
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
 # 비공개 저장소면 릴리스 자산 다운로드에 읽기 권한 토큰이 필요.
-# 아래를 비워두면 %APPDATA%\Planner\gh_token.txt 파일이 있으면 사용.
-GITHUB_TOKEN = ""
+# 우선순위: (1) 빌드 시 주입된 내장 토큰(_secret.py) → (2) %APPDATA%\Planner\gh_token.txt
+# _secret.py 는 git 에 커밋하지 않고, GitHub Actions 의 UPDATE_TOKEN 시크릿에서 빌드 때만 생성된다.
+try:
+    from ._secret import UPDATE_TOKEN as GITHUB_TOKEN  # noqa: F401
+except Exception:
+    GITHUB_TOKEN = ""
 UPDATE_ASSET_NAME = "일정관리기.exe"
 
 # ---------------------------------------------------------------------------

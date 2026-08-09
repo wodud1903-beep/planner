@@ -44,6 +44,19 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: 자동업데이트 토큰 주입 (선택, 레포 Secret UPDATE_TOKEN)
+        working-directory: python
+        shell: bash
+        env:
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+        run: |
+          if [ -n "$UPDATE_TOKEN" ]; then
+            printf "UPDATE_TOKEN = %s\n" "\"$UPDATE_TOKEN\"" > planner/_secret.py
+            echo "토큰 내장됨"
+          else
+            echo "UPDATE_TOKEN 시크릿 없음 → 토큰 미내장(비공개면 gh_token.txt 필요)"
+          fi
+
       - name: EXE 빌드 (PyInstaller)
         working-directory: python
         run: pyinstaller planner.spec --noconfirm --clean

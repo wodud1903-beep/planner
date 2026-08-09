@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+planner/_secret.py
 build/
 dist/
 *.spec.bak
