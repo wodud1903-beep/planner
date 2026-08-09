@@ -16,12 +16,13 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QHBoxLayout, QHeaderView, QLabel,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon, QTabWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
+    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import alarm_window, config, followup, google_client, hotkey
+from . import alarm_window, config, followup, google_client, hotkey, sync, theme, updater
+from .calendar_window import CalendarWindow
 from .edit_dialog import EditDialog
 from .icon import make_icon
 from .models import (
@@ -77,6 +78,9 @@ class MainWindow(QMainWindow):
     sig_events_done = Signal(object, str)
     sig_fetch_done = Signal()
     sig_toast = Signal(str, str)
+    sig_account = Signal(str)          # 로그인 계정 이메일 확인됨
+    sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
+    sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
 
     def __init__(self):
         super().__init__()
@@ -109,7 +113,13 @@ class MainWindow(QMainWindow):
         self.last_backup: date | None = None
         self.last_fetch = datetime.min
         self._really_close = False
+        self._range = "week"          # 빠른 필터: week/next/all
+        self._cal_win = None          # 캘린더 창 참조
+        self.account_email = ""
         self._app_icon = make_icon()
+
+        # 저장된 테마 반영
+        theme.set_theme(self.settings.dark_mode)
 
         self.setWindowIcon(self._app_icon)
         self._build_ui()
@@ -119,23 +129,32 @@ class MainWindow(QMainWindow):
         self.sig_events_done.connect(self._on_events_done)
         self.sig_fetch_done.connect(self._on_fetch_done)
         self.sig_toast.connect(self._toast)
+        self.sig_account.connect(self._on_account_ready)
+        self.sig_synced.connect(self._on_synced)
+        self.sig_update.connect(self._on_update_checked)
+
+        # 동기화 푸시 디바운스 타이머
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._do_sync_push)
 
         self.refresh_todo()
         self.refresh_alarm()
         self.update_google_status()
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
+        self._last_seen_mtime = self._data_mtime()
 
-        # 시작 시 자동 백업 + 연결돼 있으면 불러오기
+        # 시작 시 자동 백업 + 연결 시 계정확인→동기화→불러오기
         self._startup_brief_pending = True
         self._backup(manual=False)
         if self.gauth.is_connected():
-            # 로딩(수 초)이 끝난 뒤 브리핑을 띄운다 (0건으로 뜨는 것 방지).
-            # 네트워크 지연 대비: 최대 12초 뒤에는 강제로 표시.
-            self.fetch_all_async()
-            QTimer.singleShot(12000, self._do_startup_brief)
+            self._start_account_sync()               # 끝에서 fetch_all_async 호출
+            QTimer.singleShot(15000, self._do_startup_brief)  # 네트워크 지연 대비
         else:
-            # 구글 미연결이면 로딩할 게 없으니 바로 표시
             QTimer.singleShot(600, self._do_startup_brief)
+
+        # 시작 시 조용히 업데이트 확인
+        QTimer.singleShot(4000, lambda: self.check_update(manual=False))
 
         self.chk_startup.setChecked(_startup_set())
 
@@ -159,6 +178,212 @@ class MainWindow(QMainWindow):
     def _on_hotkey(self):
         self.show_window()
 
+    # ------------------------------------------------------------ 테마
+    def _apply_topbar_theme(self):
+        self._topbar.setStyleSheet(
+            f"background:{theme.c('topbar')};border-bottom:1px solid {theme.c('border')};")
+        self._title_lbl.setStyleSheet(
+            f"color:{theme.c('topbar_text')};font-size:19px;font-weight:bold;background:transparent;")
+        self.lbl_account.setStyleSheet(
+            f"color:{theme.c('subtext')};background:transparent;")
+        self.chk_startup.setStyleSheet(
+            f"color:{theme.c('topbar_text')};background:transparent;")
+
+    def apply_theme(self):
+        theme.set_theme(self.settings.dark_mode)
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(theme.qss())
+        self._apply_topbar_theme()
+        self.refresh_calendar()
+        self.refresh_todo()
+        self.refresh_alarm()
+
+    # ------------------------------------------------------------ 계정 / 동기화
+    def _start_account_sync(self):
+        def worker():
+            email = ""
+            try:
+                email = google_client.get_user_email(self.gauth)
+            except Exception:
+                email = ""
+            self.sig_account.emit(email)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_account_ready(self, email: str):
+        if email:
+            self.account_email = email
+            config.set_account(email)
+            self.lbl_account.setText(f"· {email}")
+            sync.migrate_legacy()
+            self.reload_data()   # 계정 폴더 기준으로 다시 로드
+        # Drive 에서 최신본 받아오기(백그라운드)
+        def worker():
+            changed = False
+            try:
+                changed = sync.pull(self.gauth)
+            except Exception:
+                changed = False
+            self.sig_synced.emit(changed)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_synced(self, changed: bool):
+        if changed:
+            self.reload_data()
+            self.sig_toast.emit(config.APP_NAME, "다른 PC의 변경사항을 동기화했습니다.")
+        # 원격 초기 시드/수렴을 위해 로컬 상태를 한 번 업로드 예약
+        self._touch_sync()
+        self.fetch_all_async()
+
+    def reload_data(self):
+        """현재 데이터 폴더에서 모델을 다시 읽고 UI/설정을 갱신."""
+        self.todo_file = config.data_file("todos.json")
+        self.alarm_file = config.data_file("pcalarms.json")
+        self.taskalarm_file = config.data_file("taskalarms.json")
+        self.cfg_file = config.data_file("plan_cfg.json")
+        self.followup_file = config.data_file("followups.json")
+        self.todos = load_list(self.todo_file, TodoItem)
+        self.alarms = load_list(self.alarm_file, PcAlarm)
+        self.task_alarms = TaskAlarmStore(self.taskalarm_file)
+        self.settings = AppSettings.load(self.cfg_file)
+        self.followup_tracker = followup.FollowupTracker(self.followup_file)
+        # 설정 파생 UI 반영
+        self.chk_autofetch.blockSignals(True)
+        self.chk_autofetch.setChecked(self.settings.auto_fetch)
+        self.chk_autofetch.blockSignals(False)
+        self.apply_theme()
+        try:
+            self.hotkeys.apply(self.settings)
+        except Exception:
+            pass
+        self._last_seen_mtime = self._data_mtime()
+
+    def _touch_sync(self):
+        """데이터 변경 후 호출 → 잠시 뒤 Drive 로 업로드(디바운스)."""
+        if self.gauth.is_connected():
+            self._sync_timer.start(2500)
+
+    def _data_mtime(self) -> float:
+        m = 0.0
+        for f in (self.todo_file, self.alarm_file, self.taskalarm_file,
+                  self.cfg_file, self.followup_file):
+            try:
+                if f.exists():
+                    m = max(m, f.stat().st_mtime)
+            except Exception:
+                pass
+        return m
+
+    def _maybe_autosync(self):
+        """로컬 데이터 파일이 바뀌었으면(어느 경로로든) 업로드 예약."""
+        if not self.gauth.is_connected():
+            return
+        m = self._data_mtime()
+        if m > self._last_seen_mtime + 0.001:
+            self._last_seen_mtime = m
+            self._touch_sync()
+
+    def _do_sync_push(self):
+        if not self.gauth.is_connected():
+            return
+        def worker():
+            try:
+                sync.push(self.gauth)
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    # 저장 + 동기화 예약 헬퍼
+    def _save_todos(self):
+        save_list(self.todo_file, self.todos)
+        self._touch_sync()
+
+    def _save_alarms(self):
+        save_list(self.alarm_file, self.alarms)
+        self._touch_sync()
+
+    def _save_task_alarms(self):
+        self.task_alarms.save()
+        self._touch_sync()
+
+    def _save_settings(self):
+        self.settings.save(self.cfg_file)
+        self._touch_sync()
+
+    # ------------------------------------------------------------ 캘린더 창
+    def open_calendar(self):
+        if not self.gauth.is_connected():
+            QMessageBox.information(self, config.APP_NAME,
+                                    "먼저 [설정]에서 Google 로그인 하세요.")
+            return
+        if self._cal_win is None:
+            self._cal_win = CalendarWindow(self.gauth, self)
+        self._cal_win.show()
+        self._cal_win.raise_()
+        self._cal_win.activateWindow()
+
+    # ------------------------------------------------------------ 빠른 필터
+    def _on_range_changed(self, _idx):
+        self._range = self.cmb_range.currentData() or "week"
+        self.refresh_calendar()
+        self.refresh_todo()
+
+    def _range_bounds(self):
+        """(start, end) 반개구간. all 이면 None."""
+        today = date.today()
+        if self._range == "week":
+            return today, today + timedelta(days=7)
+        if self._range == "next":
+            return today + timedelta(days=7), today + timedelta(days=14)
+        return None
+
+    # ------------------------------------------------------------ 업데이트
+    def check_update(self, manual: bool):
+        def worker():
+            try:
+                res = updater.check()
+                self.sig_update.emit(res, "", manual)
+            except Exception as e:
+                self.sig_update.emit(None, str(e), manual)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_update_checked(self, res, err, manual):
+        if res == "__applied__":
+            # 교체 배치가 실행됨 → 앱 종료하면 새 버전이 뜬다
+            self._really_close = True
+            self._shutdown()
+            QApplication.quit()
+            return
+        if err:
+            if manual:
+                QMessageBox.warning(self, config.APP_NAME, "업데이트 확인 실패:\n" + err)
+            return
+        if not res:
+            if manual:
+                QMessageBox.information(self, config.APP_NAME,
+                                       f"현재 최신 버전입니다. (v{config.APP_VERSION})")
+            return
+        msg = (f"새 버전 {res['version']} 이(가) 있습니다. (현재 v{config.APP_VERSION})\n\n"
+               f"{(res.get('notes') or '').strip()[:300]}\n\n지금 업데이트할까요?")
+        if QMessageBox.question(self, config.APP_NAME, msg) != QMessageBox.Yes:
+            return
+        if not updater.is_frozen():
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "개발 모드에서는 자동 교체가 되지 않습니다.\n"
+                f"릴리스에서 {config.UPDATE_ASSET_NAME} 를 받아 사용하세요.")
+            return
+        self.sig_toast.emit(config.APP_NAME, "업데이트 다운로드 중...")
+
+        def worker():
+            try:
+                path = updater.download(res["asset_url"])
+                updater.apply_and_restart(path)
+                self.sig_update.emit("__applied__", "", manual)
+            except Exception as e:
+                self.sig_update.emit(None, str(e), True)
+        threading.Thread(target=worker, daemon=True).start()
+
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         central = QWidget()
@@ -168,26 +393,21 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # 상단 바 (Tablet Light 톤: 밝은 청회색 + 짙은 글자)
-        top = QWidget()
-        top.setFixedHeight(52)
-        top.setStyleSheet(
-            f"background:{config.COLOR_TOPBAR};"
-            f"border-bottom:1px solid {config.COLOR_BORDER};")
-        tl = QHBoxLayout(top)
+        # 상단 바
+        self._topbar = QWidget()
+        self._topbar.setFixedHeight(52)
+        tl = QHBoxLayout(self._topbar)
         tl.setContentsMargins(16, 0, 16, 0)
-        title = QLabel(config.APP_NAME)
-        title.setStyleSheet(
-            f"color:{config.COLOR_TOPBAR_TEXT};font-size:19px;font-weight:bold;"
-            "background:transparent;")
-        tl.addWidget(title)
+        self._title_lbl = QLabel(config.APP_NAME)
+        tl.addWidget(self._title_lbl)
+        self.lbl_account = QLabel("")
+        tl.addWidget(self.lbl_account)
         tl.addStretch()
         self.chk_startup = QCheckBox("PC 시작 시 실행")
-        self.chk_startup.setStyleSheet(
-            f"color:{config.COLOR_TOPBAR_TEXT};background:transparent;")
         self.chk_startup.toggled.connect(lambda on: _set_startup(on))
         tl.addWidget(self.chk_startup)
-        outer.addWidget(top)
+        outer.addWidget(self._topbar)
+        self._apply_topbar_theme()
 
         # 탭
         self.tabs = QTabWidget()
@@ -204,12 +424,23 @@ class MainWindow(QMainWindow):
         self.btn_settings = QPushButton("설정")
         self.btn_settings.clicked.connect(self.on_settings_click)
         row.addWidget(self.btn_settings)
+        self.btn_calendar = QPushButton("캘린더 열기")
+        self.btn_calendar.clicked.connect(self.open_calendar)
+        row.addWidget(self.btn_calendar)
         self.btn_fetch = QPushButton("새로고침")
         self.btn_fetch.clicked.connect(self.fetch_all_async)
         row.addWidget(self.btn_fetch)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         row.addStretch()
+        # 빠른 필터
+        row.addWidget(QLabel("표시:"))
+        self.cmb_range = QComboBox()
+        self.cmb_range.addItem("이번주", "week")
+        self.cmb_range.addItem("다음주", "next")
+        self.cmb_range.addItem("전체", "all")
+        self.cmb_range.currentIndexChanged.connect(self._on_range_changed)
+        row.addWidget(self.cmb_range)
         self.chk_autofetch = QCheckBox("30분 자동갱신")
         self.chk_autofetch.toggled.connect(self._on_autofetch_toggled)
         row.addWidget(self.chk_autofetch)
@@ -285,8 +516,10 @@ class MainWindow(QMainWindow):
         menu = QMenu()
         acts = [
             ("창 열기", self.show_window),
+            ("캘린더 열기", self.open_calendar),
             ("오늘 브리핑", lambda: self.show_briefing(manual=True)),
             ("지금 백업", lambda: self._backup(manual=True)),
+            ("업데이트 확인", lambda: self.check_update(manual=True)),
             (None, None),
             ("종료", self.quit_app),
         ]
@@ -313,16 +546,19 @@ class MainWindow(QMainWindow):
 
     def _on_autofetch_toggled(self, on: bool):
         self.settings.auto_fetch = on
-        self.settings.save(self.cfg_file)
+        self._save_settings()
 
     def on_settings_click(self):
         was_connected = self.gauth.is_connected()
+        prev_dark = self.settings.dark_mode
         dlg = SettingsDialog(self.gauth, self.settings, self)
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
-            self.settings.save(self.cfg_file)
+            self._save_settings()
             self.hotkeys.apply(self.settings)
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
+            if self.settings.dark_mode != prev_dark:
+                self.apply_theme()   # 다크모드 즉시 반영
         self.update_google_status()
         # 로그인/로그아웃이 있었으면 데이터 갱신
         if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
@@ -359,7 +595,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             with ThreadPoolExecutor(max_workers=2) as ex:
-                f_ev = ex.submit(google_client.fetch_calendar_events, self.gauth, back_days, 7)
+                f_ev = ex.submit(google_client.fetch_calendar_events, self.gauth, back_days, 14)
                 f_tk = ex.submit(google_client.fetch_tasks, self.gauth)
                 try:
                     self.sig_events_done.emit(f_ev.result(), "")
@@ -389,10 +625,23 @@ class MainWindow(QMainWindow):
         """캘린더에서 팔로업 대상을 찾아 내 할일로 자동 등록."""
         added = followup.check_followups(
             self.settings, self.cal_events, self.todos, self.followup_tracker)
-        if added > 0:
-            save_list(self.todo_file, self.todos)
+        if added:
+            self._save_todos()
             self.followup_tracker.save()
+            self._touch_sync()
             self.refresh_todo()
+            self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 [내 할일]에 추가했습니다.")
+            # 설정 시 구글 캘린더에도 종일 일정으로 등록
+            if self.settings.follow_to_calendar and self.gauth.is_connected():
+                items = [(it.title, it.run_date) for it in added]
+
+                def worker():
+                    for title, d in items:
+                        try:
+                            google_client.insert_event(self.gauth, "primary", title, d, all_day=True)
+                        except Exception:
+                            pass
+                threading.Thread(target=worker, daemon=True).start()
             self.sig_toast.emit("팔로업 자동 등록", f"{added}건을 [내 할일]에 추가했습니다.")
 
     def _on_tasks_done(self, tasks, err: str):
@@ -405,10 +654,11 @@ class MainWindow(QMainWindow):
         self.tbl_week.setRowCount(0)
         self.week_dates = []
         today = date.today()
-        week_end = today + timedelta(days=7)
+        bounds = self._range_bounds()
+        start, end = bounds if bounds else (today, today + timedelta(days=14))
         for ev in self.cal_events:
             d = ev.start.date()
-            if not (today <= d < week_end):
+            if not (start <= d < end):
                 continue
             r = self.tbl_week.rowCount()
             self.tbl_week.insertRow(r)
@@ -417,7 +667,8 @@ class MainWindow(QMainWindow):
                 self.tbl_week.setItem(r, c, QTableWidgetItem(val))
             self.week_dates.append(d)
             self._colorize_row(self.tbl_week, r, d)
-        self.lbl_week.setText(f"이번주 일정  {self.tbl_week.rowCount()}건")
+        label = {"week": "이번주", "next": "다음주", "all": "전체"}.get(self._range, "이번주")
+        self.lbl_week.setText(f"{label} 일정  {self.tbl_week.rowCount()}건")
 
     def _colorize_row(self, table: QTableWidget, row: int, d: date | None):
         if d is None:
@@ -426,19 +677,20 @@ class MainWindow(QMainWindow):
         color = None
         bold = False
         if d == today:
-            color = QColor(config.COLOR_TODAY)
+            color = QColor(theme.c("today"))
             bold = True
         elif d == today + timedelta(days=1):
-            color = QColor(config.COLOR_TOMORROW)
+            color = QColor(theme.c("tomorrow"))
             bold = True
         if color is None:
             return
+        fg = QColor(theme.c("row_text"))
         for c in range(table.columnCount()):
             it = table.item(row, c)
             if it is None:
                 continue
             it.setBackground(color)
-            it.setForeground(QColor("#000000"))
+            it.setForeground(fg)
             if bold:
                 f = it.font()
                 f.setBold(True)
@@ -451,16 +703,27 @@ class MainWindow(QMainWindow):
         today = date.today()
 
         # (grp, sortdate, is_google, obj)
+        bounds = self._range_bounds()
+
+        def in_range(has_due, d):
+            if bounds is None:
+                return True
+            return bool(has_due) and d is not None and bounds[0] <= d < bounds[1]
+
         rows = []
         for it in self.todos:
             if it.done:  # 완료된 항목은 목록에서 숨김(제거된 것처럼)
                 continue
             if it.run_date and it.run_date < today - timedelta(days=7):
                 continue
+            if not in_range(True, it.run_date):
+                continue
             grp, sd = self._group(True, it.run_date, today)
             rows.append((grp, sd, False, it))
         for tk in self.gtasks:
             if tk.has_due and tk.due and tk.due < today - timedelta(days=7):
+                continue
+            if not in_range(tk.has_due, tk.due):
                 continue
             grp, sd = self._group(tk.has_due, tk.due, today)
             rows.append((grp, sd, True, tk))
@@ -834,6 +1097,8 @@ class MainWindow(QMainWindow):
         # 구글 추가 직후 알람 매핑 반영
         if getattr(self, "_pending_alarm", None) and self.gtasks:
             self._apply_pending_alarm()
+        # 로컬 데이터 변경 감지 시 Drive 동기화 예약
+        self._maybe_autosync()
 
     # ------------------------------------------------------------ 브리핑
     def build_briefing(self) -> str:
@@ -859,7 +1124,35 @@ class MainWindow(QMainWindow):
                 cnt_todo += 1
         if cnt_todo == 0:
             lines.append("  (없음)")
-        lines += ["", f"일정 {cnt_cal}건 / 할일 {cnt_todo}건"]
+        lines += ["", f"오늘: 일정 {cnt_cal}건 / 할일 {cnt_todo}건"]
+
+        # ---- 이번주 요약 (오늘~+7일) ----
+        week_end = today + timedelta(days=7)
+        wk_cal = sorted([e for e in self.cal_events if today <= e.start.date() < week_end],
+                        key=lambda e: e.start)
+        wk_todo = []
+        for it in self.todos:
+            if not it.done and it.run_date and today <= it.run_date < week_end:
+                wk_todo.append((it.run_date, it.run_time.strftime('%H:%M'), it.title))
+        for tk in self.gtasks:
+            if tk.has_due and tk.due and today <= tk.due < week_end:
+                wk_todo.append((tk.due, "", tk.title))
+        wk_todo.sort(key=lambda x: (x[0], x[1]))
+
+        lines += ["", "━━━━━━━━━━━━━━━━━━━━", "[이번주 요약]  (오늘~7일)",
+                  f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건"]
+        if wk_cal:
+            lines.append("· 일정")
+            for e in wk_cal[:12]:
+                lines.append(f"   {e.start.strftime('%m-%d(%a)')} {e.time_text()}  {e.summary}")
+            if len(wk_cal) > 12:
+                lines.append(f"   … 외 {len(wk_cal) - 12}건")
+        if wk_todo:
+            lines.append("· 할일")
+            for d, tm, title in wk_todo[:12]:
+                lines.append(f"   {d.strftime('%m-%d(%a)')} {tm}  {title}")
+            if len(wk_todo) > 12:
+                lines.append(f"   … 외 {len(wk_todo) - 12}건")
         return "\n".join(lines)
 
     def show_briefing(self, manual: bool):

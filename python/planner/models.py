@@ -242,12 +242,16 @@ class AppSettings:
     follow_alarm: bool = True
     follow_time: time = field(default_factory=lambda: time(10, 0))
     follow_ment: str = config.DEF_FOLLOW_MENT
+    # 팔로업을 구글 캘린더에도 등록
+    follow_to_calendar: bool = False
     # 전역 단축키
     hot_on: bool = True
     hot_ctrl: bool = True
     hot_alt: bool = True
     hot_shift: bool = False
     hot_key: str = "A"
+    # 화면 테마
+    dark_mode: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -258,11 +262,13 @@ class AppSettings:
             "followAlarm": self.follow_alarm,
             "followTime": _fmt_time(self.follow_time),
             "followMent": self.follow_ment,
+            "followToCalendar": self.follow_to_calendar,
             "hotOn": self.hot_on,
             "hotCtrl": self.hot_ctrl,
             "hotAlt": self.hot_alt,
             "hotShift": self.hot_shift,
             "hotKey": self.hot_key,
+            "darkMode": self.dark_mode,
         }
 
     @classmethod
@@ -283,11 +289,13 @@ class AppSettings:
         s.follow_alarm = bool(o.get("followAlarm", True))
         s.follow_time = _parse_time(o.get("followTime", "10:00"), time(10, 0))
         s.follow_ment = o.get("followMent", config.DEF_FOLLOW_MENT)
+        s.follow_to_calendar = bool(o.get("followToCalendar", False))
         s.hot_on = bool(o.get("hotOn", True))
         s.hot_ctrl = bool(o.get("hotCtrl", True))
         s.hot_alt = bool(o.get("hotAlt", True))
         s.hot_shift = bool(o.get("hotShift", False))
         s.hot_key = o.get("hotKey", "A")
+        s.dark_mode = bool(o.get("darkMode", False))
         return s
 
     def save(self, path: Path) -> None:

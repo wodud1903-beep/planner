@@ -7,7 +7,7 @@ import sys
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-from . import config
+from . import config, theme
 from .main_window import MainWindow
 
 # 전역 스타일시트 — 델파이 스킨 'Tablet Light' 톤 (밝은 청회색 + 은은한 라운드)
@@ -93,7 +93,13 @@ def main() -> int:
 
     # 한글 친화 폰트 (없으면 시스템 기본)
     app.setFont(QFont("Malgun Gothic", 10))
-    app.setStyleSheet(GLOBAL_QSS)
+    # 저장된 테마(라이트/다크) 선호를 미리 반영 (계정별 설정은 로그인 후 재적용)
+    try:
+        from .models import AppSettings
+        theme.set_theme(AppSettings.load(config.data_file("plan_cfg.json")).dark_mode)
+    except Exception:
+        theme.set_theme(False)
+    app.setStyleSheet(theme.qss())
 
     win = MainWindow()
 

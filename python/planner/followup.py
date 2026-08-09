@@ -93,17 +93,17 @@ def add_months(d: date, months: int) -> date:
 
 
 def check_followups(settings, cal_events, todos: list[TodoItem],
-                    tracker: FollowupTracker) -> int:
-    """조건에 맞는 캘린더 일정을 todos 에 등록. 추가된 건수 반환."""
+                    tracker: FollowupTracker) -> list[TodoItem]:
+    """조건에 맞는 캘린더 일정을 todos 에 등록. 추가된 TodoItem 목록 반환."""
     if not settings.follow_on or not cal_events:
-        return 0
+        return []
     today = date.today()
     if tracker.last_scan == today:
-        return 0
+        return []
     tracker.last_scan = today
 
     keyword = (settings.follow_keyword or "출고").strip() or "출고"
-    added = 0
+    added: list[TodoItem] = []
 
     for ev in cal_events:
         if not ev.uid or ev.uid in tracker.done:
@@ -134,6 +134,6 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
         )
         todos.append(it)
         tracker.done.add(ev.uid)
-        added += 1
+        added.append(it)
 
     return added

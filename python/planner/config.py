@@ -11,6 +11,14 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
+APP_VERSION = "1.1.0"
+
+# 자동 업데이트: 이 저장소의 최신 릴리스를 확인
+UPDATE_REPO = "wodud1903-beep/planner"
+# 비공개 저장소면 릴리스 자산 다운로드에 읽기 권한 토큰이 필요.
+# 아래를 비워두면 %APPDATA%\Planner\gh_token.txt 파일이 있으면 사용.
+GITHUB_TOKEN = ""
+UPDATE_ASSET_NAME = "일정관리기.exe"
 
 # ---------------------------------------------------------------------------
 # 구글 OAuth (데스크톱 앱 클라이언트 내장)
@@ -28,20 +36,33 @@ APP_ID = "Planner"
 GOOGLE_CLIENT_ID = "593737105209-fs5uf4btuvckv697uhnol9j6f36rj1ae.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET = "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"
 
-# 캘린더(읽기) + 할일(읽기/쓰기)
+# 권한(scope):
+#  - openid/email : 로그인 계정 이메일 식별(계정별 저장/동기화)
+#  - calendar     : 캘린더 목록 + 일정 읽기/쓰기(캘린더 창에서 일정 추가)
+#  - tasks        : 할일 읽기/쓰기
+#  - drive.appdata: 다중 PC 동기화용 앱 전용 저장공간(사용자 눈에 안 보임)
+# ⚠️ 구글 클라우드 프로젝트에서 Calendar API / Tasks API / Drive API 사용설정 필요.
 GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/calendar.readonly",
+    "openid",
+    "email",
+    "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/drive.appdata",
 ]
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/{cal_id}/events"
 TASKLISTS_URL = "https://tasks.googleapis.com/tasks/v1/users/@me/lists"
 TASKS_URL = "https://tasks.googleapis.com/tasks/v1/lists/{list_id}/tasks"
 TASK_ITEM_URL = "https://tasks.googleapis.com/tasks/v1/lists/{list_id}/tasks/{task_id}"
+
+# Drive appDataFolder (앱 전용 숨김 폴더) — 동기화용
+DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
+DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 
 # 콜백 서버가 시도할 포트 범위 (델파이 원본과 동일)
 REDIRECT_PORT_RANGE = range(49200, 49231)
@@ -77,10 +98,37 @@ DEF_FOLLOW_MENT = (
 )
 
 
-def data_dir() -> Path:
-    """데이터 저장 폴더 (%APPDATA%\\Planner). 없으면 만든다."""
+def base_dir() -> Path:
+    """앱 최상위 폴더 (%APPDATA%\\Planner)."""
     base = os.environ.get("APPDATA") or str(Path.home())
     d = Path(base) / APP_ID
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# 현재 로그인 계정(이메일) — 로그인 후 설정됨. 계정별로 데이터를 분리 저장한다.
+_current_account: str = ""
+
+
+def set_account(email: str) -> None:
+    global _current_account
+    _current_account = (email or "").strip().lower()
+
+
+def _safe(email: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-@" else "_" for ch in email)
+
+
+def data_dir() -> Path:
+    """데이터 저장 폴더.
+
+    로그인 계정이 있으면 계정별 하위 폴더(accounts/<email>)에 저장해
+    한 PC에서 계정을 바꿔도 데이터가 섞이지 않게 한다.
+    로그인 전이나 미연결이면 공용 폴더를 쓴다.
+    """
+    d = base_dir()
+    if _current_account:
+        d = d / "accounts" / _safe(_current_account)
     d.mkdir(parents=True, exist_ok=True)
     return d
 

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from . import config
+from . import config, theme
 
 _open_alarms: list["AlarmWindow"] = []
 
@@ -48,13 +48,13 @@ class AlarmWindow(QWidget):
                        "padding:6px 14px;font-weight:bold;} QPushButton:hover{background:#5a6675;}")
             bar_text = "일정 알람"
         else:
-            card_bg = config.COLOR_BRIEF_BG
-            title_color = config.COLOR_ACCENT
-            memo_css = (f"QTextEdit{{background:#FFFFFF;color:{config.COLOR_BRIEF_TEXT};"
-                        f"border:1px solid {config.COLOR_BORDER};border-radius:10px;padding:8px;}}")
-            btn_css = (f"QPushButton{{background:#EAF1F8;color:{config.COLOR_BRIEF_TEXT};"
-                       f"border:1px solid {config.COLOR_BORDER};border-radius:10px;"
-                       "padding:6px 14px;font-weight:bold;} QPushButton:hover{background:#DCE8F4;}")
+            card_bg = theme.c("brief_bg")
+            title_color = theme.c("accent")
+            memo_css = (f"QTextEdit{{background:{theme.c('input_bg')};color:{theme.c('brief_text')};"
+                        f"border:1px solid {theme.c('border')};border-radius:10px;padding:8px;}}")
+            btn_css = (f"QPushButton{{background:{theme.c('btn_bg')};color:{theme.c('brief_text')};"
+                       f"border:1px solid {theme.c('border')};border-radius:10px;"
+                       f"padding:6px 14px;font-weight:bold;}} QPushButton:hover{{background:{theme.c('btn_hover')}}}")
             bar_text = "안내"
 
         outer = QVBoxLayout(self)
@@ -75,7 +75,7 @@ class AlarmWindow(QWidget):
         self.bar.setObjectName("bar")
         self.bar.setAlignment(Qt.AlignCenter)
         self.bar.setFixedHeight(34)
-        self._bar_text_color = "#dfe6ef" if siren else config.COLOR_TOPBAR_TEXT
+        self._bar_text_color = "#dfe6ef" if siren else theme.c("topbar_text")
         self._set_bar_bg(card_bg)
         root.addWidget(self.bar)
 

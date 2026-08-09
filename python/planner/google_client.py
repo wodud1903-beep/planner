@@ -420,3 +420,108 @@ def _task_write_error(r) -> str:
         return ("쓰기 권한이 없습니다 (HTTP 403).\n"
                 "[Google 로그아웃] 후 다시 [Google 로그인] 하세요.")
     return f"구글 요청 실패 (HTTP {r.status_code})"
+
+
+# ---------------------------------------------------------------------------
+# 계정 이메일
+# ---------------------------------------------------------------------------
+def get_user_email(auth: GoogleAuth) -> str:
+    try:
+        r = requests.get(config.USERINFO_URL, headers=auth._headers(), timeout=15)
+        if r.status_code == 200:
+            return (r.json().get("email") or "").strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# 캘린더 목록 / 일정 추가(쓰기)
+# ---------------------------------------------------------------------------
+def fetch_calendar_list(auth: GoogleAuth) -> list[dict]:
+    """캘린더 목록: [{id, name, primary, selected, color}] (기본 캘린더 먼저)."""
+    r = requests.get(config.CALENDAR_LIST_URL, headers=auth._headers(), timeout=20,
+                     params={"fields": "items(id,summary,primary,selected,backgroundColor)"})
+    if r.status_code != 200:
+        raise GoogleError(f"캘린더 목록 조회 실패 (HTTP {r.status_code})")
+    out = []
+    for c in r.json().get("items", []):
+        out.append({
+            "id": c.get("id", ""),
+            "name": c.get("summary", c.get("id", "")),
+            "primary": bool(c.get("primary")),
+            "selected": bool(c.get("selected", True)),
+            "color": c.get("backgroundColor", "#5B8FBF"),
+        })
+    out.sort(key=lambda x: (not x["primary"], x["name"]))
+    return out
+
+
+def insert_event(auth: GoogleAuth, calendar_id: str, summary: str,
+                 day: date, start_time=None, end_time=None,
+                 all_day: bool = True, description: str = "") -> None:
+    """캘린더에 일정 추가. all_day=True면 종일, 아니면 start_time~end_time."""
+    headers = auth._headers()
+    headers["Content-Type"] = "application/json"
+    body = {"summary": summary}
+    if description:
+        body["description"] = description
+    if all_day or start_time is None:
+        body["start"] = {"date": day.strftime("%Y-%m-%d")}
+        body["end"] = {"date": (day + timedelta(days=1)).strftime("%Y-%m-%d")}
+    else:
+        tz = datetime.now().astimezone().tzinfo
+        sdt = datetime(day.year, day.month, day.day, start_time.hour, start_time.minute, tzinfo=tz)
+        if end_time is not None:
+            edt = datetime(day.year, day.month, day.day, end_time.hour, end_time.minute, tzinfo=tz)
+        else:
+            edt = sdt + timedelta(hours=1)
+        body["start"] = {"dateTime": sdt.isoformat()}
+        body["end"] = {"dateTime": edt.isoformat()}
+    cid = urllib.parse.quote(calendar_id or "primary")
+    r = requests.post(config.CALENDAR_EVENTS_URL.format(cal_id=cid),
+                      headers=headers, json=body, timeout=20)
+    if r.status_code not in (200, 201):
+        raise GoogleError(_task_write_error(r) if r.status_code == 403
+                          else f"일정 추가 실패 (HTTP {r.status_code})")
+
+
+# ---------------------------------------------------------------------------
+# Drive appDataFolder (다중 PC 동기화용 앱 전용 저장공간)
+# ---------------------------------------------------------------------------
+def drive_find(auth: GoogleAuth, name: str) -> Optional[str]:
+    r = requests.get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
+        "spaces": "appDataFolder",
+        "q": f"name='{name}'",
+        "fields": "files(id,name,modifiedTime)",
+    })
+    if r.status_code != 200:
+        raise GoogleError(f"Drive 조회 실패 (HTTP {r.status_code})")
+    files = r.json().get("files", [])
+    return files[0]["id"] if files else None
+
+
+def drive_read(auth: GoogleAuth, file_id: str) -> str:
+    r = requests.get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
+                     timeout=20, params={"alt": "media"})
+    if r.status_code != 200:
+        raise GoogleError(f"Drive 다운로드 실패 (HTTP {r.status_code})")
+    return r.text
+
+
+def drive_write(auth: GoogleAuth, name: str, content: str) -> str:
+    """appDataFolder 에 name 파일을 만들거나 갱신. file_id 반환."""
+    fid = drive_find(auth, name)
+    if fid is None:
+        meta = requests.post(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+                             json={"name": name, "parents": ["appDataFolder"]})
+        if meta.status_code not in (200, 201):
+            raise GoogleError(f"Drive 파일 생성 실패 (HTTP {meta.status_code})")
+        fid = meta.json()["id"]
+    hdr = auth._headers()
+    hdr["Content-Type"] = "application/json; charset=UTF-8"
+    up = requests.patch(f"{config.DRIVE_UPLOAD_URL}/{fid}", headers=hdr, timeout=30,
+                        params={"uploadType": "media"}, data=content.encode("utf-8"))
+    if up.status_code not in (200, 201):
+        raise GoogleError(f"Drive 업로드 실패 (HTTP {up.status_code})")
+    return fid
