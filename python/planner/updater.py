@@ -109,54 +109,101 @@ def download(asset_url: str) -> str:
 def apply_and_restart(new_exe: str) -> None:
     """현재 exe 를 새 파일로 교체하고 재실행 (Windows 전용).
 
-    PyInstaller onefile 자기교체 안정화:
-      - 새 파일을 대상 폴더(같은 볼륨)에 먼저 스테이징
-      - 실행 중인 exe 는 파일이 잠겨 있으므로, copy 가 성공할 때까지(=앱이 완전히
-        종료되어 잠금이 풀릴 때까지) 재시도 → 부분 기록/조기 실행으로 인한 손상 방지
-      - 교체 후 잠시 대기했다가 새 exe 실행
+    안정화 설계(이번 개편):
+      1) 새 파일을 대상 폴더(같은 볼륨)에 스테이징.
+      2) 교체 배치를 실행하고 앱은 즉시 종료한다.
+      3) 배치는 **PID 로 이전 프로세스가 완전히 끝날 때까지 대기**한 뒤 교체 →
+         "앱이 안 죽어서 잠금이 안 풀리는" 상황을 확실히 처리.
+      4) 잠금이 남아 있어도 **rename 트릭**(실행 중인 exe 도 이름 변경은 허용)으로
+         기존 파일을 비켜 놓고 새 파일을 제자리에 둔다.
+      5) 이전 프로세스가 끝난 뒤 재실행하므로 **중복 실행 방지(단일 인스턴스)** 와
+         충돌하지 않는다.
+      6) 배치는 시스템 기본 코드페이지(mbcs)로 저장 → **한글이 포함된 경로**도
+         cmd 가 정상 인식(UTF-8 로 저장하면 한글 경로에서 모든 파일 작업 실패).
+      7) 진행 상황을 %APPDATA%\\Planner\\update_log.txt 에 기록 → 문제 진단 용이.
     """
     if not is_frozen() or sys.platform != "win32":
         raise RuntimeError("실행 파일(exe) 상태에서만 자동 교체할 수 있습니다.")
     target = sys.executable
     tdir = os.path.dirname(target) or "."
-    staged = os.path.join(tdir, "_update_" + os.path.basename(target))
+    base = os.path.basename(target)
+    staged = os.path.join(tdir, "_update_" + base)
+    old_name = base + ".old"          # ren 은 경로 없이 파일명만
+    old_full = target + ".old"
     try:
         if os.path.exists(staged):
             os.remove(staged)
     except Exception:
         pass
-    shutil.move(new_exe, staged)  # 대상과 같은 폴더로 이동(같은 볼륨 보장)
+    shutil.move(new_exe, staged)      # 대상과 같은 폴더로 이동(같은 볼륨 보장)
+
+    pid = os.getpid()
+    try:
+        log = str(config.base_dir() / "update_log.txt")
+    except Exception:
+        log = os.path.join(tdir, "update_log.txt")
 
     bat = os.path.join(tempfile.gettempdir(), "planner_update.bat")
-    # 안정화 포인트:
-    #  - copy 는 실행 중(잠금)인 exe 를 못 덮어씀 → 앱이 완전히 종료될 때까지 재시도
-    #  - 복사본 크기가 원본과 같아질 때까지 확인(부분 기록 방지)
-    #  - 충분히 대기 후, 더블클릭과 동일한 방식(explorer.exe)으로 새 exe 실행
     script = f"""@echo off
-setlocal enabledelayedexpansion
+setlocal enableextensions enabledelayedexpansion
 set "SRC={staged}"
 set "DST={target}"
+set "OLD={old_full}"
+set "LOG={log}"
+set "PID={pid}"
+echo [update] start SRC=%SRC% DST=%DST% PID=%PID% > "%LOG%"
+
+rem 1) 이전(현재) 프로세스가 완전히 끝날 때까지 대기 (최대 40초)
 set /a N=0
-:retry
+:waitproc
+tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul
+if errorlevel 1 goto gone
 set /a N+=1
-if !N! gtr 180 goto giveup
+if !N! gtr 40 goto gone
 timeout /t 1 /nobreak >nul
-copy /Y "!SRC!" "!DST!" >nul 2>&1
-if errorlevel 1 goto retry
-set "SZS="
-set "SZD="
-for %%A in ("!SRC!") do set "SZS=%%~zA"
-for %%A in ("!DST!") do set "SZD=%%~zA"
-if not "!SZS!"=="!SZD!" goto retry
-timeout /t 4 /nobreak >nul
-del "!SRC!" >nul 2>&1
-explorer.exe "!DST!"
+goto waitproc
+:gone
+echo [update] old process ended (waited !N!s) >> "%LOG%"
+timeout /t 1 /nobreak >nul
+
+rem 2) 새 파일로 교체 (최대 60회 재시도, 잠겨 있으면 rename 트릭)
+set /a N=0
+:copyloop
+del "%OLD%" >nul 2>&1
+copy /Y "%SRC%" "%DST%" >nul 2>&1
+if not errorlevel 1 goto copied
+rem 아직 잠겨 있으면: 실행 파일도 '이름 변경'은 허용됨 → 비켜 놓고 복사
+ren "%DST%" "{old_name}" >nul 2>&1
+copy /Y "%SRC%" "%DST%" >nul 2>&1
+if not errorlevel 1 goto copied
+set /a N+=1
+if !N! gtr 60 goto giveup
+timeout /t 1 /nobreak >nul
+goto copyloop
+:copied
+echo [update] replaced ok >> "%LOG%"
+
+rem 3) 새 버전 실행 (탐색기 컨텍스트 = 더블클릭과 동일한 깨끗한 환경)
+timeout /t 2 /nobreak >nul
+explorer.exe "%DST%"
+echo [update] relaunched >> "%LOG%"
+
+rem 4) 정리
+del "%SRC%" >nul 2>&1
+del "%OLD%" >nul 2>&1
 goto done
 :giveup
+echo [update] GIVE UP - target still locked >> "%LOG%"
 :done
 del "%~f0" >nul 2>&1
 """
-    with open(bat, "w", encoding="utf-8") as f:
-        f.write(script)
+    # cmd 는 배치를 시스템 ANSI 코드페이지로 읽으므로 mbcs 로 저장(한글 경로 대응).
+    try:
+        with open(bat, "w", encoding="mbcs") as f:
+            f.write(script)
+    except (LookupError, UnicodeEncodeError):
+        # 폴백: mbcs 불가 환경이면 UTF-8 + chcp 65001
+        with open(bat, "w", encoding="utf-8") as f:
+            f.write("chcp 65001 >nul\n" + script)
     subprocess.Popen(["cmd", "/c", bat],
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
