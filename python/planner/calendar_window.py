@@ -12,7 +12,7 @@ import threading
 import webbrowser
 from datetime import date, datetime, time
 
-from PySide6.QtCore import QDate, Qt, QTime, Signal
+from PySide6.QtCore import QDate, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout,
@@ -222,7 +222,16 @@ class CalendarWindow(QWidget):
         self.sig_cals.connect(self._on_cals)
         self.sig_added.connect(self._on_added)
         self.apply_theme()
-        self.reload()
+
+        # 체감 속도 향상: 메인 창이 이미 받아둔 일정으로 즉시 화면을 그린다.
+        seed = getattr(parent, "cal_events", None) if parent is not None else None
+        if seed:
+            self.events = list(seed)
+            self._mark_dates()
+            self._on_day_selected(self.cal.selectedDate())
+
+        # 창이 먼저 뜨고 나서(다음 이벤트 루프 틱) 백그라운드 로딩 → 여는 순간 멈춤 방지
+        QTimer.singleShot(0, self.reload)
 
     def apply_theme(self):
         """다크/라이트 전환 시 창 배경·글자색을 현재 테마로 갱신."""
@@ -234,18 +243,21 @@ class CalendarWindow(QWidget):
     # ---- 로드 ----
     def reload(self):
         self.btn_refresh.setEnabled(False)
+        self.btn_refresh.setText("불러오는 중…")
 
         def worker():
-            try:
-                cals = google_client.fetch_calendar_list(self.auth)
-                self.sig_cals.emit(cals)
-            except Exception:
-                self.sig_cals.emit([])
+            # 1) 화면에 바로 필요한 '일정'을 먼저 조회 → 체감 속도 향상
             try:
                 evs = google_client.fetch_calendar_events(self.auth, back_days=31, forward_days=62)
                 self.sig_events.emit(evs, "")
             except Exception as e:
                 self.sig_events.emit(None, str(e))
+            # 2) [추가] 대화상자용 캘린더 목록은 뒤이어 조회(표시엔 불필요)
+            try:
+                cals = google_client.fetch_calendar_list(self.auth)
+                self.sig_cals.emit(cals)
+            except Exception:
+                self.sig_cals.emit([])
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -254,8 +266,11 @@ class CalendarWindow(QWidget):
 
     def _on_events(self, evs, err):
         self.btn_refresh.setEnabled(True)
+        self.btn_refresh.setText("새로고침")
         if evs is None:
-            QMessageBox.warning(self, config.APP_NAME, "일정을 불러오지 못했습니다:\n" + err)
+            # 이미 메인 창 데이터로 표시 중이면 조용히 무시(모달로 방해하지 않음)
+            if not self.events:
+                QMessageBox.warning(self, config.APP_NAME, "일정을 불러오지 못했습니다:\n" + err)
             return
         self.events = evs
         self._mark_dates()

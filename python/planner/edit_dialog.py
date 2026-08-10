@@ -1,8 +1,8 @@
 """할일 / PC알람 / 구글 Tasks 편집 대화상자 (델파이 uPlanEdit 이식).
 
-- 할일: 날짜 + 시각 + 알람 + 멘트
-- PC알람: 요일 + 시각 + 멘트
-- 구글 Tasks: 기한(없음 가능) + 알람시각 + 메모/멘트
+- 할일: 날짜 + 시각 + 알람 + 메모
+- PC알람: 요일 + 시각 + 메모
+- 구글 Tasks: 기한(없음 가능) + 알람시각 + 메모
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ class EditDialog(QDialog):
         g.addLayout(drow2, 1, 0, 1, 7)
         root.addWidget(self.gb_days)
 
-        self.lbl_ment = QLabel("카톡 멘트")
+        self.lbl_ment = QLabel("메모")
         root.addWidget(self.lbl_ment)
         self.txt_ment = QTextEdit()
         self.txt_ment.setMinimumHeight(140)
@@ -162,7 +162,7 @@ class EditDialog(QDialog):
         d.dt_date.hide()
         d.chk_nodue.hide()
         d.chk_alarm.hide()
-        d.lbl_ment.setText("팝업 멘트")
+        d.lbl_ment.setText("팝업 메모")
         d.ed_title.setText(item.title)
         d.dt_time.setTime(_to_qtime(item.run_time))
         d._set_days(item.weekdays)
@@ -184,7 +184,7 @@ class EditDialog(QDialog):
         d._days_required = False
         d.gb_days.hide()
         d.chk_nodue.show()
-        d.lbl_ment.setText("메모 / 멘트")
+        d.lbl_ment.setText("메모")
         d.ed_title.setText(title)
         d.chk_nodue.setChecked(not has_due)
         d.dt_date.setDate(_to_qdate(due if (has_due and due) else date.today()))

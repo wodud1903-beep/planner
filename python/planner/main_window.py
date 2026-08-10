@@ -469,7 +469,7 @@ class MainWindow(QMainWindow):
         for text, slot in [
             ("추가", self.on_todo_add), ("수정", self.on_todo_edit),
             ("삭제", self.on_todo_del), ("완료", self.on_todo_done),
-            ("멘트 복사", self.on_todo_copy),
+            ("메모 복사", self.on_todo_copy),
         ]:
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -483,7 +483,7 @@ class MainWindow(QMainWindow):
 
         # 맨 왼쪽에 체크박스 열(선택) 추가 → 여러 건 일괄 완료
         self.tbl_todo = self._make_table(
-            ["선택", "날짜", "시각", "할일", "알람", "멘트"], [46, 120, 80, 360, 60, 220])
+            ["선택", "날짜", "시각", "할일", "알람", "메모"], [46, 120, 80, 360, 60, 220])
         self.tbl_todo.doubleClicked.connect(self._on_todo_dblclick)
         # 우클릭 컨텍스트 메뉴 (버튼과 동일한 동작)
         self.tbl_todo.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -505,7 +505,7 @@ class MainWindow(QMainWindow):
         row.addStretch()
         v.addLayout(row)
         self.tbl_alarm = self._make_table(
-            ["사용", "이름", "요일", "시각", "멘트"], [50, 200, 120, 80, 480])
+            ["사용", "이름", "요일", "시각", "메모"], [50, 200, 120, 80, 480])
         self.tbl_alarm.doubleClicked.connect(lambda _i: self.on_alarm_edit())
         v.addWidget(self.tbl_alarm)
         return w
@@ -928,7 +928,7 @@ class MainWindow(QMainWindow):
             ("수정", self.on_todo_edit),
             ("삭제", self.on_todo_del),
             ("완료", self.on_todo_done),
-            ("멘트 복사", self.on_todo_copy),
+            ("메모 복사", self.on_todo_copy),
         ]:
             act = menu.addAction(text)
             act.triggered.connect(slot)
@@ -989,7 +989,7 @@ class MainWindow(QMainWindow):
                 ment = (a.ment if (a and a.ment.strip()) else gt.notes) or ""
         if ment.strip():
             QApplication.clipboard().setText(ment)
-            self.sig_toast.emit(config.APP_NAME, "멘트를 클립보드에 복사했습니다.")
+            self.sig_toast.emit(config.APP_NAME, "메모를 클립보드에 복사했습니다.")
 
     def _apply_pending_alarm(self):
         """구글 추가 직후, 방금 만든 항목에 알람 설정을 붙인다."""

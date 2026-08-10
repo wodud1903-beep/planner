@@ -1,7 +1,7 @@
 """화면 최상단 중앙에 뜨는 알람 팝업 (델파이 uAlarm 이식 + 둥근 디자인).
 
 - 항상 위 + 포커스를 뺏지 않고 표시
-- 멘트가 있으면 [멘트 복사] 버튼으로 클립보드에 복사
+- 메모가 있으면 [메모 복사] 버튼으로 클립보드에 복사
 - 사이렌 모드: 빨강/어둠 깜빡임 + 비프음, [5분 뒤 다시]
 - 조용한 모드(브리핑): 깜빡임·소리 없음, 메모가 내용에 맞춰 커져 스크롤 불필요
 - 여러 개가 동시에 뜨면 아래로 쌓인다
@@ -102,7 +102,7 @@ class AlarmWindow(QWidget):
 
         btns = QHBoxLayout()
         btns.setSpacing(10)
-        self.btn_copy = QPushButton("멘트 복사")
+        self.btn_copy = QPushButton("메모 복사")
         self.btn_copy.clicked.connect(self._copy)
         self.btn_snooze = QPushButton("5분 뒤 다시")
         self.btn_snooze.clicked.connect(self._snooze)

@@ -1,7 +1,7 @@
 """세부 설정 대화상자 (델파이 uGSettings 이식).
 
 - 구글 로그인/로그아웃 (여기로 이동)
-- 계약 후 팔로업: 감지 키워드 / 개월수 / 알람 시각 / 알람 여부 / 멘트 템플릿
+- 계약 후 팔로업: 감지 키워드 / 개월수 / 알람 시각 / 알람 여부 / 메모 템플릿
 - 전역 단축키: 사용 / Ctrl·Alt·Shift / 키
 """
 
@@ -63,7 +63,7 @@ class SettingsDialog(QDialog):
         fl.addRow(self.chk_follow_cal)
         self.txt_ment = QTextEdit()
         self.txt_ment.setMinimumHeight(120)
-        fl.addRow("멘트 템플릿\n(%s = 고객명)", self.txt_ment)
+        fl.addRow("메모 템플릿\n(%s = 고객명)", self.txt_ment)
         root.addWidget(gb_f)
 
         # ---- 화면 ----
