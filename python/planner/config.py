@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.1.15"
+APP_VERSION = "1.1.16"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -45,13 +45,17 @@ GOOGLE_CLIENT_SECRET = "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"
 #  - calendar     : 캘린더 목록 + 일정 읽기/쓰기(캘린더 창에서 일정 추가)
 #  - tasks        : 할일 읽기/쓰기
 #  - drive.appdata: 다중 PC 동기화용 앱 전용 저장공간(사용자 눈에 안 보임)
-# ⚠️ 구글 클라우드 프로젝트에서 Calendar API / Tasks API / Drive API 사용설정 필요.
+#  - spreadsheets : 고객관리 스프레드시트 읽기/쓰기
+# ⚠️ 구글 클라우드 프로젝트에서 Calendar / Tasks / Drive / Sheets API 사용설정 필요.
+# ⚠️ spreadsheets 권한은 나중에 추가되었다. 기존 사용자는 [설정] → Google 다시 로그인을
+#    한 번 해야 시트 기능을 쓸 수 있다(다른 기능은 재로그인 없이 그대로 동작).
 GOOGLE_SCOPES = [
     "openid",
     "email",
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/tasks",
     "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -67,6 +71,17 @@ TASK_ITEM_URL = "https://tasks.googleapis.com/tasks/v1/lists/{list_id}/tasks/{ta
 # Drive appDataFolder (앱 전용 숨김 폴더) — 동기화용
 DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
+
+# Google Sheets (고객관리 리스트 연동)
+SHEETS_BASE_URL = "https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}"
+SHEETS_VALUES_URL = SHEETS_BASE_URL + "/values/{rng}"
+SHEETS_BATCH_GET_URL = SHEETS_BASE_URL + "/values:batchGet"
+SHEETS_BATCH_UPDATE_VALUES_URL = SHEETS_BASE_URL + "/values:batchUpdate"
+SHEETS_BATCH_UPDATE_URL = SHEETS_BASE_URL + ":batchUpdate"
+
+# 기본 고객관리 시트 (설정에서 변경 가능)
+DEF_SHEET_ID = "1L6UwkuywIEAffPvQX9GWwsP8Ix_6fP8uakNFfV1iAm8"
+DEF_SHEET_NAME = "미출고차량"
 
 # 콜백 서버가 시도할 포트 범위 (델파이 원본과 동일)
 REDIRECT_PORT_RANGE = range(49200, 49231)

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import sys
 import threading
+import uuid
+import webbrowser
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -17,18 +20,44 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
-    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon, QTabWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon,
+    QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import alarm_window, config, followup, google_client, hotkey, sync, theme, updater
+from . import (
+    alarm_window, config, followup, google_client, hotkey, sheets, sync, theme, updater,
+)
 from .calendar_window import CalendarWindow
+from .customer_dialog import CustomerDialog
 from .edit_dialog import EditDialog
 from .icon import make_icon
 from .models import (
     AppSettings, PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
 )
 from .settings_dialog import SettingsDialog
+
+# ---------------------------------------------------------------------------
+# 낙관적 UI (즉시 반영)
+#
+# 구글에 보내기 '전에' 화면부터 바꾸고, 전송은 뒤에서 처리한다.
+# self.gtasks 는 서버 사본 그대로 두고, 확정 안 된 변경만 _pending_ops 에 쌓아
+# 그릴 때 덧씌운다 → 롤백은 목록에서 빼기 한 줄로 끝난다.
+# ---------------------------------------------------------------------------
+PENDING_ID_PREFIX = "__pending__"
+PENDING_GRACE_SEC = 60          # 서버 반영이 늦어도 이 시간까지는 화면에 유지
+TASK_REFETCH_DELAY_MS = 1500    # 쓰기 성공 후 '할일만' 재조회 (디바운스)
+
+
+@dataclass
+class _PendingOp:
+    """아직 서버 반영이 확인되지 않은 낙관적 변경 1건."""
+    kind: str                       # "add" | "update" | "remove"
+    key: str                        # add=임시 id, update/remove=실제 구글 task id
+    task: object = None             # 화면에 보여줄 GoogleTask (remove 는 None)
+    alarm: object = None            # add 시 대화상자에서 지정한 TaskAlarm
+    err_prefix: str = ""            # 실패 시 안내 문구 앞머리
+    epoch: int = 0                  # 쓰기가 성공한 시점의 세대 번호 (0=전송 중)
+    deadline: datetime = field(default_factory=datetime.now)
 
 
 def _startup_set() -> bool:
@@ -74,13 +103,16 @@ def _set_startup(enable: bool):
 
 class MainWindow(QMainWindow):
     # 백그라운드 스레드 → UI 마샬링
-    sig_tasks_done = Signal(object, str)
+    sig_tasks_done = Signal(object, str, int)   # (할일목록|None, 오류, 조회시작 epoch)
     sig_events_done = Signal(object, str)
     sig_fetch_done = Signal()
     sig_toast = Signal(str, str)
     sig_account = Signal(str)          # 로그인 계정 이메일 확인됨
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
+    sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
+    sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
+    sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
 
     def __init__(self):
         super().__init__()
@@ -117,6 +149,15 @@ class MainWindow(QMainWindow):
         self._cal_win = None          # 캘린더 창 참조
         self.account_email = ""
         self._app_icon = make_icon()
+        # --- 낙관적 UI 상태 (UI 스레드에서만 조작) ---
+        self._pending_ops: list[_PendingOp] = []
+        self._data_epoch = 0          # 쓰기가 성공할 때마다 +1
+        self._write_errors: list[str] = []
+        # --- 고객관리(구글 시트) 상태 ---
+        self.sheet_rows: list = []
+        self.sheet_choices: dict = {}
+        self._sheet_last_row = 0
+        self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
 
         # 저장된 테마 반영
         theme.set_theme(self.settings.dark_mode)
@@ -132,11 +173,24 @@ class MainWindow(QMainWindow):
         self.sig_account.connect(self._on_account_ready)
         self.sig_synced.connect(self._on_synced)
         self.sig_update.connect(self._on_update_checked)
+        self.sig_write_done.connect(self._on_write_done)
+        self.sig_sheet_rows.connect(self._on_sheet_rows)
+        self.sig_sheet_written.connect(self._on_sheet_written)
 
         # 동기화 푸시 디바운스 타이머
         self._sync_timer = QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._do_sync_push)
+
+        # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
+        self._task_refetch_timer = QTimer(self)
+        self._task_refetch_timer.setSingleShot(True)
+        self._task_refetch_timer.timeout.connect(self.fetch_tasks_async)
+
+        # 실패 메시지를 모아 한 창으로
+        self._err_timer = QTimer(self)
+        self._err_timer.setSingleShot(True)
+        self._err_timer.timeout.connect(self._flush_write_errors)
 
         self.refresh_todo()
         self.refresh_alarm()
@@ -328,6 +382,11 @@ class MainWindow(QMainWindow):
         self._cal_win.raise_()
         self._cal_win.activateWindow()
 
+    def add_optimistic_event(self, ev) -> None:
+        """캘린더 창에서 방금 추가한 일정을 재조회 없이 이번주 목록에 바로 반영."""
+        self.cal_events = sorted(list(self.cal_events) + [ev], key=lambda e: e.start)
+        self.refresh_calendar()
+
     # ------------------------------------------------------------ 빠른 필터
     def _on_range_changed(self, _idx):
         self._range = self.cmb_range.currentData() or "week"
@@ -419,6 +478,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs)
         self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
+        self.tabs.addTab(self._build_customer_tab(), "고객관리")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
 
     def _build_main_tab(self) -> QWidget:
@@ -490,6 +550,222 @@ class MainWindow(QMainWindow):
         self.tbl_todo.customContextMenuRequested.connect(self._todo_context_menu)
         v.addWidget(self.tbl_todo)
         return w
+
+    # ------------------------------------------------------ 고객관리(구글 시트)
+    def _build_customer_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        row = QHBoxLayout()
+        self.btn_cust_load = QPushButton("불러오기")
+        self.btn_cust_load.clicked.connect(lambda: self.load_sheet_async(manual=True))
+        row.addWidget(self.btn_cust_load)
+        for text, slot in [("고객 추가", self.on_customer_add),
+                           ("수정", self.on_customer_edit)]:
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        self.btn_cust_open = QPushButton("시트 열기")
+        self.btn_cust_open.clicked.connect(self._open_sheet)
+        row.addWidget(self.btn_cust_open)
+        row.addStretch()
+        row.addWidget(QLabel("검색:"))
+        self.ed_cust_find = QLineEdit()
+        self.ed_cust_find.setPlaceholderText("고객명 · 차종 · 금융사")
+        self.ed_cust_find.setFixedWidth(220)
+        self.ed_cust_find.textChanged.connect(lambda _t: self.refresh_customers())
+        row.addWidget(self.ed_cust_find)
+        v.addLayout(row)
+
+        self.lbl_cust = QLabel("고객관리 시트를 불러오려면 [불러오기]를 누르세요.")
+        v.addWidget(self.lbl_cust)
+
+        self.tbl_cust = self._make_table(
+            ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일", "진행현황"],
+            [52, 230, 110, 180, 100, 100, 80])
+        self.tbl_cust.doubleClicked.connect(lambda _i: self.on_customer_edit())
+        v.addWidget(self.tbl_cust)
+        return w
+
+    def _sheet_ready(self, quiet: bool = False) -> bool:
+        if not self.settings.sheet_on:
+            if not quiet:
+                QMessageBox.information(
+                    self, config.APP_NAME,
+                    "[설정] → '구글 시트 고객관리' 에서 사용을 켜고 시트 주소를 지정하세요.")
+            return False
+        if not self.gauth.is_connected():
+            if not quiet:
+                QMessageBox.information(self, config.APP_NAME,
+                                        "먼저 [설정]에서 Google 로그인 하세요.")
+            return False
+        if not (self.settings.sheet_id or "").strip():
+            if not quiet:
+                QMessageBox.information(self, config.APP_NAME, "설정에서 시트 주소를 입력하세요.")
+            return False
+        return True
+
+    def _open_sheet(self):
+        sid = (self.settings.sheet_id or "").strip()
+        if not sid:
+            QMessageBox.information(self, config.APP_NAME, "설정에서 시트 주소를 입력하세요.")
+            return
+        webbrowser.open(sheets.sheet_url(sid))
+
+    def load_sheet_async(self, manual: bool = False):
+        """시트를 백그라운드로 읽어온다 (창이 멈추지 않게)."""
+        if not self._sheet_ready(quiet=not manual):
+            return
+        self.btn_cust_load.setEnabled(False)
+        self.lbl_cust.setText("고객관리 시트를 불러오는 중…")
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+
+        def worker():
+            try:
+                _hdr, rows = sheets.read_rows(self.gauth, sid, sname)
+                last = rows[-1].row if rows else _hdr
+                self.sig_sheet_rows.emit(rows, last, "")
+            except Exception as e:
+                self.sig_sheet_rows.emit(None, 0, str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_rows(self, rows, last_row, err: str):
+        self.btn_cust_load.setEnabled(True)
+        if rows is None:
+            self.lbl_cust.setText("불러오기 실패")
+            QMessageBox.warning(self, config.APP_NAME, "시트를 불러오지 못했습니다:\n" + err)
+            return
+        self.sheet_rows = rows
+        self._sheet_last_row = last_row
+        self.sheet_choices = sheets.choices(rows)
+        self._sheet_pending = []
+        self.refresh_customers()
+
+    def _visible_sheet_rows(self) -> list:
+        """서버 행 + 아직 전송 중인 행."""
+        return list(self.sheet_rows) + list(self._sheet_pending)
+
+    def refresh_customers(self):
+        q = (self.ed_cust_find.text() or "").strip().lower() if hasattr(self, "ed_cust_find") else ""
+        self.tbl_cust.setRowCount(0)
+        rows = self._visible_sheet_rows()
+        shown = 0
+        for cr in rows:
+            if q:
+                hay = " ".join([cr.get("customer"), cr.get("model"),
+                                cr.get("finance")]).lower()
+                if q not in hay:
+                    continue
+            r = self.tbl_cust.rowCount()
+            self.tbl_cust.insertRow(r)
+            pend = cr in self._sheet_pending
+            vals = [cr.seq if not pend else "…",
+                    ("[등록중] " if pend else "") + cr.get("customer"),
+                    cr.get("finance"), cr.get("model"),
+                    cr.get("contract_date"), cr.get("deliver_date"), cr.get("status")]
+            for c, val in enumerate(vals):
+                item = QTableWidgetItem(val)
+                item.setData(Qt.UserRole, cr.row)
+                self.tbl_cust.setItem(r, c, item)
+            if pend:
+                fg = QColor(theme.c("subtext"))
+                for c in range(self.tbl_cust.columnCount()):
+                    cell = self.tbl_cust.item(r, c)
+                    if cell is not None:
+                        cell.setForeground(fg)
+            shown += 1
+        total = len(rows)
+        self.lbl_cust.setText(
+            f"고객 {total}건" + (f" · 검색 {shown}건" if q else "")
+            + f"   (시트: {self.settings.sheet_name})")
+
+    def _sel_customer(self):
+        r = self.tbl_cust.currentRow()
+        if r < 0:
+            return None
+        it = self.tbl_cust.item(r, 0)
+        if it is None:
+            return None
+        rownum = it.data(Qt.UserRole)
+        for cr in self._visible_sheet_rows():
+            if cr.row == rownum:
+                return cr
+        return None
+
+    def on_customer_add(self):
+        if not self._sheet_ready():
+            return
+        if not self.sheet_rows and not self._sheet_pending:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "먼저 [불러오기]로 시트를 읽어주세요.")
+            return
+        vals = CustomerDialog.run("고객 등록", {}, self.sheet_choices, self)
+        if vals is None:
+            return
+        # 화면에 먼저 반영 (임시 행)
+        pend = sheets.CustomerRow(row=self._sheet_last_row + 1, seq="", total="")
+        pend.values = dict(vals)
+        self._sheet_pending.append(pend)
+        self.refresh_customers()
+
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+        last = self._sheet_last_row
+
+        def worker():
+            try:
+                newrow = sheets.append_row(self.gauth, sid, sname, vals, last)
+                self.sig_sheet_written.emit(pend, newrow, "")
+            except Exception as e:
+                self.sig_sheet_written.emit(pend, None, str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_customer_edit(self):
+        if not self._sheet_ready():
+            return
+        cr = self._sel_customer()
+        if cr is None:
+            QMessageBox.information(self, config.APP_NAME, "수정할 고객을 선택하세요.")
+            return
+        if cr in self._sheet_pending:
+            self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 수정하세요.")
+            return
+        vals = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
+                                  cr.values, self.sheet_choices, self)
+        if vals is None:
+            return
+        old = dict(cr.values)
+        cr.values = dict(vals)          # 화면 먼저
+        self.refresh_customers()
+
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+
+        def worker():
+            try:
+                sheets.update_row(self.gauth, sid, sname, cr.row, vals)
+                self.sig_sheet_written.emit(None, cr.row, "")
+            except Exception as e:
+                cr.values = old         # 롤백 (UI 갱신은 핸들러에서)
+                self.sig_sheet_written.emit(None, None, str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_written(self, pend, newrow, err: str):
+        if err:
+            if pend is not None and pend in self._sheet_pending:
+                self._sheet_pending.remove(pend)
+            self.refresh_customers()
+            QMessageBox.warning(self, config.APP_NAME, "시트 저장 실패:\n" + err)
+            return
+        if pend is not None:
+            # 임시 행을 확정 행으로 승격
+            if pend in self._sheet_pending:
+                self._sheet_pending.remove(pend)
+            pend.row = int(newrow or pend.row)
+            self.sheet_rows.append(pend)
+            self._sheet_last_row = max(self._sheet_last_row, pend.row)
+        self.refresh_customers()
+        self.sig_toast.emit(config.APP_NAME, "고객관리 시트에 저장했습니다.")
+        # 수식(순번·합계·안내멘트)이 계산된 결과를 잠시 뒤 다시 읽어온다
+        QTimer.singleShot(2500, lambda: self.load_sheet_async(manual=False))
 
     def _build_alarm_tab(self) -> QWidget:
         w = QWidget()
@@ -600,6 +876,8 @@ class MainWindow(QMainWindow):
         if self.settings.follow_on:
             back_days = self.settings.follow_months * 31 + 30
 
+        epoch = self._data_epoch   # 조회 '시작' 시점의 세대 (UI 스레드에서 캡처)
+
         def worker():
             from concurrent.futures import ThreadPoolExecutor
             # 토큰을 먼저 확보(갱신 1회) → 캘린더·할일을 동시에 조회
@@ -607,23 +885,53 @@ class MainWindow(QMainWindow):
                 self.gauth.valid_token()
             except Exception:
                 pass
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                f_ev = ex.submit(google_client.fetch_calendar_events, self.gauth, back_days, 14)
-                f_tk = ex.submit(google_client.fetch_tasks, self.gauth)
+
+            def do_tasks():
+                # 할일은 캘린더 조회(최대 75일치)를 기다리지 않고 준비되는 즉시 반영
                 try:
-                    self.sig_events_done.emit(f_ev.result(), "")
+                    self.sig_tasks_done.emit(google_client.fetch_tasks(self.gauth), "", epoch)
+                except Exception as e:
+                    self.sig_tasks_done.emit(None, str(e), epoch)
+
+            def do_events():
+                try:
+                    self.sig_events_done.emit(
+                        google_client.fetch_calendar_events(self.gauth, back_days, 14), "")
                 except Exception as e:
                     self.sig_events_done.emit(None, str(e))
-                try:
-                    self.sig_tasks_done.emit(f_tk.result(), "")
-                except Exception as e:
-                    self.sig_tasks_done.emit(None, str(e))
-            # 캘린더·할일 두 갱신 신호가 처리된 뒤 마지막으로 완료 신호
+
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                ex.submit(do_tasks)
+                ex.submit(do_events)
+            # with 를 벗어나면 두 조회가 모두 끝난 상태
             self.sig_fetch_done.emit()
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def fetch_tasks_async(self):
+        """'할일'만 다시 받아온다(캘린더 조회 없이).
+
+        쓰기 직후 서버 기준으로 맞추는 용도 — 전체 재조회보다 훨씬 가볍다.
+        """
+        if not self.gauth.is_connected():
+            return
+        epoch = self._data_epoch
+
+        def worker():
+            try:
+                self.sig_tasks_done.emit(google_client.fetch_tasks(self.gauth), "", epoch)
+            except Exception as e:
+                self.sig_tasks_done.emit(None, str(e), epoch)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _schedule_task_refetch(self):
+        """쓰기 여러 건이 몰려도 재조회는 한 번만."""
+        self._task_refetch_timer.start(TASK_REFETCH_DELAY_MS)
+
     def _on_fetch_done(self):
+        # 캘린더 조회가 실패해도 새로고침 버튼이 잠긴 채 남지 않도록 여기서도 푼다
+        self.btn_fetch.setEnabled(True)
         # 시작 브리핑이 대기 중이면 데이터가 채워진 지금 표시
         self._do_startup_brief()
 
@@ -647,20 +955,143 @@ class MainWindow(QMainWindow):
             # 설정 시 구글 캘린더에도 종일 일정으로 등록
             if self.settings.follow_to_calendar and self.gauth.is_connected():
                 items = [(it.title, it.run_date) for it in added]
+                rmin = self._reminder_minutes()
 
                 def worker():
                     for title, d in items:
                         try:
-                            google_client.insert_event(self.gauth, "primary", title, d, all_day=True)
+                            google_client.insert_event(self.gauth, "primary", title, d,
+                                                       all_day=True, reminder_minutes=rmin)
                         except Exception:
                             pass
                 threading.Thread(target=worker, daemon=True).start()
-            self.sig_toast.emit("팔로업 자동 등록", f"{added}건을 [내 할일]에 추가했습니다.")
 
-    def _on_tasks_done(self, tasks, err: str):
-        if tasks is not None:
-            self.gtasks = tasks
+    def _reminder_minutes(self):
+        """설정된 구글 캘린더 알림(분). 꺼져 있으면 None."""
+        if not self.settings.cal_reminder_on:
+            return None
+        return max(0, int(self.settings.cal_reminder_min))
+
+    # ------------------------------------------------------- 낙관적 UI 공통
+    def _is_pending_id(self, task_id: str) -> bool:
+        return bool(task_id) and str(task_id).startswith(PENDING_ID_PREFIX)
+
+    def visible_gtasks(self) -> list:
+        """서버 목록 위에 아직 확정 안 된 변경(추가/수정/삭제)을 덧씌운 화면용 목록."""
+        if not self._pending_ops:
+            return self.gtasks
+        removed = {op.key for op in self._pending_ops if op.kind == "remove"}
+        updated = {op.key: op.task for op in self._pending_ops if op.kind == "update"}
+        out = [updated.get(tk.id, tk) for tk in self.gtasks if tk.id not in removed]
+        out.extend(op.task for op in self._pending_ops if op.kind == "add")
+        return out
+
+    def _pending_alarm_for(self, task_id: str):
+        """등록 중인 항목이 대화상자에서 지정한 알람 설정을 찾는다."""
+        for op in self._pending_ops:
+            if op.kind == "add" and op.key == task_id:
+                return op.alarm
+        return None
+
+    def _start_pending(self, op: _PendingOp) -> None:
+        """낙관적 변경을 넣고 즉시 화면에 반영."""
+        op.deadline = datetime.now() + timedelta(seconds=PENDING_GRACE_SEC)
+        self._pending_ops.append(op)
+        self.refresh_todo()
+
+    def _drop_pending(self, op: _PendingOp) -> None:
+        try:
+            self._pending_ops.remove(op)
+        except ValueError:
+            pass
+
+    def _on_write_done(self, op, real, err: str):
+        """구글 쓰기 결과 (UI 스레드)."""
+        if err:
+            # 롤백 — 낙관적으로 그렸던 행/숨김을 되돌린다
+            self._drop_pending(op)
+            if op.kind == "add" and self._pending_alarm and self._pending_alarm[1] is op.alarm:
+                self._pending_alarm = None
             self.refresh_todo()
+            self._report_write_error((op.err_prefix + " " + err).strip())
+            return
+        self._data_epoch += 1
+        op.epoch = self._data_epoch
+        op.deadline = datetime.now() + timedelta(seconds=PENDING_GRACE_SEC)
+        # 추가는 실제 id 를 받았으니 임시 행을 곧바로 진짜 항목으로 바꾼다
+        if op.kind == "add" and real is not None and getattr(real, "id", ""):
+            self._adopt_pending_alarm(op, real.id)
+            self._drop_pending(op)
+            if not any(t.id == real.id for t in self.gtasks):
+                self.gtasks.append(real)
+            self.refresh_todo()
+        self._schedule_task_refetch()
+
+    def _adopt_pending_alarm(self, op, real_id: str) -> None:
+        """추가 직후 대화상자에서 지정한 알람을 실제 구글 id 에 옮겨 붙인다."""
+        src = op.alarm
+        if src is None or not (src.alarm or src.ment.strip()):
+            return
+        a = self.task_alarms.ensure(real_id)
+        a.alarm = src.alarm
+        a.run_time = src.run_time
+        a.ment = src.ment
+        self.task_alarms.save()
+        if self._pending_alarm and self._pending_alarm[1] is src:
+            self._pending_alarm = None      # 타이머 경로와 중복 적용 방지
+
+    def _report_write_error(self, msg: str) -> None:
+        self._write_errors.append(msg)
+        self._err_timer.start(400)          # 여러 건을 한 창에 모아 표시
+
+    def _flush_write_errors(self) -> None:
+        if not self._write_errors:
+            return
+        msgs, self._write_errors = self._write_errors, []
+        QMessageBox.warning(self, config.APP_NAME, "\n".join(msgs))
+
+    def _on_tasks_done(self, tasks, err: str, fetch_epoch: int = 0):
+        if tasks is None:
+            return
+        self.gtasks = tasks
+        self._prune_pending_ops(tasks, fetch_epoch)
+        self.refresh_todo()
+
+    def _prune_pending_ops(self, server: list, fetch_epoch: int) -> None:
+        """서버 목록과 대조해 이미 반영된 낙관적 변경을 걷어낸다 (UI 스레드).
+
+        경합 방지: 이 조회가 쓰기보다 **먼저 출발했다면**(fetch_epoch < op.epoch)
+        새 항목이 없는 게 당연하므로 유지한다. 구글 반영이 늦는 경우까지 감안해
+        deadline(유예) 안에서도 유지한다.
+        """
+        now = datetime.now()
+        by_id = {tk.id: tk for tk in server}
+        alive: list[_PendingOp] = []
+        for op in self._pending_ops:
+            fresh = (op.epoch == 0) or (fetch_epoch < op.epoch) or (now < op.deadline)
+            if op.kind == "add":
+                # 실제 id 를 받은 뒤에는 _on_write_done 에서 이미 정리된다.
+                # 여기 남아 있다면 아직 전송 중이거나 응답을 못 받은 경우.
+                if fresh:
+                    alive.append(op)
+                elif self._pending_alarm and self._pending_alarm[1] is op.alarm:
+                    self._pending_alarm = None
+            elif op.kind == "remove":
+                if op.key not in by_id:
+                    continue                # 서버에서도 사라짐 → 반영 완료
+                if fresh:
+                    alive.append(op)        # 아직 남아 있으면 계속 숨김
+            elif op.kind == "update":
+                cur = by_id.get(op.key)
+                if cur is None:
+                    continue                # 항목 자체가 없어짐
+                same = (cur.title == op.task.title and cur.notes == op.task.notes
+                        and cur.has_due == op.task.has_due and cur.due == op.task.due)
+                if same:
+                    continue                # 서버가 이미 새 값
+                if fresh:
+                    alive.append(op)
+        self._pending_ops = alive
 
     # ------------------------------------------------------------ 캘린더 뷰
     def refresh_calendar(self):
@@ -733,7 +1164,7 @@ class MainWindow(QMainWindow):
                 continue
             grp, sd = self._group(True, it.run_date, today)
             rows.append((grp, sd, False, it))
-        for tk in self.gtasks:
+        for tk in self.visible_gtasks():
             if tk.has_due and tk.due and tk.due < today - timedelta(days=7):
                 continue
             if not in_range(tk.has_due, tk.due):
@@ -766,7 +1197,8 @@ class MainWindow(QMainWindow):
                 key = ("local", id(it))
             else:
                 tk: google_client.GoogleTask = obj
-                a = self.task_alarms.find(tk.id)
+                # 등록 중인 행은 아직 저장된 알람이 없으니 대화상자 값으로 보여준다
+                a = self.task_alarms.find(tk.id) or self._pending_alarm_for(tk.id)
                 day = tk.due.strftime("%m-%d(%a)") if (tk.has_due and tk.due) else "기한없음"
                 tm = a.run_time.strftime("%H:%M") if (a and a.alarm) else "-"
                 on = "ON" if (a and a.alarm) else ""
@@ -774,7 +1206,8 @@ class MainWindow(QMainWindow):
                     ment = a.ment.replace("\n", " ")[:60]
                 else:
                     ment = (tk.notes or "").replace("\n", " ")[:60]
-                vals = [day, tm, "[구글] " + tk.title, on, ment]
+                pend = self._is_pending_id(tk.id)
+                vals = [day, tm, ("[등록중] " if pend else "[구글] ") + tk.title, on, ment]
                 self.todo_dates.append(tk.due if tk.has_due else None)
                 key = ("google", tk.id)
             # 0열: 체크박스(선택) — 키를 여기에 저장
@@ -788,6 +1221,22 @@ class MainWindow(QMainWindow):
             for c, val in enumerate(vals):
                 self.tbl_todo.setItem(r, c + 1, QTableWidgetItem(val))
             self._colorize_row(self.tbl_todo, r, self.todo_dates[-1])
+            # 전송 중인 행은 흐리게 → '아직 처리 중'임이 눈에 보이게
+            if is_google and self._is_pending_id(obj.id):
+                fg = QColor(theme.c("subtext"))
+                for c in range(self.tbl_todo.columnCount()):
+                    cell = self.tbl_todo.item(r, c)
+                    if cell is not None:
+                        cell.setForeground(fg)
+
+    def _warn_if_filtered(self, due, has_due: bool) -> None:
+        """추가한 항목이 현재 [표시] 필터 밖이면 목록에 안 보이므로 알려준다."""
+        b = self._range_bounds()
+        if b is None:
+            return
+        if not has_due or due is None or not (b[0] <= due < b[1]):
+            self.sig_toast.emit(config.APP_NAME,
+                                "추가했습니다. 현재 [표시] 필터에서는 보이지 않습니다.")
 
     def _group(self, has_due: bool, due: date | None, today: date):
         if not has_due or due is None:
@@ -816,7 +1265,7 @@ class MainWindow(QMainWindow):
         key = self._sel_todo_key()
         if not key or key[0] != "google":
             return None
-        for tk in self.gtasks:
+        for tk in self.visible_gtasks():
             if tk.id == key[1]:
                 return tk
         return None
@@ -830,13 +1279,26 @@ class MainWindow(QMainWindow):
                 "할일 추가 (구글 Tasks)", "", "", date.today(), True, tmp, self)
             if not ok or not title.strip():
                 return
-            try:
-                google_client.insert_task(self.gauth, "", title, notes, due if has_due else None)
-            except Exception as e:
-                QMessageBox.warning(self, config.APP_NAME, "구글 할일 추가 실패:\n" + str(e))
-                return
-            self._pending_alarm = (title, tmp)
-            self.fetch_all_async()
+            title = title.strip()
+            # 1) 네트워크보다 먼저 화면에 — 임시 id 를 가진 행을 즉시 표시
+            tk = google_client.GoogleTask(
+                id=PENDING_ID_PREFIX + uuid.uuid4().hex, list_id="", title=title,
+                notes=notes, due=due if has_due else None, has_due=has_due)
+            op = _PendingOp(kind="add", key=tk.id, task=tk, alarm=tmp,
+                            err_prefix="구글 할일 추가 실패:")
+            self._pending_alarm = (title, tmp)   # 기존 알람 매핑 경로도 유지
+            self._start_pending(op)
+            self._warn_if_filtered(due if has_due else None, has_due)
+
+            # 2) 실제 등록은 백그라운드에서
+            def worker():
+                try:
+                    real = google_client.insert_task(
+                        self.gauth, "", title, notes, due if has_due else None)
+                    self.sig_write_done.emit(op, real, "")
+                except Exception as e:
+                    self.sig_write_done.emit(op, None, str(e))
+            threading.Thread(target=worker, daemon=True).start()
             return
         it = TodoItem()
         if EditDialog.edit_todo(it, self):
@@ -847,18 +1309,29 @@ class MainWindow(QMainWindow):
     def on_todo_edit(self):
         gt = self._sel_gtask()
         if gt is not None:
+            if self._is_pending_id(gt.id):
+                self.sig_toast.emit(config.APP_NAME, "구글에 등록 중입니다. 잠시 후 수정하세요.")
+                return
             a = self.task_alarms.ensure(gt.id)
             ok, title, notes, due, has_due = EditDialog.edit_google_task(
                 "할일 수정 (구글 Tasks)", gt.title, gt.notes, gt.due, gt.has_due, a, self)
             if not ok or not title.strip():
                 return
-            try:
-                google_client.update_task(self.gauth, gt.list_id, gt.id, title, notes, due, has_due)
-            except Exception as e:
-                QMessageBox.warning(self, config.APP_NAME, "수정 실패:\n" + str(e))
-                return
-            self.task_alarms.save()
-            self.fetch_all_async()
+            self.task_alarms.save()      # 알람은 로컬이라 즉시 저장(기존 동작 유지)
+            # 화면부터 새 값으로 바꾸고, 구글 전송은 뒤에서
+            new = replace(gt, title=title.strip(), notes=notes,
+                          due=due if has_due else None, has_due=has_due)
+            op = _PendingOp(kind="update", key=gt.id, task=new, err_prefix="수정 실패:")
+            self._start_pending(op)
+
+            def worker():
+                try:
+                    google_client.update_task(self.gauth, gt.list_id, gt.id,
+                                              title, notes, due, has_due)
+                    self.sig_write_done.emit(op, None, "")
+                except Exception as e:
+                    self.sig_write_done.emit(op, None, str(e))
+            threading.Thread(target=worker, daemon=True).start()
             return
         it = self._sel_local_todo()
         if it is None:
@@ -870,14 +1343,22 @@ class MainWindow(QMainWindow):
     def on_todo_del(self):
         gt = self._sel_gtask()
         if gt is not None:
+            if self._is_pending_id(gt.id):
+                self.sig_toast.emit(config.APP_NAME, "구글에 등록 중입니다. 잠시 후 삭제하세요.")
+                return
             if QMessageBox.question(self, config.APP_NAME, "이 구글 할일을 삭제할까요?") != QMessageBox.Yes:
                 return
-            try:
-                google_client.delete_task(self.gauth, gt.list_id, gt.id)
-            except Exception as e:
-                QMessageBox.warning(self, config.APP_NAME, "삭제 실패:\n" + str(e))
-                return
-            self.fetch_all_async()
+            # 화면에서 먼저 지우고, 삭제 요청은 뒤에서
+            op = _PendingOp(kind="remove", key=gt.id, err_prefix="삭제 실패:")
+            self._start_pending(op)
+
+            def worker():
+                try:
+                    google_client.delete_task(self.gauth, gt.list_id, gt.id)
+                    self.sig_write_done.emit(op, None, "")
+                except Exception as e:
+                    self.sig_write_done.emit(op, None, str(e))
+            threading.Thread(target=worker, daemon=True).start()
             return
         it = self._sel_local_todo()
         if it is None:
@@ -957,25 +1438,38 @@ class MainWindow(QMainWindow):
             self.todos = [t for t in self.todos if id(t) not in local_ids]
             save_list(self.todo_file, self.todos)
 
-        # 2) 구글 Tasks: 완료 처리(완료되면 미완료 목록에서 사라짐)
-        errors = []
+        # 2) 구글 Tasks: 화면에서 먼저 지우고, 완료 처리는 백그라운드에서
+        jobs = []
+        skipped = 0
+        view = self.visible_gtasks()
         for tid in google_items:
-            gt = next((t for t in self.gtasks if t.id == tid), None)
+            if self._is_pending_id(tid):
+                skipped += 1
+                continue
+            gt = next((t for t in view if t.id == tid), None)
             if gt is None:
                 continue
-            try:
-                google_client.complete_task(self.gauth, gt.list_id, gt.id)
-            except Exception as e:
-                errors.append(f"{gt.title}: {e}")
+            op = _PendingOp(kind="remove", key=gt.id,
+                            err_prefix=f"완료 처리 실패({gt.title}):")
+            op.deadline = datetime.now() + timedelta(seconds=PENDING_GRACE_SEC)
+            self._pending_ops.append(op)
+            jobs.append((op, gt.list_id, gt.id))
 
-        if google_items:
-            self.fetch_all_async()   # 구글 목록 새로고침(완료분 제외)
-        else:
-            self.refresh_todo()
+        self.refresh_todo()          # 로컬·구글 모두 한 번에 즉시 반영
+        if skipped:
+            self.sig_toast.emit(config.APP_NAME,
+                                f"{skipped}건은 아직 등록 중이라 건너뛰었습니다.")
 
-        if errors:
-            QMessageBox.warning(self, config.APP_NAME,
-                                "일부 완료 처리 실패:\n" + "\n".join(errors))
+        if jobs:
+            def worker():
+                # 한 스레드에서 순차 처리 (요청 폭주·토큰 갱신 중복 방지)
+                for op, list_id, task_id in jobs:
+                    try:
+                        google_client.complete_task(self.gauth, list_id, task_id)
+                        self.sig_write_done.emit(op, None, "")
+                    except Exception as e:
+                        self.sig_write_done.emit(op, None, str(e))
+            threading.Thread(target=worker, daemon=True).start()
 
     def on_todo_copy(self):
         it = self._sel_local_todo()
@@ -1000,7 +1494,8 @@ class MainWindow(QMainWindow):
         self._pending_alarm = None
         found = None
         for tk in self.gtasks:
-            if tk.title == title:
+            # 임시(등록 중) 행에는 절대 붙이지 않는다 — 실제 서버 id 에만 매핑
+            if tk.title == title and not self._is_pending_id(tk.id):
                 found = tk
         if found is None:
             return
@@ -1148,7 +1643,7 @@ class MainWindow(QMainWindow):
             if not it.done and it.run_date == today:
                 lines.append(f"  · {it.run_time.strftime('%H:%M')}  {it.title}")
                 cnt_todo += 1
-        for tk in self.gtasks:
+        for tk in self.visible_gtasks():
             if tk.has_due and tk.due == today:
                 lines.append(f"  · {tk.title}")
                 cnt_todo += 1
@@ -1164,7 +1659,7 @@ class MainWindow(QMainWindow):
         for it in self.todos:
             if not it.done and it.run_date and today <= it.run_date < week_end:
                 wk_todo.append((it.run_date, it.run_time.strftime('%H:%M'), it.title))
-        for tk in self.gtasks:
+        for tk in self.visible_gtasks():
             if tk.has_due and tk.due and today <= tk.due < week_end:
                 wk_todo.append((tk.due, "", tk.title))
         wk_todo.sort(key=lambda x: (x[0], x[1]))

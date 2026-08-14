@@ -252,6 +252,13 @@ class AppSettings:
     hot_key: str = "A"
     # 화면 테마
     dark_mode: bool = False
+    # 구글 캘린더 알림(리마인더) — PC 를 꺼도 휴대폰으로 알림이 온다
+    cal_reminder_on: bool = True
+    cal_reminder_min: int = 30
+    # 구글 시트 고객관리 연동
+    sheet_on: bool = False
+    sheet_id: str = config.DEF_SHEET_ID
+    sheet_name: str = config.DEF_SHEET_NAME
 
     def to_json(self) -> dict:
         return {
@@ -269,6 +276,11 @@ class AppSettings:
             "hotShift": self.hot_shift,
             "hotKey": self.hot_key,
             "darkMode": self.dark_mode,
+            "calReminderOn": self.cal_reminder_on,
+            "calReminderMin": self.cal_reminder_min,
+            "sheetOn": self.sheet_on,
+            "sheetId": self.sheet_id,
+            "sheetName": self.sheet_name,
         }
 
     @classmethod
@@ -296,6 +308,14 @@ class AppSettings:
         s.hot_shift = bool(o.get("hotShift", False))
         s.hot_key = o.get("hotKey", "A")
         s.dark_mode = bool(o.get("darkMode", False))
+        s.cal_reminder_on = bool(o.get("calReminderOn", True))
+        try:
+            s.cal_reminder_min = int(o.get("calReminderMin", 30))
+        except Exception:
+            s.cal_reminder_min = 30
+        s.sheet_on = bool(o.get("sheetOn", False))
+        s.sheet_id = o.get("sheetId", config.DEF_SHEET_ID) or config.DEF_SHEET_ID
+        s.sheet_name = o.get("sheetName", config.DEF_SHEET_NAME) or config.DEF_SHEET_NAME
         return s
 
     def save(self, path: Path) -> None:

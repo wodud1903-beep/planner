@@ -372,7 +372,13 @@ def fetch_tasks(auth: GoogleAuth) -> list[GoogleTask]:
     return out
 
 
-def insert_task(auth: GoogleAuth, list_id: str, title: str, notes: str, due: Optional[date]) -> None:
+def insert_task(auth: GoogleAuth, list_id: str, title: str, notes: str,
+                due: Optional[date]) -> GoogleTask:
+    """할일 추가 후 **생성된 항목**을 돌려준다.
+
+    실제 id 를 바로 알 수 있어야 화면에 미리 띄워 둔 임시 행을
+    정확히 교체할 수 있다(제목으로 추측하지 않아도 된다).
+    """
     headers = auth._headers()
     body = {"title": title}
     if notes.strip():
@@ -383,6 +389,27 @@ def insert_task(auth: GoogleAuth, list_id: str, title: str, notes: str, due: Opt
     r = requests.post(config.TASKS_URL.format(list_id=lid), headers=headers, json=body, timeout=30)
     if r.status_code not in (200, 201):
         raise GoogleError(_task_write_error(r))
+    try:
+        j = r.json() or {}
+    except Exception:
+        j = {}
+    due_dt, _ = _parse_rfc3339(j.get("due", ""))
+    real_list = lid
+    if lid == "@default":
+        # selfLink: .../lists/<목록id>/tasks/<할일id> — 실제 목록 id 를 뽑아 둔다
+        # (이후 수정/완료/삭제 요청에 '@default' 대신 실제 id 가 필요할 수 있음)
+        try:
+            real_list = j.get("selfLink", "").split("/lists/")[1].split("/")[0] or lid
+        except Exception:
+            real_list = lid
+    return GoogleTask(
+        id=j.get("id", ""),
+        list_id=real_list,
+        title=j.get("title", title),
+        notes=j.get("notes", notes),
+        due=due_dt.date() if due_dt else None,
+        has_due=due_dt is not None,
+    )
 
 
 def update_task(auth: GoogleAuth, list_id: str, task_id: str, title: str,
@@ -459,13 +486,24 @@ def fetch_calendar_list(auth: GoogleAuth) -> list[dict]:
 
 def insert_event(auth: GoogleAuth, calendar_id: str, summary: str,
                  day: date, start_time=None, end_time=None,
-                 all_day: bool = True, description: str = "") -> None:
-    """캘린더에 일정 추가. all_day=True면 종일, 아니면 start_time~end_time."""
+                 all_day: bool = True, description: str = "",
+                 reminder_minutes: Optional[int] = None) -> CalEvent:
+    """캘린더에 일정 추가 후 **생성된 일정**을 돌려준다.
+
+    all_day=True면 종일, 아니면 start_time~end_time.
+    reminder_minutes 를 주면 구글 캘린더 알림(리마인더)을 함께 설정한다.
+    → PC 를 꺼 두어도 휴대폰 구글 캘린더 앱이 알림을 띄운다.
+    """
     headers = auth._headers()
     headers["Content-Type"] = "application/json"
     body = {"summary": summary}
     if description:
         body["description"] = description
+    if reminder_minutes is not None:
+        body["reminders"] = {
+            "useDefault": False,
+            "overrides": [{"method": "popup", "minutes": int(reminder_minutes)}],
+        }
     if all_day or start_time is None:
         body["start"] = {"date": day.strftime("%Y-%m-%d")}
         body["end"] = {"date": (day + timedelta(days=1)).strftime("%Y-%m-%d")}
@@ -484,6 +522,21 @@ def insert_event(auth: GoogleAuth, calendar_id: str, summary: str,
     if r.status_code not in (200, 201):
         raise GoogleError(_task_write_error(r) if r.status_code == 403
                           else f"일정 추가 실패 (HTTP {r.status_code})")
+    try:
+        j = r.json() or {}
+    except Exception:
+        j = {}
+    st = j.get("start", {})
+    dt, has_time = _parse_rfc3339(st.get("dateTime") or st.get("date") or "")
+    if dt is None:  # 응답 파싱 실패 시 우리가 보낸 값으로 구성
+        if all_day or start_time is None:
+            dt, has_time = datetime(day.year, day.month, day.day), False
+        else:
+            dt = datetime(day.year, day.month, day.day, start_time.hour, start_time.minute)
+            has_time = True
+    return CalEvent(start=dt, has_time=has_time,
+                    summary=j.get("summary", summary),
+                    uid=j.get("iCalUID", j.get("id", "")))
 
 
 # ---------------------------------------------------------------------------

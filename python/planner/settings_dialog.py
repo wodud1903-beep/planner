@@ -2,6 +2,8 @@
 
 - 구글 로그인/로그아웃 (여기로 이동)
 - 계약 후 팔로업: 감지 키워드 / 개월수 / 알람 시각 / 알람 여부 / 메모 템플릿
+- 휴대폰 알림: 구글 캘린더 리마인더 자동 설정
+- 구글 시트 고객관리 연동
 - 전역 단축키: 사용 / Ctrl·Alt·Shift / 키
 """
 
@@ -13,10 +15,11 @@ from datetime import time
 from PySide6.QtCore import QTime, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QSpinBox, QTextEdit, QTimeEdit, QVBoxLayout,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTextEdit, QTimeEdit,
+    QVBoxLayout, QWidget,
 )
 
-from . import config
+from . import config, sheets
 from .models import AppSettings
 
 
@@ -26,12 +29,20 @@ class SettingsDialog(QDialog):
     def __init__(self, gauth, settings: AppSettings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
         self.gauth = gauth
         self.settings = settings
         self.tasks_changed = False  # 로그인/로그아웃 발생 여부
 
-        root = QVBoxLayout(self)
+        # 항목이 늘어 작은 화면에서 잘리지 않도록 스크롤 안에 담는다
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        _inner = QWidget()
+        root = QVBoxLayout(_inner)
+        scroll.setWidget(_inner)
+        outer.addWidget(scroll, 1)
+        self.resize(600, min(860, max(560, self.sizeHint().height())))
 
         # ---- 구글 연동 ----
         gb_g = QGroupBox("구글 연동")
@@ -66,6 +77,34 @@ class SettingsDialog(QDialog):
         fl.addRow("메모 템플릿\n(%s = 고객명)", self.txt_ment)
         root.addWidget(gb_f)
 
+        # ---- 휴대폰 알림 (구글 캘린더 리마인더) ----
+        gb_r = QGroupBox("휴대폰 알림 (구글 캘린더 알림 자동 설정)")
+        rl = QFormLayout(gb_r)
+        self.chk_reminder = QCheckBox("이 프로그램에서 등록하는 일정에 알림을 자동으로 넣기")
+        rl.addRow(self.chk_reminder)
+        self.sp_reminder = QSpinBox()
+        self.sp_reminder.setRange(0, 1440)
+        self.sp_reminder.setSuffix(" 분 전")
+        rl.addRow("알림 시점", self.sp_reminder)
+        rl.addRow(QLabel("PC 를 꺼 두어도 휴대폰 구글 캘린더 앱이 알림을 띄웁니다."))
+        root.addWidget(gb_r)
+
+        # ---- 구글 시트 고객관리 ----
+        gb_s = QGroupBox("구글 시트 고객관리 연동")
+        sl = QFormLayout(gb_s)
+        self.chk_sheet = QCheckBox("사용")
+        sl.addRow(self.chk_sheet)
+        self.ed_sheet_id = QLineEdit()
+        self.ed_sheet_id.setPlaceholderText("스프레드시트 주소를 붙여넣으세요")
+        sl.addRow("시트 주소", self.ed_sheet_id)
+        self.ed_sheet_name = QLineEdit()
+        sl.addRow("시트(탭) 이름", self.ed_sheet_name)
+        sl.addRow(QLabel(
+            "함수 칸(순번·합계·고객센터번호·사고접수연락처·고객안내멘트)은\n"
+            "프로그램이 건드리지 않고 시트 수식 그대로 둡니다.\n"
+            "⚠ 처음 사용할 때 [Google 로그아웃] 후 다시 로그인해야 합니다(권한 추가)."))
+        root.addWidget(gb_s)
+
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
         vl = QHBoxLayout(gb_v)
@@ -95,7 +134,9 @@ class SettingsDialog(QDialog):
         hl.addLayout(krow)
         root.addWidget(gb_h)
 
-        # ---- 버튼 ----
+        root.addStretch()
+
+        # ---- 버튼 (스크롤 밖에 고정) ----
         brow = QHBoxLayout()
         brow.addStretch()
         btn_ok = QPushButton("확인")
@@ -105,7 +146,7 @@ class SettingsDialog(QDialog):
         btn_cancel.clicked.connect(self.reject)
         brow.addWidget(btn_ok)
         brow.addWidget(btn_cancel)
-        root.addLayout(brow)
+        outer.addLayout(brow)
 
         self._sig_login.connect(self._on_login_done)
         self._load()
@@ -121,6 +162,11 @@ class SettingsDialog(QDialog):
         self.chk_falarm.setChecked(s.follow_alarm)
         self.chk_follow_cal.setChecked(s.follow_to_calendar)
         self.txt_ment.setPlainText(s.follow_ment)
+        self.chk_reminder.setChecked(s.cal_reminder_on)
+        self.sp_reminder.setValue(s.cal_reminder_min)
+        self.chk_sheet.setChecked(s.sheet_on)
+        self.ed_sheet_id.setText(s.sheet_id)
+        self.ed_sheet_name.setText(s.sheet_name)
         self.chk_dark.setChecked(s.dark_mode)
         self.chk_hot.setChecked(s.hot_on)
         self.chk_ctrl.setChecked(s.hot_ctrl)
@@ -139,6 +185,12 @@ class SettingsDialog(QDialog):
         s.follow_alarm = self.chk_falarm.isChecked()
         s.follow_to_calendar = self.chk_follow_cal.isChecked()
         s.follow_ment = self.txt_ment.toPlainText()
+        s.cal_reminder_on = self.chk_reminder.isChecked()
+        s.cal_reminder_min = self.sp_reminder.value()
+        s.sheet_on = self.chk_sheet.isChecked()
+        # 주소를 통째로 붙여넣어도 ID 만 뽑아 저장 (사용자가 ID 를 찾을 필요 없게)
+        s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
+        s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.dark_mode = self.chk_dark.isChecked()
         s.hot_on = self.chk_hot.isChecked()
         s.hot_ctrl = self.chk_ctrl.isChecked()

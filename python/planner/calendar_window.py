@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import webbrowser
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 from PySide6.QtCore import QDate, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat
@@ -161,10 +161,13 @@ class AddEventDialog(QDialog):
         }
 
 
+PENDING_GRACE_SEC = 60   # 서버 반영이 늦어도 이 시간까지는 방금 추가한 일정을 유지
+
+
 class CalendarWindow(QWidget):
-    sig_events = Signal(object, str)   # (list[CalEvent] or None, error)
-    sig_cals = Signal(object)          # list[dict]
-    sig_added = Signal(object, str)    # (추가된 CalEvent or None, error)
+    sig_events = Signal(object, str, int)   # (list[CalEvent]|None, error, 조회시작 epoch)
+    sig_cals = Signal(object)               # list[dict]
+    sig_added = Signal(object, object, str)  # (임시기록, 실제 CalEvent|None, error)
 
     def __init__(self, auth: google_client.GoogleAuth, parent=None):
         super().__init__(parent)
@@ -172,6 +175,9 @@ class CalendarWindow(QWidget):
         self.calendars: list[dict] = []
         self.events: list[google_client.CalEvent] = []
         self._marked: list[QDate] = []
+        # 아직 서버 반영이 확인되지 않은(방금 추가한) 일정
+        self._pending: list[dict] = []
+        self._epoch = 0
 
         self.setWindowTitle("구글 캘린더")
         # 메인 프로그램과 동일한 크기로 열어 칸을 크게(내용이 잘리지 않게)
@@ -227,8 +233,7 @@ class CalendarWindow(QWidget):
         seed = getattr(parent, "cal_events", None) if parent is not None else None
         if seed:
             self.events = list(seed)
-            self._mark_dates()
-            self._on_day_selected(self.cal.selectedDate())
+            self._redraw()
 
         # 창이 먼저 뜨고 나서(다음 이벤트 루프 틱) 백그라운드 로딩 → 여는 순간 멈춤 방지
         QTimer.singleShot(0, self.reload)
@@ -240,18 +245,24 @@ class CalendarWindow(QWidget):
             f"font-weight:bold;background:transparent;color:{theme.c('text')};")
         self.cal.updateCells()
 
+    def _redraw(self):
+        """달력 칸 + 아래 목록을 현재 self.events 기준으로 다시 그린다."""
+        self._mark_dates()
+        self._on_day_selected(self.cal.selectedDate())
+
     # ---- 로드 ----
     def reload(self):
         self.btn_refresh.setEnabled(False)
         self.btn_refresh.setText("불러오는 중…")
+        epoch = self._epoch   # 조회 '시작' 시점의 세대
 
         def worker():
             # 1) 화면에 바로 필요한 '일정'을 먼저 조회 → 체감 속도 향상
             try:
                 evs = google_client.fetch_calendar_events(self.auth, back_days=31, forward_days=62)
-                self.sig_events.emit(evs, "")
+                self.sig_events.emit(evs, "", epoch)
             except Exception as e:
-                self.sig_events.emit(None, str(e))
+                self.sig_events.emit(None, str(e), epoch)
             # 2) [추가] 대화상자용 캘린더 목록은 뒤이어 조회(표시엔 불필요)
             try:
                 cals = google_client.fetch_calendar_list(self.auth)
@@ -264,7 +275,7 @@ class CalendarWindow(QWidget):
     def _on_cals(self, cals):
         self.calendars = cals or []
 
-    def _on_events(self, evs, err):
+    def _on_events(self, evs, err, fetch_epoch: int = 0):
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("새로고침")
         if evs is None:
@@ -272,9 +283,26 @@ class CalendarWindow(QWidget):
             if not self.events:
                 QMessageBox.warning(self, config.APP_NAME, "일정을 불러오지 못했습니다:\n" + err)
             return
-        self.events = evs
-        self._mark_dates()
-        self._on_day_selected(self.cal.selectedDate())
+        self.events = self._merge_pending(evs, fetch_epoch)
+        self._redraw()
+
+    def _merge_pending(self, server: list, fetch_epoch: int) -> list:
+        """서버 목록 위에, 아직 반영 확인이 안 된 방금 추가한 일정을 얹는다.
+
+        이 조회가 등록보다 먼저 출발했다면(fetch_epoch < epoch) 새 일정이 없는 게
+        당연하므로 유지한다 → 추가한 일정이 깜빡 사라졌다 나타나지 않는다.
+        """
+        now = datetime.now()
+        alive, out = [], list(server)
+        for p in self._pending:
+            ev = p["ev"]
+            if any(s.start == ev.start and s.summary == ev.summary for s in server):
+                continue                       # 서버에 실제로 생김 → 임시본 폐기
+            if p["epoch"] == 0 or fetch_epoch < p["epoch"] or now < p["deadline"]:
+                alive.append(p)
+                out.append(ev)
+        self._pending = alive
+        return sorted(out, key=lambda e: e.start)
 
     def _mark_dates(self):
         # 날짜별 일정명을 달력 칸에 직접 표시하도록 맵 구성
@@ -300,55 +328,85 @@ class CalendarWindow(QWidget):
     def _add_for_selected(self):
         qd = self.cal.selectedDate()
         d = date(qd.year(), qd.month(), qd.day())
-        if not self.calendars:
-            QMessageBox.information(self, config.APP_NAME, "캘린더 목록을 아직 불러오는 중입니다.")
-            return
-        dlg = AddEventDialog(d, self.calendars, self)
+        # 캘린더 목록을 아직 못 받았어도 기본 캘린더로 바로 추가할 수 있게 한다
+        cals = self.calendars or [{"id": "primary", "name": "내 캘린더", "primary": True}]
+        dlg = AddEventDialog(d, cals, self)
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values()
+
+        # ── 네트워크보다 먼저 화면에 그린다 (POST 가 오래 걸려도 즉시 보인다) ──
+        if vals["all_day"]:
+            start, has_time = datetime(d.year, d.month, d.day), False
+        else:
+            t = vals["time"]
+            start, has_time = datetime(d.year, d.month, d.day, t.hour, t.minute), True
+        ev = google_client.CalEvent(start=start, has_time=has_time,
+                                    summary=vals["title"], uid="")
+        pend = {"ev": ev, "epoch": 0,
+                "deadline": datetime.now() + timedelta(seconds=PENDING_GRACE_SEC)}
+        self._pending.append(pend)
+        self.events = sorted(list(self.events) + [ev], key=lambda e: e.start)
+        self._redraw()
         self.btn_add.setEnabled(False)
+
+        rmin = self._reminder_minutes()
 
         def worker():
             try:
-                google_client.insert_event(
+                real = google_client.insert_event(
                     self.auth, vals["calendar_id"], vals["title"], d,
                     start_time=None if vals["all_day"] else vals["time"],
-                    all_day=vals["all_day"])
+                    all_day=vals["all_day"], reminder_minutes=rmin)
+                self.sig_added.emit(pend, real, "")
             except Exception as e:
-                self.sig_added.emit(None, str(e))
-                return
-            # 즉시 화면에 보이도록 낙관적 이벤트 구성
-            if vals["all_day"]:
-                start = datetime(d.year, d.month, d.day)
-                has_time = False
-            else:
-                t = vals["time"]
-                start = datetime(d.year, d.month, d.day, t.hour, t.minute)
-                has_time = True
-            ev = google_client.CalEvent(start=start, has_time=has_time,
-                                        summary=vals["title"], uid="")
-            self.sig_added.emit(ev, "")
+                self.sig_added.emit(pend, None, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_added(self, ev, err: str):
+    def _reminder_minutes(self):
+        """부모(메인 창) 설정의 구글 캘린더 알림 분. 꺼져 있으면 None."""
+        p = self.parent()
+        try:
+            if p is not None and hasattr(p, "_reminder_minutes"):
+                return p._reminder_minutes()
+        except Exception:
+            pass
+        return None
+
+    def _on_added(self, pend, real, err: str):
         """일정 추가 결과 (UI 스레드)."""
         self.btn_add.setEnabled(True)
         if err:
+            # 롤백 — 미리 그려 둔 일정을 걷어낸다
+            if pend in self._pending:
+                self._pending.remove(pend)
+            try:
+                self.events.remove(pend["ev"])
+            except ValueError:
+                pass
+            self._redraw()
             QMessageBox.warning(self, config.APP_NAME, "일정 추가 실패:\n" + err)
             return
-        # 1) 낙관적으로 즉시 반영
-        if ev is not None:
-            self.events.append(ev)
-            self._mark_dates()
-            self._on_day_selected(self.cal.selectedDate())
-        # 2) 서버 기준으로 재조회(정확한 목록으로 갱신)
-        self.reload()
-        # 3) 메인 창의 이번주/할일 목록도 갱신
-        parent = self.parent()
-        if parent is not None and hasattr(parent, "fetch_all_async"):
+
+        self._epoch += 1
+        pend["epoch"] = self._epoch
+        pend["deadline"] = datetime.now() + timedelta(seconds=PENDING_GRACE_SEC)
+        # 서버가 돌려준 실제 일정으로 교체(uid 확보 → 팔로업 중복등록 방지에 도움)
+        if real is not None:
             try:
-                parent.fetch_all_async()
+                idx = self.events.index(pend["ev"])
+                self.events[idx] = real
+            except ValueError:
+                pass
+            pend["ev"] = real
+
+        # 메인 창의 '이번주 일정'에는 네트워크 없이 바로 꽂아 넣는다
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "add_optimistic_event"):
+            try:
+                parent.add_optimistic_event(pend["ev"])
             except Exception:
                 pass
+        # 서버 기준 재조회는 이 창에서 한 번만 (전체 재조회 2회 → 1회)
+        QTimer.singleShot(1500, self.reload)
