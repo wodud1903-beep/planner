@@ -582,6 +582,12 @@ class MainWindow(QMainWindow):
         row.addWidget(self.ed_cust_find)
         v.addLayout(row)
 
+        # 상단 발주 현황 (시트 N1:O4)
+        self.lbl_cust_summary = QLabel("")
+        self.lbl_cust_summary.setStyleSheet("font-weight:bold;")
+        self.lbl_cust_summary.hide()
+        v.addWidget(self.lbl_cust_summary)
+
         self.lbl_cust = QLabel("고객관리 시트를 불러오려면 [불러오기]를 누르세요.")
         v.addWidget(self.lbl_cust)
 
@@ -700,22 +706,37 @@ class MainWindow(QMainWindow):
             try:
                 _hdr, rows = sheets.read_rows(self.gauth, sid, sname)
                 last = rows[-1].row if rows else _hdr
-                self.sig_sheet_rows.emit(rows, last, "")
+                try:
+                    summary = sheets.read_summary(self.gauth, sid, sname)
+                except Exception:
+                    summary = []     # 요약을 못 읽어도 목록은 보여준다
+                self.sig_sheet_rows.emit((rows, summary), last, "")
             except Exception as e:
                 self.sig_sheet_rows.emit(None, 0, str(e))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_sheet_rows(self, rows, last_row, err: str):
+    def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
-        if rows is None:
+        if payload is None:
             self.lbl_cust.setText("불러오기 실패")
             QMessageBox.warning(self, config.APP_NAME, "시트를 불러오지 못했습니다:\n" + err)
             return
+        rows, summary = payload
         self.sheet_rows = rows
         self._sheet_last_row = last_row
         self.sheet_choices = sheets.choices(rows)
         self._sheet_pending = []
+        self._show_summary(summary)
         self.refresh_customers()
+
+    def _show_summary(self, summary):
+        """시트 N1:O4 의 발주 현황을 목록 위에 표시."""
+        if not summary:
+            self.lbl_cust_summary.hide()
+            return
+        self.lbl_cust_summary.setText(
+            "   ·   ".join(f"{label} {value}" for label, value in summary))
+        self.lbl_cust_summary.show()
 
     def _visible_sheet_rows(self) -> list:
         """서버 행 + 아직 전송 중인 행."""
@@ -775,8 +796,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME,
                                     "먼저 [불러오기]로 시트를 읽어주세요.")
             return
-        vals = CustomerDialog.run("고객 등록", {}, self.sheet_choices, self)
-        if vals is None:
+        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self)
+        if res is None:
+            return
+        vals, img = res
+        if img and not self._confirm_image_share():
             return
         # 화면에 먼저 반영 (임시 행)
         pend = sheets.CustomerRow(row=self._sheet_last_row + 1, seq="", total="")
@@ -786,14 +810,36 @@ class MainWindow(QMainWindow):
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
         last = self._sheet_last_row
+        name = (vals.get("customer") or "고객").replace("/", "_")[:40]
 
         def worker():
             try:
-                newrow = sheets.append_row(self.gauth, sid, sname, vals, last)
+                v = dict(vals)
+                if img:
+                    url = sheets.upload_image(
+                        self.gauth, img,
+                        f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
+                    v["doc"] = sheets.image_formula(url)
+                newrow = sheets.append_row(self.gauth, sid, sname, v, last)
                 self.sig_sheet_written.emit(pend, newrow, "")
             except Exception as e:
                 self.sig_sheet_written.emit(pend, None, str(e))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _confirm_image_share(self) -> bool:
+        """이미지를 셀 안 그림으로 넣으려면 '링크 공개'가 필요하다는 사실을 1회 확인."""
+        if getattr(self, "_img_share_ok", False):
+            return True
+        r = QMessageBox.question(
+            self, config.APP_NAME,
+            "셀 안에 그림으로 보이게 하려면 이미지를 구글 드라이브에 올린 뒤\n"
+            "'링크가 있는 누구나 보기' 로 공개해야 합니다.\n"
+            "(구글 시트가 이미지를 가져올 때 로그인 정보를 쓰지 못하기 때문입니다)\n\n"
+            "주소를 아는 사람은 해당 견적서를 볼 수 있습니다. 계속할까요?")
+        if r != QMessageBox.Yes:
+            return False
+        self._img_share_ok = True
+        return True
 
     def on_customer_edit(self):
         if not self._sheet_ready():
@@ -805,19 +851,29 @@ class MainWindow(QMainWindow):
         if cr in self._sheet_pending:
             self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 수정하세요.")
             return
-        vals = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
-                                  cr.values, self.sheet_choices, self)
-        if vals is None:
+        res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
+                                 cr.values, self.sheet_choices, cr.ment, self)
+        if res is None:
+            return
+        vals, img = res
+        if img and not self._confirm_image_share():
             return
         old = dict(cr.values)
         cr.values = dict(vals)          # 화면 먼저
         self.refresh_customers()
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+        name = (vals.get("customer") or "고객").replace("/", "_")[:40]
 
         def worker():
             try:
-                sheets.update_row(self.gauth, sid, sname, cr.row, vals)
+                v = dict(vals)
+                if img:
+                    url = sheets.upload_image(
+                        self.gauth, img,
+                        f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
+                    v["doc"] = sheets.image_formula(url)
+                sheets.update_row(self.gauth, sid, sname, cr.row, v)
                 self.sig_sheet_written.emit(None, cr.row, "")
             except Exception as e:
                 cr.values = old         # 롤백 (UI 갱신은 핸들러에서)

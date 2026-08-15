@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.1.18"
+APP_VERSION = "1.1.19"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -56,6 +56,8 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/tasks",
     "https://www.googleapis.com/auth/drive.appdata",
     "https://www.googleapis.com/auth/spreadsheets",
+    # 견적서/계약서 이미지 업로드 — 앱이 만든 파일에만 접근하는 최소 권한
+    "https://www.googleapis.com/auth/drive.file",
 ]
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -163,3 +165,6 @@ def data_dir() -> Path:
 
 def data_file(name: str) -> Path:
     return data_dir() / name
+
+
+SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"

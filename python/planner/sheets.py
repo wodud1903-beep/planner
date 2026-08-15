@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import urllib.parse
 from dataclasses import dataclass, field
@@ -46,18 +47,27 @@ FIELDS: list[tuple[int, str, str]] = [
     (12, "terms", "계약조건"),
     (13, "note", "내용"),
     (14, "kind", "출고유형"),
-    (18, "doc", "견적서/계약서"),
-    (19, "registered", "등록완료"),
+    (18, "doc", "견적서/계약서"),        # 셀 안 이미지(=IMAGE 수식)로 넣는다
 ]
 
 # 수식(자동 계산) 열 — 절대 쓰지 않는다
-FORMULA_COLS = [0, 7, 15, 16, 17]      # A 순번, H 합계, P 고객센터, Q 사고접수, R 안내멘트
-FORMULA_NAMES = ["순번", "합계", "고객센터 번호", "사고접수연락처", "고객안내멘트"]
+# A 순번, H 합계, P 고객센터, Q 사고접수, R 안내멘트, T 등록완료
+FORMULA_COLS = [0, 7, 15, 16, 17, 19]
+FORMULA_NAMES = ["순번", "합계", "고객센터 번호", "사고접수연락처", "고객안내멘트", "등록완료"]
 
 # 콤보박스로 제공할 필드 (기존 시트 값에서 후보를 뽑는다)
-CHOICE_FIELDS = ["finance", "channel", "status", "kind", "registered"]
+CHOICE_FIELDS = ["finance", "channel", "status", "kind"]
+
+# 날짜 열 (시트 서식: 2026. 8. 14)
+DATE_FIELDS = ["contract_date", "deliver_date"]
+
+COL_MENT = 17        # R 고객안내멘트 (읽기 전용, 복사용)
+COL_DOC = 18         # S 견적서/계약서 (이미지)
 
 LAST_COL = 19                           # T
+
+# 상단 요약(발주 현황) 범위 — N1:O4 (라벨, 값)
+SUMMARY_RANGE = "N1:O4"
 _A1 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -80,12 +90,35 @@ def parse_sheet_id(url_or_id: str) -> str:
     return m.group(1) if m else s
 
 
+def fmt_date(d) -> str:
+    """시트 서식(2026. 8. 14)으로. None 이면 빈 문자열."""
+    if d is None:
+        return ""
+    return f"{d.year}. {d.month}. {d.day}"
+
+
+def parse_date(s: str):
+    """'2026. 8. 14' / '2026-08-14' / '2026.8.14' 등을 date 로. 못 읽으면 None."""
+    t = (s or "").strip()
+    if not t:
+        return None
+    m = re.match(r"^\s*(\d{4})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})\s*\.?\s*$", t)
+    if not m:
+        return None
+    try:
+        from datetime import date as _date
+        return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
 @dataclass
 class CustomerRow:
     """시트 한 줄. row 는 실제 시트 행 번호(1부터)."""
     row: int = 0
     seq: str = ""            # 순번 (자동)
     total: str = ""          # 합계 (자동)
+    ment: str = ""           # R 고객안내멘트 (자동, 복사용)
     values: dict = field(default_factory=dict)   # 직접기재 필드키 → 값
 
     def get(self, key: str) -> str:
@@ -202,13 +235,30 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
             continue
         def cell(idx: int) -> str:
             return (row[idx] if len(row) > idx else "") or ""
-        cr = CustomerRow(row=i + 1, seq=cell(0).strip(), total=cell(7).strip())
+        cr = CustomerRow(row=i + 1, seq=cell(0).strip(), total=cell(7).strip(),
+                         ment=cell(COL_MENT).rstrip())
         for ci, key, _label in FIELDS:
             cr.values[key] = cell(ci).strip()
         if not cr.get("customer") and not cr.seq:
             continue          # 완전히 빈 줄은 건너뜀
         out.append(cr)
     return header_idx + 1, out
+
+
+def read_summary(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> list[tuple[str, str]]:
+    """상단 발주 현황(N1:O4) 을 (라벨, 값) 목록으로 읽는다."""
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, SUMMARY_RANGE))
+    r = requests.get(url, headers=_headers(auth), timeout=20,
+                     params={"valueRenderOption": "FORMATTED_VALUE"})
+    _check(r)
+    out = []
+    for row in (r.json() or {}).get("values", []):
+        label = (row[0] if len(row) > 0 else "").strip()
+        value = (row[1] if len(row) > 1 else "").strip()
+        if label:
+            out.append((label, value))
+    return out
 
 
 def choices(rows: list[CustomerRow]) -> dict:
@@ -304,3 +354,78 @@ def update_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
 
 def sheet_url(sheet_id: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+
+
+# ---------------------------------------------------------------------------
+# 견적서/계약서 이미지 — 드라이브 업로드 후 셀에 =IMAGE() 로 표시
+#
+# ⚠️ 구글 시트가 셀 안에 그림을 그리려면 이미지를 '링크가 있는 누구나 열람' 으로
+#    공개해야 한다(시트 서버가 사용자 인증 없이 이미지를 가져오기 때문).
+#    주소를 아는 사람은 볼 수 있으므로, 앱에서 최초 1회 확인을 받는다.
+# ---------------------------------------------------------------------------
+IMAGE_FOLDER_NAME = "일정관리기 견적서"
+
+
+def _find_or_create_folder(auth: GoogleAuth, name: str) -> str:
+    """드라이브에 전용 폴더를 찾거나 만든다(앱이 만든 파일만 접근하는 권한)."""
+    q = (f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
+         " and trashed=false")
+    r = requests.get(config.DRIVE_FILES_URL, headers=_headers(auth), timeout=20,
+                     params={"q": q, "fields": "files(id,name)", "pageSize": 1})
+    if r.status_code == 200:
+        files = (r.json() or {}).get("files", [])
+        if files:
+            return files[0].get("id", "")
+    r = requests.post(config.DRIVE_FILES_URL, headers=_headers(auth), timeout=20,
+                      json={"name": name,
+                            "mimeType": "application/vnd.google-apps.folder"})
+    _check(r)
+    return (r.json() or {}).get("id", "")
+
+
+def upload_image(auth: GoogleAuth, data: bytes, filename: str) -> str:
+    """PNG 바이트를 드라이브에 올리고 '링크 공개' 후 이미지 URL 을 돌려준다."""
+    folder = ""
+    try:
+        folder = _find_or_create_folder(auth, IMAGE_FOLDER_NAME)
+    except Exception:
+        folder = ""
+
+    meta = {"name": filename}
+    if folder:
+        meta["parents"] = [folder]
+
+    # multipart 업로드 (메타데이터 + 파일 본문)
+    boundary = "planner-img-boundary"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+        + json.dumps(meta) + f"\r\n--{boundary}\r\nContent-Type: image/png\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    h = _headers(auth)
+    h["Content-Type"] = f"multipart/related; boundary={boundary}"
+    r = requests.post(config.DRIVE_UPLOAD_URL, headers=h, data=body, timeout=120,
+                      params={"uploadType": "multipart", "fields": "id"})
+    _check(r)
+    file_id = (r.json() or {}).get("id", "")
+    if not file_id:
+        raise GoogleError("이미지 업로드에 실패했습니다.")
+
+    # 시트가 이미지를 가져올 수 있도록 '링크가 있는 누구나 보기' 로 공개
+    pr = requests.post(f"{config.DRIVE_FILES_URL}/{file_id}/permissions",
+                       headers=_headers(auth), timeout=20,
+                       json={"role": "reader", "type": "anyone"})
+    if pr.status_code not in (200, 201):
+        raise GoogleError(
+            "이미지를 올렸지만 공개 설정에 실패해 셀에 표시할 수 없습니다.\n"
+            f"(HTTP {pr.status_code})")
+    return image_url(file_id)
+
+
+def image_url(file_id: str) -> str:
+    return f"https://drive.google.com/uc?export=view&id={file_id}"
+
+
+def image_formula(url: str) -> str:
+    """셀 안에 그림으로 보이게 하는 수식 (4 = 원본비율 유지하며 셀에 맞춤)."""
+    return f'=IMAGE("{url}", 1)'

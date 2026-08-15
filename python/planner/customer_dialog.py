@@ -1,27 +1,104 @@
 """고객 등록/수정 대화상자 (구글 시트 '미출고차량' 연동).
 
 직접기재 항목만 입력받는다. 수식으로 자동 계산되는 항목
-(순번·합계·고객센터 번호·사고접수연락처·고객안내멘트)은 안내만 하고
-프로그램이 건드리지 않는다.
+(순번·합계·고객센터 번호·사고접수연락처·고객안내멘트·등록완료)은 건드리지 않는다.
 
-금융사·특판/대리점·진행현황·출고유형·등록완료는 콤보박스로 제공하되,
-후보 목록은 **기존 시트 데이터에서 뽑아** 쓴다(값을 코드에 박지 않는다).
+- 계약일/출고일: 달력에서 고르고, 시트 서식(2026. 8. 14)으로 저장
+- 견적서/계약서: Ctrl+V 로 이미지를 붙여넣어 셀 안 그림으로 등록
+- 고객안내멘트: 시트 R열 내용을 클립보드로 복사
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QGuiApplication, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout, QFrame, QHBoxLayout,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from . import config, sheets
 
 
+class ImagePasteBox(QFrame):
+    """Ctrl+V 로 이미지를 붙여넣는 상자. 미리보기 + 지우기."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setMinimumHeight(120)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._png: bytes = b""          # 새로 붙여넣은 이미지
+        self._existing: str = ""        # 시트에 이미 들어있는 값(수식/텍스트)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(8, 8, 8, 8)
+        self.lbl = QLabel("여기를 클릭하고 Ctrl+V 로 견적서/계약서 이미지를 붙여넣으세요")
+        self.lbl.setWordWrap(True)
+        self.lbl.setAlignment(Qt.AlignCenter)
+        v.addWidget(self.lbl)
+
+        self.preview = QLabel()
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.hide()
+        v.addWidget(self.preview)
+
+        row = QHBoxLayout()
+        self.btn_paste = QPushButton("붙여넣기 (Ctrl+V)")
+        self.btn_paste.clicked.connect(self.paste_from_clipboard)
+        self.btn_clear = QPushButton("지우기")
+        self.btn_clear.clicked.connect(self.clear_image)
+        row.addWidget(self.btn_paste)
+        row.addWidget(self.btn_clear)
+        row.addStretch()
+        v.addLayout(row)
+
+        sc = QShortcut(QKeySequence.Paste, self)
+        sc.activated.connect(self.paste_from_clipboard)
+
+    def set_existing(self, value: str):
+        self._existing = value or ""
+        if self._existing and not self._png:
+            self.lbl.setText("이미 등록된 이미지가 있습니다. 바꾸려면 새로 붙여넣으세요.")
+
+    def paste_from_clipboard(self):
+        img = QGuiApplication.clipboard().image()
+        if img.isNull():
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "클립보드에 이미지가 없습니다.\n"
+                "캡처 도구나 이미지 프로그램에서 복사한 뒤 다시 시도하세요.")
+            return
+        from PySide6.QtCore import QBuffer, QByteArray
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QBuffer.WriteOnly)
+        img.save(buf, "PNG")
+        buf.close()
+        self._png = bytes(ba)
+        pm = QPixmap.fromImage(img).scaledToWidth(
+            min(360, img.width()), Qt.SmoothTransformation)
+        self.preview.setPixmap(pm)
+        self.preview.show()
+        self.lbl.setText(f"새 이미지 준비됨 ({img.width()}×{img.height()}, "
+                         f"{len(self._png) // 1024}KB) — 저장하면 시트에 올라갑니다")
+
+    def clear_image(self):
+        self._png = b""
+        self.preview.clear()
+        self.preview.hide()
+        self.lbl.setText("여기를 클릭하고 Ctrl+V 로 견적서/계약서 이미지를 붙여넣으세요")
+
+    def png_bytes(self) -> bytes:
+        return self._png
+
+    def existing(self) -> str:
+        return self._existing
+
+
 class CustomerDialog(QDialog):
     #  key            라벨            위젯종류
-    #  ("combo" 는 기존 값 후보를 넣고 직접 입력도 가능하게 editable)
     LAYOUT = [
         ("customer", "고객명 / 사업자", "line"),
         ("finance", "금융사", "combo"),
@@ -30,30 +107,29 @@ class CustomerDialog(QDialog):
         ("fee", "금융수수료", "line"),
         ("incentive", "대리점 수당", "line"),
         ("channel", "특판 / 대리점", "combo"),
-        ("contract_date", "계약일(발주)", "line"),
-        ("deliver_date", "출고일", "line"),
+        ("contract_date", "계약일(발주)", "date"),
+        ("deliver_date", "출고일", "date"),
         ("status", "진행현황", "combo"),
         ("terms", "계약조건", "text"),
         ("note", "내용", "text"),
         ("kind", "출고유형", "combo"),
-        ("doc", "견적서/계약서", "line"),
-        ("registered", "등록완료", "combo"),
+        ("doc", "견적서/계약서", "image"),
     ]
 
-    def __init__(self, caption: str, values: dict, choices: dict, parent=None):
+    def __init__(self, caption: str, values: dict, choices: dict,
+                 ment: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(caption)
-        self.resize(560, 720)
+        self.resize(600, 760)
         self.widgets: dict = {}
+        self._ment = ment or ""
 
         root = QVBoxLayout(self)
 
-        # 스크롤 영역 (항목이 많아 작은 화면에서도 잘리지 않게)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
-        # 스타일시트 배경이 확실히 칠해지도록 (설정창과 동일한 패턴)
         inner.setObjectName("dlgbody")
         inner.setAttribute(Qt.WA_StyledBackground, True)
         form = QFormLayout(inner)
@@ -62,30 +138,59 @@ class CustomerDialog(QDialog):
             cur = (values or {}).get(key, "")
             if kind == "combo":
                 w = QComboBox()
-                w.setEditable(True)          # 목록에 없는 값도 직접 입력 가능
-                items = (choices or {}).get(key, [])
+                w.setEditable(True)
                 w.addItem("")
-                for it in items:
+                for it in (choices or {}).get(key, []):
                     w.addItem(it)
                 w.setCurrentText(cur)
+                form.addRow(label, w)
+            elif kind == "date":
+                # 달력에서 고르되, 아직 안 정해진 날짜(출고 전)는 '미정' 으로 비워둔다
+                holder = QWidget()
+                hl = QHBoxLayout(holder)
+                hl.setContentsMargins(0, 0, 0, 0)
+                de = QDateEdit()
+                de.setCalendarPopup(True)
+                de.setDisplayFormat("yyyy. M. d")
+                d = sheets.parse_date(cur)
+                de.setDate(QDate(d.year, d.month, d.day) if d else QDate.currentDate())
+                chk = QCheckBox("미정")
+                chk.setChecked(d is None)      # 값이 없거나 못 읽으면 '미정'
+                chk.toggled.connect(lambda on, e=de: e.setEnabled(not on))
+                de.setEnabled(not chk.isChecked())
+                hl.addWidget(de, 1)
+                hl.addWidget(chk)
+                w = (de, chk)
+                form.addRow(label, holder)
+            elif kind == "image":
+                w = ImagePasteBox()
+                w.set_existing(cur)
+                form.addRow(label, w)
             elif kind == "text":
                 w = QTextEdit()
                 w.setMinimumHeight(64)
                 w.setPlainText(cur)
+                form.addRow(label, w)
             else:
                 w = QLineEdit()
                 w.setText(cur)
+                form.addRow(label, w)
             self.widgets[key] = (w, kind)
-            form.addRow(label, w)
 
         scroll.setWidget(inner)
         root.addWidget(scroll, 1)
 
-        # 자동 계산 안내
-        gb = QGroupBox("자동 계산 (시트 수식 — 프로그램이 입력하지 않음)")
-        gl = QVBoxLayout(gb)
-        gl.addWidget(QLabel(" · " + "   · ".join(sheets.FORMULA_NAMES)))
-        root.addWidget(gb)
+        # 고객안내멘트 복사 (시트 R열 — 자동 계산되는 값)
+        mrow = QHBoxLayout()
+        self.btn_copy_ment = QPushButton("고객안내멘트 복사")
+        self.btn_copy_ment.clicked.connect(self._copy_ment)
+        self.btn_copy_ment.setEnabled(bool(self._ment.strip()))
+        mrow.addWidget(self.btn_copy_ment)
+        self.lbl_ment = QLabel(
+            self._ment.strip().splitlines()[0][:48] + " …" if self._ment.strip()
+            else "(저장 후 시트에서 자동 생성됩니다)")
+        mrow.addWidget(self.lbl_ment, 1)
+        root.addLayout(mrow)
 
         row = QHBoxLayout()
         row.addStretch()
@@ -98,6 +203,10 @@ class CustomerDialog(QDialog):
         row.addWidget(cancel)
         root.addLayout(row)
 
+    def _copy_ment(self):
+        QGuiApplication.clipboard().setText(self._ment)
+        self.lbl_ment.setText("복사했습니다 ✅")
+
     def _ok(self):
         if not self.values().get("customer", "").strip():
             QMessageBox.information(self, config.APP_NAME, "고객명을 입력하세요.")
@@ -109,15 +218,26 @@ class CustomerDialog(QDialog):
         for key, (w, kind) in self.widgets.items():
             if kind == "combo":
                 out[key] = w.currentText().strip()
+            elif kind == "date":
+                de, chk = w
+                out[key] = "" if chk.isChecked() else sheets.fmt_date(de.date().toPython())
+            elif kind == "image":
+                out[key] = w.existing()      # 새 이미지는 new_image() 로 따로 전달
             elif kind == "text":
                 out[key] = w.toPlainText().strip()
             else:
                 out[key] = w.text().strip()
         return out
 
+    def new_image(self) -> bytes:
+        """새로 붙여넣은 이미지(PNG). 없으면 빈 바이트."""
+        w, _kind = self.widgets["doc"]
+        return w.png_bytes()
+
     @classmethod
-    def run(cls, caption: str, values: dict, choices: dict, parent=None):
-        d = cls(caption, values, choices, parent)
+    def run(cls, caption: str, values: dict, choices: dict, ment: str = "", parent=None):
+        """반환: (값 dict, 새 이미지 bytes) 또는 None(취소)."""
+        d = cls(caption, values, choices, ment, parent)
         if d.exec() != QDialog.Accepted:
             return None
-        return d.values()
+        return d.values(), d.new_image()
