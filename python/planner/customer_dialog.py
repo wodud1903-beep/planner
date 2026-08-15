@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QComboBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -51,7 +51,11 @@ class CustomerDialog(QDialog):
         # 스크롤 영역 (항목이 많아 작은 화면에서도 잘리지 않게)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
+        # 스타일시트 배경이 확실히 칠해지도록 (설정창과 동일한 패턴)
+        inner.setObjectName("dlgbody")
+        inner.setAttribute(Qt.WA_StyledBackground, True)
         form = QFormLayout(inner)
 
         for key, label, kind in self.LAYOUT:

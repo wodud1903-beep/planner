@@ -12,9 +12,9 @@ from __future__ import annotations
 import threading
 from datetime import time
 
-from PySide6.QtCore import QTime, Signal
+from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTextEdit, QTimeEdit,
     QVBoxLayout, QWidget,
 )
@@ -38,7 +38,12 @@ class SettingsDialog(QDialog):
         outer = QVBoxLayout(self)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         _inner = QWidget()
+        # 이름 없는 QWidget 은 스타일시트 배경을 칠하지 않는다 → 이름 + 속성을 줘서
+        # 테마 배경이 확실히 적용되게 한다(캘린더 창의 #calwin 과 동일한 패턴).
+        _inner.setObjectName("dlgbody")
+        _inner.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(_inner)
         scroll.setWidget(_inner)
         outer.addWidget(scroll, 1)

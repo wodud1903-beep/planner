@@ -129,7 +129,9 @@ def main() -> int:
         theme.set_theme(AppSettings.load(config.data_file("plan_cfg.json")).dark_mode)
     except Exception:
         theme.set_theme(False)
-    app.setStyleSheet(theme.qss())
+    # 스타일시트 + 팔레트를 함께 적용 (팔레트를 안 주면 윈도우 시스템 다크 테마가
+    # 스크롤 영역 등 스타일시트가 닿지 않는 표면으로 새어 나온다)
+    theme.apply_to_app(app)
 
     win = MainWindow()
 

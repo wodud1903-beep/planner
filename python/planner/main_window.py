@@ -249,7 +249,7 @@ class MainWindow(QMainWindow):
         theme.set_theme(self.settings.dark_mode)
         app = QApplication.instance()
         if app:
-            app.setStyleSheet(theme.qss())
+            theme.apply_to_app(app)   # 스타일시트 + 팔레트 함께
         self._apply_topbar_theme()
         self.refresh_calendar()
         self.refresh_todo()

@@ -84,6 +84,56 @@ def c(key: str) -> str:
     return _current.get(key, "#000000")
 
 
+def palette():
+    """현재 테마에 맞는 QPalette.
+
+    스타일시트가 닿지 않는 표면(스크롤 영역 뷰포트, 툴팁, 일부 기본 대화상자 등)은
+    팔레트 색으로 그려진다. 이걸 지정하지 않으면 **윈도우 시스템 테마(다크)** 가
+    그대로 새어 나와 밝은 테마인데 배경만 어두워지는 문제가 생긴다.
+    """
+    from PySide6.QtGui import QColor, QPalette
+
+    p = _current
+    pal = QPalette()
+    win = QColor(p["window_bg"])
+    base = QColor(p["input_bg"])
+    text = QColor(p["text"])
+    btn = QColor(p["btn_bg"])
+    sel = QColor(p["select_bg"])
+    seltxt = QColor(p["select_text"])
+
+    pal.setColor(QPalette.Window, win)
+    pal.setColor(QPalette.WindowText, text)
+    pal.setColor(QPalette.Base, base)
+    pal.setColor(QPalette.AlternateBase, QColor(p["panel_bg"]))
+    pal.setColor(QPalette.Text, text)
+    pal.setColor(QPalette.Button, btn)
+    pal.setColor(QPalette.ButtonText, text)
+    pal.setColor(QPalette.Highlight, sel)
+    pal.setColor(QPalette.HighlightedText, seltxt)
+    pal.setColor(QPalette.ToolTipBase, QColor(p["panel_bg"]))
+    pal.setColor(QPalette.ToolTipText, text)
+    pal.setColor(QPalette.PlaceholderText, QColor(p["subtext"]))
+    pal.setColor(QPalette.Link, QColor(p["accent"]))
+    pal.setColor(QPalette.Disabled, QPalette.Text, QColor(p["subtext"]))
+    pal.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(p["subtext"]))
+    pal.setColor(QPalette.Disabled, QPalette.WindowText, QColor(p["subtext"]))
+    return pal
+
+
+def apply_to_app(app) -> None:
+    """앱 전체에 현재 테마(스타일시트 + 팔레트 + 색상 스킴)를 적용."""
+    app.setStyleSheet(qss())
+    app.setPalette(palette())
+    # Qt 6.8+ : 창 제목표시줄까지 테마에 맞춘다(없는 버전이면 조용히 넘어감)
+    try:
+        from PySide6.QtCore import Qt
+        scheme = Qt.ColorScheme.Dark if _is_dark else Qt.ColorScheme.Light
+        app.styleHints().setColorScheme(scheme)
+    except Exception:
+        pass
+
+
 def qss() -> str:
     p = _current
     return f"""
@@ -154,6 +204,12 @@ QListWidget {{
 }}
 QListWidget::item:selected {{ background: {p['select_bg']}; color: {p['select_text']}; }}
 QDialog, QMessageBox {{ background: {p['window_bg']}; }}
+/* 스크롤 영역 — 규칙이 없으면 윈도우 시스템(다크) 테마가 배경으로 새어 나온다 */
+QScrollArea {{ background: {p['window_bg']}; border: none; }}
+QScrollArea > QWidget > QWidget {{ background: {p['window_bg']}; }}
+QScrollArea > QWidget#dlgbody {{ background: {p['window_bg']}; }}
+QWidget#dlgbody {{ background: {p['window_bg']}; }}
+QAbstractScrollArea::corner {{ background: {p['window_bg']}; }}
 QScrollBar:vertical {{ border: none; background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {p['scroll']}; border-radius: 5px; min-height: 24px; }}
 QScrollBar::handle:vertical:hover {{ background: {p['scroll_hover']}; }}
