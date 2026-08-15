@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
+    sig_sheet_diag = Signal(str)                     # 시트 연결 진단 결과
 
     def __init__(self):
         super().__init__()
@@ -176,6 +177,7 @@ class MainWindow(QMainWindow):
         self.sig_write_done.connect(self._on_write_done)
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
+        self.sig_sheet_diag.connect(self._on_sheet_diag)
 
         # 동기화 푸시 디바운스 타이머
         self._sync_timer = QTimer(self)
@@ -568,6 +570,9 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
+        self.btn_cust_diag = QPushButton("연결 진단")
+        self.btn_cust_diag.clicked.connect(self.diagnose_sheet)
+        row.addWidget(self.btn_cust_diag)
         row.addStretch()
         row.addWidget(QLabel("검색:"))
         self.ed_cust_find = QLineEdit()
@@ -603,6 +608,14 @@ class MainWindow(QMainWindow):
             if not quiet:
                 QMessageBox.information(self, config.APP_NAME, "설정에서 시트 주소를 입력하세요.")
             return False
+        # 저장된 권한 목록에 스프레드시트가 없으면 요청 전에 미리 안내
+        if not self.gauth.has_scope(config.SCOPE_SHEETS):
+            if not quiet:
+                QMessageBox.information(
+                    self, config.APP_NAME,
+                    "로그인 토큰에 스프레드시트 권한이 없습니다.\n"
+                    "[설정] → [Google 로그아웃] 후 다시 [Google 로그인] 을 해주세요.")
+            return False
         return True
 
     def _open_sheet(self):
@@ -611,6 +624,69 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME, "설정에서 시트 주소를 입력하세요.")
             return
         webbrowser.open(sheets.sheet_url(sid))
+
+    def diagnose_sheet(self):
+        """시트 연결 진단 — '권한 없음'의 진짜 원인을 짚어준다."""
+        if not self.gauth.is_connected():
+            QMessageBox.information(self, config.APP_NAME,
+                                    "먼저 [설정]에서 Google 로그인 하세요.")
+            return
+        self.btn_cust_diag.setEnabled(False)
+        self.btn_cust_diag.setText("진단 중…")
+        sid = (self.settings.sheet_id or "").strip()
+        sname = (self.settings.sheet_name or "").strip()
+
+        def worker():
+            lines = [f"계정: {self.account_email or '(확인 중)'}",
+                     f"시트: {sname}  ({sid[:20]}…)" if sid else "시트: (미설정)", ""]
+            has_scope = None
+            try:
+                scopes = google_client.granted_scopes(self.gauth)
+                has_scope = config.SCOPE_SHEETS in scopes
+                lines.append("① 스프레드시트 권한: " + ("있음 ✅" if has_scope else "없음 ❌"))
+            except Exception as e:
+                lines.append(f"① 스프레드시트 권한: 확인 실패 ({e})")
+
+            sheet_err = ""
+            if not sid:
+                lines.append("② 시트 읽기: 건너뜀 (시트 주소 미설정)")
+            else:
+                try:
+                    _h, rows = sheets.read_rows(self.gauth, sid, sname)
+                    lines.append(f"② 시트 읽기: 성공 ✅ ({len(rows)}건)")
+                except Exception as e:
+                    sheet_err = str(e)
+                    lines.append("② 시트 읽기: 실패 ❌")
+                    lines.append("   " + sheet_err.replace("\n", "\n   ")[:400])
+
+            # ── 다음에 할 일을 한 줄로 지정 ──
+            lines.append("")
+            lines.append("▶ 다음에 할 일")
+            if has_scope is False:
+                lines.append("   [설정] → [Google 로그아웃] 후 다시 [Google 로그인] 하세요.")
+                lines.append("   그래도 안 되면 OAuth 동의 화면에 아래 권한을 추가해야 합니다:")
+                lines.append("   " + config.SCOPE_SHEETS)
+            elif sheet_err and ("Sheets API" in sheet_err or "SERVICE_DISABLED" in sheet_err
+                                or "has not been used" in sheet_err):
+                lines.append("   구글 클라우드에서 Google Sheets API 를 켜야 합니다:")
+                lines.append("   " + config.SHEETS_ENABLE_URL)
+            elif sheet_err:
+                lines.append("   위 오류 내용을 확인하세요. 시트 주소/시트명이 맞는지도 점검하세요.")
+            else:
+                lines.append("   정상입니다. [불러오기] 를 눌러 사용하세요.")
+            self.sig_sheet_diag.emit("\n".join(lines))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_diag(self, text: str):
+        self.btn_cust_diag.setEnabled(True)
+        self.btn_cust_diag.setText("연결 진단")
+        box = QMessageBox(self)
+        box.setWindowTitle("시트 연결 진단")
+        box.setText(text)
+        # 주소를 마우스로 긁어 복사할 수 있게
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        box.exec()
 
     def load_sheet_async(self, manual: bool = False):
         """시트를 백그라운드로 읽어온다 (창이 멈추지 않게)."""

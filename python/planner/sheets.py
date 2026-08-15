@@ -96,6 +96,32 @@ def _headers(auth: GoogleAuth) -> dict:
     return {"Authorization": "Bearer " + auth.valid_token()}
 
 
+def _error_detail(r) -> tuple[str, str]:
+    """구글 오류 응답에서 (사람이 읽는 메시지, reason 코드) 를 뽑는다."""
+    msg, reason = "", ""
+    try:
+        j = r.json() or {}
+        err = j.get("error", {})
+        if isinstance(err, dict):
+            msg = err.get("message", "") or ""
+            reason = err.get("status", "") or ""
+            for d in err.get("details", []) or []:
+                if isinstance(d, dict) and d.get("reason"):
+                    reason = d["reason"]
+                    break
+        elif isinstance(err, str):
+            msg = err
+            reason = j.get("error_description", "") or ""
+    except Exception:
+        pass
+    if not msg:
+        try:
+            msg = (r.text or "")[:300]
+        except Exception:
+            msg = ""
+    return msg, reason
+
+
 def _check(r) -> None:
     if r.status_code in (200, 201):
         return
@@ -104,14 +130,39 @@ def _check(r) -> None:
         txt = r.text or ""
     except Exception:
         pass
-    if r.status_code in (401, 403) or "insufficient" in txt.lower() or "scope" in txt.lower():
+    msg, reason = _error_detail(r)
+    low = (msg + " " + reason + " " + txt).lower()
+
+    # ① 클라우드 프로젝트에 Sheets API 가 꺼져 있음 — 재로그인으로는 절대 안 풀린다
+    if "service_disabled" in low or "has not been used in project" in low:
         raise GoogleError(
-            "시트 접근 권한이 없습니다.\n"
+            "구글 클라우드 프로젝트에서 'Google Sheets API' 가 켜져 있지 않습니다.\n"
+            "아래 주소를 브라우저에 붙여넣고 [사용] 버튼을 누른 뒤,\n"
+            "1~2분 기다렸다가 다시 [불러오기] 하세요.\n\n"
+            f"{config.SHEETS_ENABLE_URL}\n\n"
+            f"(구글 응답: {msg[:300]})")
+
+    # ② 토큰에 스프레드시트 권한이 안 붙음 — 재로그인이 맞는 처방
+    if ("access_token_scope_insufficient" in low or "insufficient" in low
+            or "request had insufficient authentication scopes" in low):
+        raise GoogleError(
+            "로그인 토큰에 스프레드시트 권한이 없습니다.\n"
             "[설정] → [Google 로그아웃] 후 다시 [Google 로그인] 을 해주세요.\n"
             "(고객관리 시트 기능을 위해 스프레드시트 권한이 새로 추가되었습니다.)")
+
+    if r.status_code == 401:
+        raise GoogleError("구글 로그인이 만료되었습니다. [설정]에서 다시 로그인하세요.")
+
+    if r.status_code == 403:
+        # 원인을 단정하지 말고 구글 원문을 그대로 보여준다
+        raise GoogleError(
+            "시트 접근이 거부되었습니다 (403).\n"
+            f"구글 응답: {msg[:300]}\n\n"
+            "[고객관리] 탭의 [연결 진단] 을 눌러 원인을 확인하세요.")
+
     if r.status_code == 404:
         raise GoogleError("시트를 찾을 수 없습니다. 설정의 시트 주소/시트명을 확인하세요.")
-    raise GoogleError(f"시트 요청 실패 (HTTP {r.status_code})")
+    raise GoogleError(f"시트 요청 실패 (HTTP {r.status_code})\n{msg[:300]}")
 
 
 def _rng(sheet_name: str, a1: str) -> str:

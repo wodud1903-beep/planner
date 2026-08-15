@@ -232,7 +232,15 @@ class SettingsDialog(QDialog):
     def _on_login_done(self, ok: bool, err: str):
         self.btn_login.setEnabled(True)
         self._update_gstatus()
-        if ok:
-            self.tasks_changed = True
-        else:
+        if not ok:
             QMessageBox.warning(self, config.APP_NAME, "로그인 실패:\n" + err)
+            return
+        self.tasks_changed = True
+        # 동의는 했는데 스프레드시트 권한이 실제로는 안 붙는 경우가 있어 바로 알려준다
+        if not self.gauth.has_scope(config.SCOPE_SHEETS):
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "로그인은 되었지만 스프레드시트 권한이 부여되지 않았습니다.\n\n"
+                "구글 클라우드 → API 및 서비스 → OAuth 동의 화면 → 데이터 액세스에\n"
+                "아래 권한을 추가하고 저장한 뒤, 다시 로그인해 주세요.\n\n"
+                + config.SCOPE_SHEETS)

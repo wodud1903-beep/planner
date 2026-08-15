@@ -98,6 +98,7 @@ class GoogleAuth:
         self.refresh_token = ""
         self.access_token = ""
         self.token_expiry = datetime.min
+        self.scopes: list[str] = []      # 실제로 부여받은 권한 목록
         self._refresh_lock = threading.Lock()
         self._load()
 
@@ -109,6 +110,8 @@ class GoogleAuth:
             import json
             o = json.loads(self.cfg_file.read_text(encoding="utf-8"))
             self.refresh_token = o.get("refresh_token", "")
+            # 구버전 파일에는 scopes 가 없다 → 빈 목록(=알 수 없음)으로 둔다
+            self.scopes = list(o.get("scopes", []) or [])
         except Exception:
             pass
 
@@ -116,11 +119,22 @@ class GoogleAuth:
         try:
             import json
             self.cfg_file.write_text(
-                json.dumps({"refresh_token": self.refresh_token}, ensure_ascii=False),
+                json.dumps({"refresh_token": self.refresh_token,
+                            "scopes": list(self.scopes)}, ensure_ascii=False),
                 encoding="utf-8",
             )
         except Exception:
             pass
+
+    def has_scope(self, scope: str) -> bool:
+        """저장된 권한 목록에 해당 scope 가 있는지.
+
+        구버전에서 로그인해 목록이 비어 있으면 '알 수 없음'이므로 True 로 본다
+        (섣불리 막지 않고, 실제 요청의 오류 메시지로 판단하게 한다).
+        """
+        if not self.scopes:
+            return True
+        return scope in self.scopes
 
     def is_connected(self) -> bool:
         return bool(self.refresh_token)
@@ -129,6 +143,7 @@ class GoogleAuth:
         self.refresh_token = ""
         self.access_token = ""
         self.token_expiry = datetime.min
+        self.scopes = []
         self._save()
 
     # ---- 로그인 ----
@@ -193,6 +208,10 @@ class GoogleAuth:
         self.access_token = j.get("access_token", "")
         self.refresh_token = j.get("refresh_token", "") or self.refresh_token
         self.token_expiry = datetime.now() + timedelta(seconds=int(j.get("expires_in", 3600)) - 60)
+        # 실제로 부여된 권한을 기록해 둔다(요청한 것과 다를 수 있다)
+        granted = (j.get("scope", "") or "").split()
+        if granted:
+            self.scopes = granted
         self._save()
         if not self.refresh_token:
             raise GoogleError("refresh_token 을 받지 못했습니다. 구글 계정 권한을 해제 후 다시 시도하세요.")
@@ -215,6 +234,10 @@ class GoogleAuth:
         j = resp.json()
         self.access_token = j.get("access_token", "")
         self.token_expiry = datetime.now() + timedelta(seconds=int(j.get("expires_in", 3600)) - 60)
+        granted = (j.get("scope", "") or "").split()
+        if granted and granted != self.scopes:
+            self.scopes = granted
+            self._save()
 
     def valid_token(self) -> str:
         if self.access_token and datetime.now() < self.token_expiry:
@@ -452,6 +475,20 @@ def _task_write_error(r) -> str:
 # ---------------------------------------------------------------------------
 # 계정 이메일
 # ---------------------------------------------------------------------------
+def granted_scopes(auth: GoogleAuth) -> list[str]:
+    """구글에 직접 물어 이 토큰에 **실제로** 부여된 권한 목록을 확인한다.
+
+    '동의는 했는데 왜 안 되지?' 를 확정적으로 가르는 유일한 방법:
+      - 목록에 spreadsheets 가 없다 → 재로그인/동의화면 설정 문제
+      - 있는데도 403 이다        → 클라우드에서 Sheets API 미사용설정
+    """
+    r = requests.get(config.TOKENINFO_URL,
+                     params={"access_token": auth.valid_token()}, timeout=15)
+    if r.status_code != 200:
+        raise GoogleError(f"권한 확인 실패 (HTTP {r.status_code})")
+    return ((r.json() or {}).get("scope", "") or "").split()
+
+
 def get_user_email(auth: GoogleAuth) -> str:
     try:
         r = requests.get(config.USERINFO_URL, headers=auth._headers(), timeout=15)

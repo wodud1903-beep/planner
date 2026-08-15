@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.1.16"
+APP_VERSION = "1.1.17"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -60,7 +60,16 @@ GOOGLE_SCOPES = [
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+# 클라우드 프로젝트 번호 (클라이언트 ID 앞부분) — API 사용설정 안내에 쓴다
+GOOGLE_PROJECT_NUMBER = GOOGLE_CLIENT_ID.split("-")[0]
+SHEETS_ENABLE_URL = (
+    "https://console.developers.google.com/apis/api/sheets.googleapis.com/overview"
+    f"?project={GOOGLE_PROJECT_NUMBER}"
+)
+SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets"
 
 CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/{cal_id}/events"
