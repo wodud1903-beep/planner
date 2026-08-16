@@ -21,6 +21,46 @@ from PySide6.QtWidgets import (
 from . import config, sheets
 
 
+class MoneyEdit(QLineEdit):
+    """금액 입력 — 타이핑하는 즉시 1,000 단위로 콤마를 넣어준다."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignRight)
+        self.setPlaceholderText("0")
+        self._guard = False
+        self.textChanged.connect(self._reformat)
+        self.setText(sheets.fmt_money(text))
+
+    def _reformat(self, _t: str):
+        if self._guard:
+            return
+        self._guard = True
+        try:
+            raw = self.text()
+            # 커서 뒤에 남은 '숫자 개수' 를 기준으로 위치를 복원한다
+            tail_digits = sum(1 for ch in raw[self.cursorPosition():] if ch.isdigit())
+            new = sheets.fmt_money(raw)
+            if new != raw:
+                self.setText(new)
+                pos = len(new)
+                seen = 0
+                for i in range(len(new) - 1, -1, -1):
+                    if new[i].isdigit():
+                        seen += 1
+                        if seen == tail_digits:
+                            pos = i
+                            break
+                else:
+                    pos = len(new) if tail_digits == 0 else pos
+                self.setCursorPosition(max(0, min(pos, len(new))))
+        finally:
+            self._guard = False
+
+    def value(self) -> str:
+        return sheets.digits_only(self.text())
+
+
 class ImagePasteBox(QFrame):
     """Ctrl+V 로 이미지를 붙여넣는 상자. 미리보기 + 지우기."""
 
@@ -103,9 +143,9 @@ class CustomerDialog(QDialog):
         ("customer", "고객명 / 사업자", "line"),
         ("finance", "금융사", "combo"),
         ("model", "차종", "line"),
-        ("price", "차량가격", "line"),
-        ("fee", "금융수수료", "line"),
-        ("incentive", "대리점 수당", "line"),
+        ("price", "차량가격", "money"),
+        ("fee", "금융수수료", "money"),
+        ("incentive", "대리점 수당", "money"),
         ("channel", "특판 / 대리점", "combo"),
         ("contract_date", "계약일(발주)", "date"),
         ("deliver_date", "출고일", "date"),
@@ -166,10 +206,15 @@ class CustomerDialog(QDialog):
                 w = ImagePasteBox()
                 w.set_existing(cur)
                 form.addRow(label, w)
+            elif kind == "money":
+                w = MoneyEdit(cur)
+                form.addRow(label, w)
             elif kind == "text":
                 w = QTextEdit()
                 w.setMinimumHeight(64)
                 w.setPlainText(cur)
+                # Tab 으로 다음 입력창으로 넘어가게 (기본은 Tab 문자가 입력됨)
+                w.setTabChangesFocus(True)
                 form.addRow(label, w)
             else:
                 w = QLineEdit()
@@ -218,6 +263,8 @@ class CustomerDialog(QDialog):
         for key, (w, kind) in self.widgets.items():
             if kind == "combo":
                 out[key] = w.currentText().strip()
+            elif kind == "money":
+                out[key] = w.value()          # 콤마 없는 숫자
             elif kind == "date":
                 de, chk = w
                 out[key] = "" if chk.isChecked() else sheets.fmt_date(de.date().toPython())

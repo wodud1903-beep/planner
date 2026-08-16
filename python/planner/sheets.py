@@ -64,6 +64,9 @@ DATE_FIELDS = ["contract_date", "deliver_date"]
 COL_MENT = 17        # R 고객안내멘트 (읽기 전용, 복사용)
 COL_DOC = 18         # S 견적서/계약서 (이미지)
 
+# 금액 열 — 화면에서는 1,000 단위로 보여주고 시트에는 숫자로 넣는다
+MONEY_FIELDS = ["price", "fee", "incentive"]
+
 LAST_COL = 19                           # T
 
 # 상단 요약(발주 현황) 범위 — N1:O4 (라벨, 값)
@@ -88,6 +91,24 @@ def parse_sheet_id(url_or_id: str) -> str:
     s = (url_or_id or "").strip()
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", s)
     return m.group(1) if m else s
+
+
+def digits_only(s: str) -> str:
+    """'₩57,035,000' → '57035000' (숫자와 마이너스만 남긴다)."""
+    t = (s or "").strip()
+    neg = t.startswith("-")
+    d = "".join(ch for ch in t if ch.isdigit())
+    return ("-" + d) if (neg and d) else d
+
+
+def fmt_money(s: str) -> str:
+    """'57035000' → '57,035,000'. 숫자가 없으면 빈 문자열."""
+    d = digits_only(s)
+    if not d or d == "-":
+        return ""
+    neg = d.startswith("-")
+    n = d.lstrip("-")
+    return ("-" if neg else "") + f"{int(n):,}"
 
 
 def fmt_date(d) -> str:
@@ -283,8 +304,12 @@ def _write_cells(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     for ci, key, _label in FIELDS:
         if key not in values:
             continue
+        val = values.get(key, "")
+        if key in MONEY_FIELDS:
+            # 콤마를 떼고 숫자로 보내야 시트의 통화 서식이 그대로 적용된다
+            val = digits_only(val)
         a1 = f"'{sheet_name}'!{col_letter(ci)}{row}"
-        data.append({"range": a1, "values": [[values.get(key, "")]]})
+        data.append({"range": a1, "values": [[val]]})
     if not data:
         return
     url = config.SHEETS_BATCH_UPDATE_VALUES_URL.format(sheet_id=sheet_id)
@@ -306,24 +331,40 @@ def _sheet_gid(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> int:
     raise GoogleError(f"'{sheet_name}' 시트를 찾지 못했습니다.")
 
 
-def _copy_formulas(auth: GoogleAuth, sheet_id: str, gid: int,
-                   src_row: int, dst_row: int) -> None:
-    """직전 행의 수식을 새 행으로 복사 (행 참조는 구글이 자동 보정).
+def _copy_row_style(auth: GoogleAuth, sheet_id: str, gid: int,
+                    src_row: int, dst_row: int) -> None:
+    """직전 행의 서식·드롭다운·조건부서식·수식을 새 행으로 복사.
 
-    ARRAYFORMULA 로 이미 자동 확장되는 시트라면 이 호출은 사실상 무해하다.
-    실패해도 값 입력은 계속 진행한다(수식은 사용자가 채울 수 있으므로).
+    값만 써 넣으면 새 행에는 **드롭다운(데이터 확인)과 색상 규칙이 없어서**
+    '대리점' 을 넣어도 시트에서 색이 안 입혀진다. 통화 서식도 마찬가지다.
+    그래서 값을 쓰기 전에 직전 행의 '겉모습'을 통째로 물려받게 한다.
+
+      - PASTE_FORMAT                : 글꼴/색/통화 서식
+      - PASTE_DATA_VALIDATION       : 드롭다운 목록(색상 칩 포함)
+      - PASTE_CONDITIONAL_FORMATTING: 조건부 색상 규칙
+      - PASTE_FORMULA (수식 열만)    : 순번/합계/안내멘트/등록완료 등
+
+    실패해도 값 입력은 계속 진행한다.
     """
+    def rng(c0: int, c1: int, row: int):
+        return {"sheetId": gid, "startRowIndex": row - 1, "endRowIndex": row,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
     reqs = []
+    # 1) 행 전체의 겉모습(서식/드롭다운/조건부서식)
+    for ptype in ("PASTE_FORMAT", "PASTE_DATA_VALIDATION", "PASTE_CONDITIONAL_FORMATTING"):
+        reqs.append({"copyPaste": {
+            "source": rng(0, LAST_COL + 1, src_row),
+            "destination": rng(0, LAST_COL + 1, dst_row),
+            "pasteType": ptype,
+        }})
+    # 2) 수식은 수식 열에만 (값 열에 수식이 들어가면 안 된다)
     for ci in FORMULA_COLS:
         reqs.append({"copyPaste": {
-            "source": {"sheetId": gid, "startRowIndex": src_row - 1, "endRowIndex": src_row,
-                       "startColumnIndex": ci, "endColumnIndex": ci + 1},
-            "destination": {"sheetId": gid, "startRowIndex": dst_row - 1, "endRowIndex": dst_row,
-                            "startColumnIndex": ci, "endColumnIndex": ci + 1},
+            "source": rng(ci, ci + 1, src_row),
+            "destination": rng(ci, ci + 1, dst_row),
             "pasteType": "PASTE_FORMULA",
         }})
-    if not reqs:
-        return
     url = config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id)
     r = requests.post(url, headers=_headers(auth), timeout=30, json={"requests": reqs})
     _check(r)
@@ -338,9 +379,9 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     new_row = last_row + 1
     try:
         gid = _sheet_gid(auth, sheet_id, sheet_name)
-        _copy_formulas(auth, sheet_id, gid, last_row, new_row)
+        _copy_row_style(auth, sheet_id, gid, last_row, new_row)
     except Exception:
-        # 수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
+        # 서식/수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
         pass
     _write_cells(auth, sheet_id, sheet_name, new_row, values)
     return new_row

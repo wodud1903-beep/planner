@@ -113,7 +113,6 @@ class MainWindow(QMainWindow):
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
-    sig_sheet_diag = Signal(str)                     # 시트 연결 진단 결과
 
     def __init__(self):
         super().__init__()
@@ -159,6 +158,8 @@ class MainWindow(QMainWindow):
         self.sheet_choices: dict = {}
         self._sheet_last_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
+        # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
+        self._ment_copied: set = self._load_ment_log()
 
         # 저장된 테마 반영
         theme.set_theme(self.settings.dark_mode)
@@ -177,7 +178,6 @@ class MainWindow(QMainWindow):
         self.sig_write_done.connect(self._on_write_done)
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
-        self.sig_sheet_diag.connect(self._on_sheet_diag)
 
         # 동기화 푸시 디바운스 타이머
         self._sync_timer = QTimer(self)
@@ -309,6 +309,7 @@ class MainWindow(QMainWindow):
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
         self.settings = AppSettings.load(self.cfg_file)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
+        self._ment_copied = self._load_ment_log()
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -570,9 +571,6 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
-        self.btn_cust_diag = QPushButton("연결 진단")
-        self.btn_cust_diag.clicked.connect(self.diagnose_sheet)
-        row.addWidget(self.btn_cust_diag)
         row.addStretch()
         row.addWidget(QLabel("검색:"))
         self.ed_cust_find = QLineEdit()
@@ -592,11 +590,59 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lbl_cust)
 
         self.tbl_cust = self._make_table(
-            ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일", "진행현황"],
-            [52, 230, 110, 180, 100, 100, 80])
-        self.tbl_cust.doubleClicked.connect(lambda _i: self.on_customer_edit())
+            ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일",
+             "진행현황", "안내멘트"],
+            [46, 196, 94, 146, 92, 92, 74, 96])
+        self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         v.addWidget(self.tbl_cust)
         return w
+
+    # 진행현황 색상 (글자만 — 배경은 건드리지 않는다)
+    STATUS_COLORS = {"출고": "#2F6FD0", "발주": "#4FA45C", "취소": "#D23B3B"}
+
+    def _ment_key(self, cr) -> str:
+        """복사 이력 키 — 행 번호는 바뀔 수 있으니 순번+고객명으로 식별."""
+        return f"{cr.seq}|{cr.get('customer')}".strip()
+
+    def _load_ment_log(self) -> set:
+        try:
+            import json
+            p = config.data_file("ment_copied.json")
+            if p.exists():
+                return set(json.loads(p.read_text(encoding="utf-8")) or [])
+        except Exception:
+            pass
+        return set()
+
+    def _save_ment_log(self):
+        try:
+            import json
+            config.data_file("ment_copied.json").write_text(
+                json.dumps(sorted(self._ment_copied), ensure_ascii=False),
+                encoding="utf-8")
+        except Exception:
+            pass
+        self._touch_sync()
+
+    def _copy_customer_ment(self, cr):
+        """고객안내멘트를 클립보드로 복사하고 '보냄' 표시를 남긴다."""
+        if not (cr.ment or "").strip():
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "이 고객의 안내멘트가 아직 비어 있습니다.\n"
+                "시트에서 자동 생성된 뒤 [불러오기] 하면 복사할 수 있습니다.")
+            return
+        QApplication.clipboard().setText(cr.ment)
+        self._ment_copied.add(self._ment_key(cr))
+        self._save_ment_log()
+        self.refresh_customers()
+        self.sig_toast.emit(config.APP_NAME,
+                            f"{cr.get('customer')} 안내멘트를 복사했습니다.")
+
+    def _on_cust_dblclick(self, index):
+        if index.column() == 7:      # 안내멘트 열은 버튼이므로 편집창을 열지 않는다
+            return
+        self.on_customer_edit()
 
     def _sheet_ready(self, quiet: bool = False) -> bool:
         if not self.settings.sheet_on:
@@ -630,69 +676,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME, "설정에서 시트 주소를 입력하세요.")
             return
         webbrowser.open(sheets.sheet_url(sid))
-
-    def diagnose_sheet(self):
-        """시트 연결 진단 — '권한 없음'의 진짜 원인을 짚어준다."""
-        if not self.gauth.is_connected():
-            QMessageBox.information(self, config.APP_NAME,
-                                    "먼저 [설정]에서 Google 로그인 하세요.")
-            return
-        self.btn_cust_diag.setEnabled(False)
-        self.btn_cust_diag.setText("진단 중…")
-        sid = (self.settings.sheet_id or "").strip()
-        sname = (self.settings.sheet_name or "").strip()
-
-        def worker():
-            lines = [f"계정: {self.account_email or '(확인 중)'}",
-                     f"시트: {sname}  ({sid[:20]}…)" if sid else "시트: (미설정)", ""]
-            has_scope = None
-            try:
-                scopes = google_client.granted_scopes(self.gauth)
-                has_scope = config.SCOPE_SHEETS in scopes
-                lines.append("① 스프레드시트 권한: " + ("있음 ✅" if has_scope else "없음 ❌"))
-            except Exception as e:
-                lines.append(f"① 스프레드시트 권한: 확인 실패 ({e})")
-
-            sheet_err = ""
-            if not sid:
-                lines.append("② 시트 읽기: 건너뜀 (시트 주소 미설정)")
-            else:
-                try:
-                    _h, rows = sheets.read_rows(self.gauth, sid, sname)
-                    lines.append(f"② 시트 읽기: 성공 ✅ ({len(rows)}건)")
-                except Exception as e:
-                    sheet_err = str(e)
-                    lines.append("② 시트 읽기: 실패 ❌")
-                    lines.append("   " + sheet_err.replace("\n", "\n   ")[:400])
-
-            # ── 다음에 할 일을 한 줄로 지정 ──
-            lines.append("")
-            lines.append("▶ 다음에 할 일")
-            if has_scope is False:
-                lines.append("   [설정] → [Google 로그아웃] 후 다시 [Google 로그인] 하세요.")
-                lines.append("   그래도 안 되면 OAuth 동의 화면에 아래 권한을 추가해야 합니다:")
-                lines.append("   " + config.SCOPE_SHEETS)
-            elif sheet_err and ("Sheets API" in sheet_err or "SERVICE_DISABLED" in sheet_err
-                                or "has not been used" in sheet_err):
-                lines.append("   구글 클라우드에서 Google Sheets API 를 켜야 합니다:")
-                lines.append("   " + config.SHEETS_ENABLE_URL)
-            elif sheet_err:
-                lines.append("   위 오류 내용을 확인하세요. 시트 주소/시트명이 맞는지도 점검하세요.")
-            else:
-                lines.append("   정상입니다. [불러오기] 를 눌러 사용하세요.")
-            self.sig_sheet_diag.emit("\n".join(lines))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_sheet_diag(self, text: str):
-        self.btn_cust_diag.setEnabled(True)
-        self.btn_cust_diag.setText("연결 진단")
-        box = QMessageBox(self)
-        box.setWindowTitle("시트 연결 진단")
-        box.setText(text)
-        # 주소를 마우스로 긁어 복사할 수 있게
-        box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-        box.exec()
 
     def load_sheet_async(self, manual: bool = False):
         """시트를 백그라운드로 읽어온다 (창이 멈추지 않게)."""
@@ -756,17 +739,36 @@ class MainWindow(QMainWindow):
             r = self.tbl_cust.rowCount()
             self.tbl_cust.insertRow(r)
             pend = cr in self._sheet_pending
+            status = cr.get("status")
             vals = [cr.seq if not pend else "…",
                     ("[등록중] " if pend else "") + cr.get("customer"),
                     cr.get("finance"), cr.get("model"),
-                    cr.get("contract_date"), cr.get("deliver_date"), cr.get("status")]
+                    cr.get("contract_date"), cr.get("deliver_date"), status]
             for c, val in enumerate(vals):
                 item = QTableWidgetItem(val)
                 item.setData(Qt.UserRole, cr.row)
                 self.tbl_cust.setItem(r, c, item)
+            # 진행현황: 출고=파랑 / 발주=연초록 / 취소=빨강, 굵게 (글자만)
+            col = self.STATUS_COLORS.get(status.strip())
+            if col:
+                cell = self.tbl_cust.item(r, 6)
+                cell.setForeground(QColor(col))
+                f = cell.font()
+                f.setBold(True)
+                cell.setFont(f)
+            # 안내멘트 복사 버튼 (+ 보낸 적 있으면 표시)
+            done = self._ment_key(cr) in self._ment_copied
+            btn = QPushButton("✅ 복사됨" if done else "복사")
+            btn.setEnabled(not pend)
+            btn.setToolTip("고객안내멘트를 클립보드로 복사합니다"
+                           + ("\n(이미 복사한 적이 있습니다)" if done else ""))
+            if done:
+                btn.setStyleSheet(f"color:{theme.c('status_ok')};")
+            btn.clicked.connect(lambda _c=False, row=cr: self._copy_customer_ment(row))
+            self.tbl_cust.setCellWidget(r, 7, btn)
             if pend:
                 fg = QColor(theme.c("subtext"))
-                for c in range(self.tbl_cust.columnCount()):
+                for c in range(7):
                     cell = self.tbl_cust.item(r, c)
                     if cell is not None:
                         cell.setForeground(fg)
