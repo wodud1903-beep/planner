@@ -47,7 +47,14 @@ class SettingsDialog(QDialog):
         root = QVBoxLayout(_inner)
         scroll.setWidget(_inner)
         outer.addWidget(scroll, 1)
-        self.resize(600, min(860, max(560, self.sizeHint().height())))
+        # 메인 프로그램과 같은 높이로 열어 스크롤을 최소화한다
+        from PySide6.QtGui import QGuiApplication
+        _avail = QGuiApplication.primaryScreen().availableGeometry()
+        _h = min(920, _avail.height() - 60)
+        if parent is not None:
+            _h = max(_h, parent.height())
+            _h = min(_h, _avail.height() - 40)
+        self.resize(620, _h)
 
         # ---- 구글 연동 ----
         gb_g = QGroupBox("구글 연동")
@@ -118,6 +125,16 @@ class SettingsDialog(QDialog):
         vl.addStretch()
         root.addWidget(gb_v)
 
+        # ---- 창 닫기 동작 ----
+        gb_c = QGroupBox("창 닫기(X) 버튼")
+        cl = QVBoxLayout(gb_c)
+        self.cmb_close = QComboBox()
+        self.cmb_close.addItem("트레이로 내리기 (알람 계속 동작)", True)
+        self.cmb_close.addItem("완전 종료", False)
+        cl.addWidget(self.cmb_close)
+        cl.addWidget(QLabel("완전히 끄려면 트레이 아이콘 우클릭 → [종료] 를 쓰세요."))
+        root.addWidget(gb_c)
+
         # ---- 전역 단축키 ----
         gb_h = QGroupBox("전역 단축키 (창 빠르게 열기)")
         hl = QVBoxLayout(gb_h)
@@ -173,6 +190,7 @@ class SettingsDialog(QDialog):
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
         self.chk_dark.setChecked(s.dark_mode)
+        self.cmb_close.setCurrentIndex(0 if s.close_to_tray else 1)
         self.chk_hot.setChecked(s.hot_on)
         self.chk_ctrl.setChecked(s.hot_ctrl)
         self.chk_alt.setChecked(s.hot_alt)
@@ -197,6 +215,7 @@ class SettingsDialog(QDialog):
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.dark_mode = self.chk_dark.isChecked()
+        s.close_to_tray = bool(self.cmb_close.currentData())
         s.hot_on = self.chk_hot.isChecked()
         s.hot_ctrl = self.chk_ctrl.isChecked()
         s.hot_alt = self.chk_alt.isChecked()

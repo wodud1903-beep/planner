@@ -211,8 +211,7 @@ def _check(r) -> None:
         # 원인을 단정하지 말고 구글 원문을 그대로 보여준다
         raise GoogleError(
             "시트 접근이 거부되었습니다 (403).\n"
-            f"구글 응답: {msg[:300]}\n\n"
-            "[고객관리] 탭의 [연결 진단] 을 눌러 원인을 확인하세요.")
+            f"구글 응답: {msg[:300]}")
 
     if r.status_code == 404:
         raise GoogleError("시트를 찾을 수 없습니다. 설정의 시트 주소/시트명을 확인하세요.")
@@ -227,15 +226,33 @@ def _rng(sheet_name: str, a1: str) -> str:
 def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     """시트를 읽어 (헤더행번호, [CustomerRow]) 반환.
 
+    속도 최적화:
+      - 요청 1회(batchGet)로 목록 + 상단 요약을 한꺼번에 받는다.
+      - 분량이 가장 큰 R열(고객안내멘트, 한 건당 20줄 가까이)은 **빼고** 받는다.
+        멘트는 목록이 뜬 뒤 read_ments() 로 뒤이어 채운다.
     헤더 행은 A열 '순번' + B열에 '고객명' 이 들어간 행으로 자동 탐지한다.
     """
-    url = config.SHEETS_VALUES_URL.format(
-        sheet_id=sheet_id, rng=_rng(sheet_name, f"A1:{col_letter(LAST_COL)}"))
-    r = requests.get(url, headers=_headers(auth), timeout=30,
-                     params={"valueRenderOption": "FORMATTED_VALUE",
-                             "dateTimeRenderOption": "FORMATTED_STRING"})
+    url = config.SHEETS_BATCH_GET_URL.format(sheet_id=sheet_id)
+    r = requests.get(url, headers=_headers(auth), timeout=30, params=[
+        ("ranges", f"'{sheet_name}'!A1:Q"),
+        ("ranges", f"'{sheet_name}'!S1:T"),
+        ("valueRenderOption", "FORMATTED_VALUE"),
+        ("dateTimeRenderOption", "FORMATTED_STRING"),
+    ])
     _check(r)
-    values = (r.json() or {}).get("values", [])
+    ranges = (r.json() or {}).get("valueRanges", [])
+    left = (ranges[0].get("values", []) if len(ranges) > 0 else [])    # A~Q
+    right = (ranges[1].get("values", []) if len(ranges) > 1 else [])   # S~T
+
+    # A~Q 와 S~T 를 한 줄로 합친다 (R 자리는 빈칸으로 채워 열 번호를 맞춘다)
+    values = []
+    for i in range(max(len(left), len(right))):
+        a = list(left[i]) if i < len(left) else []
+        b = list(right[i]) if i < len(right) else []
+        a += [""] * (17 - len(a))      # A..Q = 17칸
+        a.append("")                   # R 자리(멘트는 뒤에서 채움)
+        a += b                         # S, T
+        values.append(a)
 
     header_idx = -1
     for i, row in enumerate(values[:30]):     # 위쪽 요약행은 몇 줄 안 된다
@@ -263,23 +280,61 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
         if not cr.get("customer") and not cr.seq:
             continue          # 완전히 빈 줄은 건너뜀
         out.append(cr)
-    return header_idx + 1, out
+
+    # 상단 요약(N1:O4)은 이미 받은 데이터에서 뽑는다 — 요청을 더 보내지 않는다
+    summary = []
+    for i in range(min(4, header_idx)):
+        row = values[i] if i < len(values) else []
+        label = (row[13] if len(row) > 13 else "").strip()
+        value = (row[14] if len(row) > 14 else "").strip()
+        if label:
+            summary.append((label, value))
+    return header_idx + 1, out, summary
 
 
-def read_summary(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> list[tuple[str, str]]:
-    """상단 발주 현황(N1:O4) 을 (라벨, 값) 목록으로 읽는다."""
+def read_ments(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
+    """R열(고객안내멘트)만 따로 읽는다 → {행번호: 멘트}.
+
+    목록을 먼저 띄운 뒤 뒤이어 부르는 용도(분량이 커서 첫 로딩을 느리게 만든다).
+    """
     url = config.SHEETS_VALUES_URL.format(
-        sheet_id=sheet_id, rng=_rng(sheet_name, SUMMARY_RANGE))
-    r = requests.get(url, headers=_headers(auth), timeout=20,
+        sheet_id=sheet_id, rng=_rng(sheet_name, "R1:R"))
+    r = requests.get(url, headers=_headers(auth), timeout=30,
                      params={"valueRenderOption": "FORMATTED_VALUE"})
     _check(r)
-    out = []
-    for row in (r.json() or {}).get("values", []):
-        label = (row[0] if len(row) > 0 else "").strip()
-        value = (row[1] if len(row) > 1 else "").strip()
-        if label:
-            out.append((label, value))
+    out = {}
+    for i, row in enumerate((r.json() or {}).get("values", [])):
+        v = (row[0] if row else "") or ""
+        if v.strip():
+            out[i + 1] = v.rstrip()
     return out
+
+
+def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+             last_row: int, rows: list) -> str:
+    """새 행에 넣을 순번. A열이 수식이면 "" (건드리지 않고 수식에 맡긴다).
+
+    A열이 그냥 숫자면 직전까지의 최대값 + 1 을 돌려준다.
+    (수식 복사만 하던 예전 방식은 A열이 '값'일 때 직전 번호를 그대로 베껴 왔다)
+    """
+    try:
+        url = config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"A{last_row}"))
+        r = requests.get(url, headers=_headers(auth), timeout=20,
+                         params={"valueRenderOption": "FORMULA"})
+        if r.status_code == 200:
+            vals = (r.json() or {}).get("values", [])
+            cur = str(vals[0][0]) if (vals and vals[0]) else ""
+            if cur.strip().startswith("="):
+                return ""            # 수식이 알아서 계산한다
+    except Exception:
+        pass
+    mx = 0
+    for cr in rows or []:
+        s = (cr.seq or "").strip()
+        if s.isdigit():
+            mx = max(mx, int(s))
+    return str(mx + 1) if mx else ""
 
 
 def choices(rows: list[CustomerRow]) -> dict:
@@ -298,9 +353,15 @@ def choices(rows: list[CustomerRow]) -> dict:
 
 
 def _write_cells(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-                 row: int, values: dict) -> None:
-    """직접기재 열만 **칸 단위**로 기록 → 수식 칸은 손대지 않는다."""
+                 row: int, values: dict, extra: dict | None = None) -> None:
+    """직접기재 열만 **칸 단위**로 기록 → 수식 칸은 손대지 않는다.
+
+    extra: {열인덱스: 값} — 순번처럼 앱이 직접 계산해 넣는 칸.
+    """
     data = []
+    for ci, val in (extra or {}).items():
+        data.append({"range": f"'{sheet_name}'!{col_letter(ci)}{row}",
+                     "values": [[val]]})
     for ci, key, _label in FIELDS:
         if key not in values:
             continue
@@ -371,10 +432,10 @@ def _copy_row_style(auth: GoogleAuth, sheet_id: str, gid: int,
 
 
 def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-               values: dict, last_row: int) -> int:
+               values: dict, last_row: int, seq: str = "") -> int:
     """맨 아래에 고객 한 줄 추가. 새 행 번호를 반환.
 
-    순서: (1) 직전 행의 수식을 새 행에 복사 → (2) 직접기재 칸만 기록.
+    순서: (1) 직전 행의 서식·드롭다운·수식 복사 → (2) 직접기재 칸 + 순번 기록.
     """
     new_row = last_row + 1
     try:
@@ -383,7 +444,8 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     except Exception:
         # 서식/수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
         pass
-    _write_cells(auth, sheet_id, sheet_name, new_row, values)
+    extra = {0: seq} if seq else None      # A열 순번 (수식이면 seq="" 라 건너뜀)
+    _write_cells(auth, sheet_id, sheet_name, new_row, values, extra)
     return new_row
 
 

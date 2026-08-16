@@ -113,6 +113,7 @@ class MainWindow(QMainWindow):
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
+    sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
 
     def __init__(self):
         super().__init__()
@@ -178,6 +179,7 @@ class MainWindow(QMainWindow):
         self.sig_write_done.connect(self._on_write_done)
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
+        self.sig_sheet_ments.connect(self._on_sheet_ments)
 
         # 동기화 푸시 디바운스 타이머
         self._sync_timer = QTimer(self)
@@ -211,6 +213,10 @@ class MainWindow(QMainWindow):
 
         # 시작 시 조용히 업데이트 확인
         QTimer.singleShot(4000, lambda: self.check_update(manual=False))
+
+        # 창이 뜬 뒤 고객관리 시트를 자동으로 불러온다.
+        # (백그라운드 스레드 + 지연 실행이라 시작이 느려지지 않는다)
+        QTimer.singleShot(2500, lambda: self.load_sheet_async(manual=False))
 
         self.chk_startup.setChecked(_startup_set())
 
@@ -687,16 +693,31 @@ class MainWindow(QMainWindow):
 
         def worker():
             try:
-                _hdr, rows = sheets.read_rows(self.gauth, sid, sname)
+                # 1) 목록 + 요약 (요청 1회, 분량 큰 안내멘트는 제외)
+                _hdr, rows, summary = sheets.read_rows(self.gauth, sid, sname)
                 last = rows[-1].row if rows else _hdr
-                try:
-                    summary = sheets.read_summary(self.gauth, sid, sname)
-                except Exception:
-                    summary = []     # 요약을 못 읽어도 목록은 보여준다
                 self.sig_sheet_rows.emit((rows, summary), last, "")
+                # 2) 안내멘트는 목록을 띄운 뒤 뒤이어 채운다
+                try:
+                    ments = sheets.read_ments(self.gauth, sid, sname)
+                    if ments:
+                        self.sig_sheet_ments.emit(ments)
+                except Exception:
+                    pass
             except Exception as e:
                 self.sig_sheet_rows.emit(None, 0, str(e))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_ments(self, ments: dict):
+        """안내멘트가 뒤늦게 도착 → 해당 행에 채우고 복사 버튼을 살린다."""
+        changed = False
+        for cr in self.sheet_rows:
+            m = ments.get(cr.row)
+            if m and m != cr.ment:
+                cr.ment = m
+                changed = True
+        if changed:
+            self.refresh_customers()
 
     def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
@@ -722,8 +743,16 @@ class MainWindow(QMainWindow):
         self.lbl_cust_summary.show()
 
     def _visible_sheet_rows(self) -> list:
-        """서버 행 + 아직 전송 중인 행."""
-        return list(self.sheet_rows) + list(self._sheet_pending)
+        """서버 행 + 아직 전송 중인 행 — 순번 내림차순(최근 등록이 맨 위)."""
+        allrows = list(self.sheet_rows) + list(self._sheet_pending)
+
+        def key(cr):
+            s = (cr.seq or "").strip()
+            # 전송 중(순번 미정)인 행은 항상 맨 위로
+            return (1, 0) if cr in self._sheet_pending else (
+                0, int(s) if s.isdigit() else -1)
+
+        return sorted(allrows, key=key, reverse=True)
 
     def refresh_customers(self):
         q = (self.ed_cust_find.text() or "").strip().lower() if hasattr(self, "ed_cust_find") else ""
@@ -814,6 +843,8 @@ class MainWindow(QMainWindow):
         last = self._sheet_last_row
         name = (vals.get("customer") or "고객").replace("/", "_")[:40]
 
+        rows_snapshot = list(self.sheet_rows)
+
         def worker():
             try:
                 v = dict(vals)
@@ -822,7 +853,9 @@ class MainWindow(QMainWindow):
                         self.gauth, img,
                         f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
                     v["doc"] = sheets.image_formula(url)
-                newrow = sheets.append_row(self.gauth, sid, sname, v, last)
+                # 순번은 앱이 계산해서 넣는다(A열이 수식이면 "" → 수식에 맡김)
+                seq = sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot)
+                newrow = sheets.append_row(self.gauth, sid, sname, v, last, seq=seq)
                 self.sig_sheet_written.emit(pend, newrow, "")
             except Exception as e:
                 self.sig_sheet_written.emit(pend, None, str(e))
@@ -1853,26 +1886,16 @@ class MainWindow(QMainWindow):
         if self._really_close:
             event.accept()
             return
-        box = QMessageBox(self)
-        box.setWindowTitle(config.APP_NAME)
-        box.setText("창을 닫습니다.")
-        box.setInformativeText("[트레이로] 최소화하면 알람이 계속 동작합니다.")
-        b_tray = box.addButton("트레이로", QMessageBox.AcceptRole)
-        b_quit = box.addButton("완전 종료", QMessageBox.DestructiveRole)
-        box.addButton("취소", QMessageBox.RejectRole)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked == b_tray:
+        # 설정에 따라 묻지 않고 바로 처리한다 (기본: 트레이로 내림)
+        if self.settings.close_to_tray:
             event.ignore()
             self.hide()
             self.tray.showMessage(config.APP_NAME, "트레이에서 계속 실행 중입니다.",
                                   self._app_icon, 3000)
-        elif clicked == b_quit:
-            self._shutdown()
-            event.accept()
-            QApplication.quit()
-        else:
-            event.ignore()
+            return
+        self._shutdown()
+        event.accept()
+        QApplication.quit()
 
     def quit_app(self):
         if QMessageBox.question(
