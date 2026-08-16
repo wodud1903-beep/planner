@@ -455,6 +455,30 @@ def update_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     _write_cells(auth, sheet_id, sheet_name, row, values)
 
 
+def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int) -> None:
+    """고객 한 줄 삭제 — 직접 입력한 칸만 비우고 **수식 칸은 그대로 둔다**.
+
+    줄 자체를 지우면 아래 행이 밀려 다른 사람의 순번까지 바뀌므로,
+    내용만 비워 빈 줄로 만든다. 순번(A)은 값일 때만 함께 비운다
+    (수식이면 시트가 알아서 계산하도록 손대지 않는다).
+    """
+    blank = {key: "" for _ci, key, _label in FIELDS}
+    extra = None
+    try:
+        url = config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"A{row}"))
+        r = requests.get(url, headers=_headers(auth), timeout=20,
+                         params={"valueRenderOption": "FORMULA"})
+        if r.status_code == 200:
+            vals = (r.json() or {}).get("values", [])
+            cur = str(vals[0][0]) if (vals and vals[0]) else ""
+            if not cur.strip().startswith("="):
+                extra = {0: ""}      # 순번이 그냥 숫자면 같이 비운다
+    except Exception:
+        pass
+    _write_cells(auth, sheet_id, sheet_name, row, blank, extra)
+
+
 def sheet_url(sheet_id: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
 
@@ -466,7 +490,7 @@ def sheet_url(sheet_id: str) -> str:
 #    공개해야 한다(시트 서버가 사용자 인증 없이 이미지를 가져오기 때문).
 #    주소를 아는 사람은 볼 수 있으므로, 앱에서 최초 1회 확인을 받는다.
 # ---------------------------------------------------------------------------
-IMAGE_FOLDER_NAME = "일정관리기 견적서"
+IMAGE_FOLDER_NAME = "견적서"
 
 
 def _find_or_create_folder(auth: GoogleAuth, name: str) -> str:
@@ -487,16 +511,20 @@ def _find_or_create_folder(auth: GoogleAuth, name: str) -> str:
 
 
 def upload_image(auth: GoogleAuth, data: bytes, filename: str) -> str:
-    """PNG 바이트를 드라이브에 올리고 '링크 공개' 후 이미지 URL 을 돌려준다."""
-    folder = ""
-    try:
-        folder = _find_or_create_folder(auth, IMAGE_FOLDER_NAME)
-    except Exception:
-        folder = ""
+    """PNG 이미지를 드라이브 '견적서' 폴더에 올리고 '링크 공개' 후 URL 을 돌려준다.
 
-    meta = {"name": filename}
-    if folder:
-        meta["parents"] = [folder]
+    이미지가 아닌 데이터는 올리지 않는다(PNG 시그니처로 확인).
+    """
+    if not data or data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise GoogleError("이미지 파일이 아닙니다. 사진만 등록할 수 있습니다.")
+
+    # 폴더를 못 만들면 업로드를 중단한다 — 드라이브 최상위가 지저분해지지 않게
+    folder = _find_or_create_folder(auth, IMAGE_FOLDER_NAME)
+    if not folder:
+        raise GoogleError(
+            f"드라이브에 '{IMAGE_FOLDER_NAME}' 폴더를 만들지 못했습니다.")
+
+    meta = {"name": filename, "parents": [folder], "mimeType": "image/png"}
 
     # multipart 업로드 (메타데이터 + 파일 본문)
     boundary = "planner-img-boundary"

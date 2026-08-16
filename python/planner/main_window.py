@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
     sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
+    sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
     def __init__(self):
         super().__init__()
@@ -159,6 +160,7 @@ class MainWindow(QMainWindow):
         self.sheet_choices: dict = {}
         self._sheet_last_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
+        self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
         self._ment_copied: set = self._load_ment_log()
 
@@ -180,6 +182,7 @@ class MainWindow(QMainWindow):
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
         self.sig_sheet_ments.connect(self._on_sheet_ments)
+        self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
         # 동기화 푸시 디바운스 타이머
         self._sync_timer = QTimer(self)
@@ -260,6 +263,10 @@ class MainWindow(QMainWindow):
         self.refresh_calendar()
         self.refresh_todo()
         self.refresh_alarm()
+        if getattr(self, "_summary_data", None):
+            self._show_summary(self._summary_data)   # 색상 다시 계산
+        if hasattr(self, "tbl_cust"):
+            self.refresh_customers()
         # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
         if self._cal_win is not None:
             try:
@@ -570,7 +577,8 @@ class MainWindow(QMainWindow):
         self.btn_cust_load.clicked.connect(lambda: self.load_sheet_async(manual=True))
         row.addWidget(self.btn_cust_load)
         for text, slot in [("고객 추가", self.on_customer_add),
-                           ("수정", self.on_customer_edit)]:
+                           ("수정", self.on_customer_edit),
+                           ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
             row.addWidget(b)
@@ -588,7 +596,7 @@ class MainWindow(QMainWindow):
 
         # 상단 발주 현황 (시트 N1:O4)
         self.lbl_cust_summary = QLabel("")
-        self.lbl_cust_summary.setStyleSheet("font-weight:bold;")
+        self.lbl_cust_summary.setTextFormat(Qt.RichText)
         self.lbl_cust_summary.hide()
         v.addWidget(self.lbl_cust_summary)
 
@@ -733,13 +741,28 @@ class MainWindow(QMainWindow):
         self._show_summary(summary)
         self.refresh_customers()
 
+    # 상단 현황 항목별 강조색 (없는 항목은 기본 강조색)
+    SUMMARY_COLORS = {
+        "발주": "#E08A1E",        # 주황 — 진행 중
+        "가망고객": "#7B58C4",     # 보라 — 잠재
+        "지난달출고": "#4A7FB5",   # 파랑 — 지난 실적
+        "이번달출고": "#2E9E5B",   # 초록 — 이번 실적
+    }
+
     def _show_summary(self, summary):
-        """시트 N1:O4 의 발주 현황을 목록 위에 표시."""
+        """시트 N1:O4 의 발주 현황을 목록 위에 색으로 구분해 표시."""
         if not summary:
             self.lbl_cust_summary.hide()
             return
-        self.lbl_cust_summary.setText(
-            "   ·   ".join(f"{label} {value}" for label, value in summary))
+        self._summary_data = list(summary)
+        parts = []
+        for label, value in summary:
+            col = self.SUMMARY_COLORS.get(label.strip(), theme.c("accent"))
+            parts.append(
+                f"<span style='color:{theme.c('subtext')};'>{label}</span>"
+                f"&nbsp;<span style='color:{col};font-size:15px;"
+                f"font-weight:bold;'>{value}</span>")
+        self.lbl_cust_summary.setText("&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(parts))
         self.lbl_cust_summary.show()
 
     def _visible_sheet_rows(self) -> list:
@@ -914,6 +937,47 @@ class MainWindow(QMainWindow):
                 cr.values = old         # 롤백 (UI 갱신은 핸들러에서)
                 self.sig_sheet_written.emit(None, None, str(e))
         threading.Thread(target=worker, daemon=True).start()
+
+    def on_customer_del(self):
+        if not self._sheet_ready():
+            return
+        cr = self._sel_customer()
+        if cr is None:
+            QMessageBox.information(self, config.APP_NAME, "삭제할 고객을 선택하세요.")
+            return
+        if cr in self._sheet_pending:
+            self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 삭제하세요.")
+            return
+        if QMessageBox.question(
+                self, config.APP_NAME,
+                f"'{cr.get('customer')}' 의 입력 내용을 모두 지울까요?\n"
+                "(합계·안내멘트 같은 함수 칸은 그대로 두고, 직접 입력한 값만 지웁니다)"
+        ) != QMessageBox.Yes:
+            return
+
+        # 화면에서 먼저 지우고, 시트 반영은 뒤에서
+        try:
+            self.sheet_rows.remove(cr)
+        except ValueError:
+            pass
+        self.refresh_customers()
+
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+
+        def worker():
+            try:
+                sheets.clear_row(self.gauth, sid, sname, cr.row)
+                self.sig_sheet_written.emit(None, cr.row, "")
+            except Exception as e:
+                self.sig_sheet_deleted_fail.emit(cr, str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_delete_fail(self, cr, err: str):
+        """삭제 실패 → 지웠던 행을 되살린다."""
+        if cr not in self.sheet_rows:
+            self.sheet_rows.append(cr)
+        self.refresh_customers()
+        QMessageBox.warning(self, config.APP_NAME, "삭제 실패:\n" + err)
 
     def _on_sheet_written(self, pend, newrow, err: str):
         if err:
