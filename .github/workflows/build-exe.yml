@@ -61,12 +61,20 @@ jobs:
         working-directory: python
         run: pyinstaller planner.spec --noconfirm --clean
 
-      - name: 아티팩트 업로드
+      # 아티팩트는 '릴리스를 만들지 않는 빌드' 에서만 올린다.
+      # 릴리스 빌드에서는 exe 가 릴리스에 첨부되므로 아티팩트가 중복이고,
+      # 매 빌드 52MB 씩 쌓여 저장 용량 한도를 금방 채운다(실제로 한도 초과로
+      # 업로드가 실패하면서 릴리스 단계까지 막혔다).
+      # 한도에 걸려도 릴리스는 나가야 하므로 continue-on-error 를 둔다.
+      - name: 아티팩트 업로드 (릴리스 없는 빌드만)
+        if: ${{ !(startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: 일정관리기-windows
           path: python/dist/일정관리기.exe
           if-no-files-found: error
+          retention-days: 5
 
       - name: 릴리스 배포 (태그 push / release / 수동입력 태그)
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
