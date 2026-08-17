@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
     sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
     sig_sheet_docs = Signal(object)                  # {행번호: S열 =IMAGE() 수식}
+    sig_sheet_uids = Signal(object)                  # {행번호: U열 고객ID}
     sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
     def __init__(self):
@@ -203,6 +204,7 @@ class MainWindow(QMainWindow):
         self.sig_sheet_written.connect(self._on_sheet_written)
         self.sig_sheet_ments.connect(self._on_sheet_ments)
         self.sig_sheet_docs.connect(self._on_sheet_docs)
+        self.sig_sheet_uids.connect(self._on_sheet_uids)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
         # 동기화 푸시 디바운스 타이머
@@ -809,6 +811,14 @@ class MainWindow(QMainWindow):
                         self.sig_sheet_docs.emit(docs)
                 except Exception:
                     pass
+                # 4) 고객ID(U열) — 아직 U열이 없는 시트면 그냥 빈 값이다.
+                #    목록 조회에 묶으면 U열 없는 시트에서 목록까지 통째로 실패한다.
+                try:
+                    uids = sheets.read_uids(self.gauth, sid, sname)
+                    if uids:
+                        self.sig_sheet_uids.emit(uids)
+                except Exception:
+                    pass
             except Exception as e:
                 self.sig_sheet_rows.emit(None, 0, str(e))
         threading.Thread(target=worker, daemon=True).start()
@@ -836,6 +846,13 @@ class MainWindow(QMainWindow):
         self.lbl_cust_summary.hide()
         self._summary_data = []
         self.refresh_customers()
+
+    def _on_sheet_uids(self, uids: dict):
+        """고객ID(U열)가 뒤늦게 도착 → 해당 행에 채운다."""
+        for cr in self.sheet_rows:
+            v = uids.get(cr.row)
+            if v:
+                cr.uid = v
 
     def _on_sheet_docs(self, docs: dict):
         """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채운다."""
@@ -1020,6 +1037,7 @@ class MainWindow(QMainWindow):
         name = (vals.get("customer") or "고객").replace("/", "_")[:40]
 
         rows_snapshot = list(self.sheet_rows)
+        hdr_row = self._sheet_header_row
 
         def worker():
             try:
@@ -1031,6 +1049,12 @@ class MainWindow(QMainWindow):
                     v["doc"] = sheets.image_formula(url)
                 # 순번은 앱이 계산해서 넣는다(A열이 수식이면 "" → 수식에 맡김)
                 seq = sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot)
+                try:
+                    # U열이 없는 시트면 여기서 만들어 둔다(실패해도 등록은 진행)
+                    if hdr_row:
+                        sheets.ensure_uid_column(self.gauth, sid, sname, hdr_row)
+                except Exception:
+                    pass
                 newrow = sheets.append_row(self.gauth, sid, sname, v, last,
                                            seq=seq, uid=uid)
                 self.sig_sheet_written.emit(pend, newrow, "")
@@ -1128,8 +1152,14 @@ class MainWindow(QMainWindow):
                     if hdr:
                         sheets.ensure_uid_column(self.gauth, sid, sname, hdr)
                     sheets.write_uid(self.gauth, sid, sname, cr.row, uid)
-                except Exception:
-                    pass      # ID 를 못 적어도 이 창은 열린다 (다음에 다시 시도)
+                except Exception as e:
+                    # 조용히 넘기면 안 된다. ID 가 시트에 안 남으면 다음에 열 때
+                    # 새 ID 가 발급돼 지금 적은 메모를 찾지 못하게 된다.
+                    self.sig_toast.emit(
+                        config.APP_NAME,
+                        "고객ID를 시트에 기록하지 못했습니다.\n"
+                        "지금 남긴 메모가 다음에 안 보일 수 있습니다.\n"
+                        + str(e).splitlines()[0][:80])
             threading.Thread(target=worker, daemon=True).start()
 
         notes = self._notes.get(uid, [])

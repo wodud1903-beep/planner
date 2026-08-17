@@ -269,7 +269,6 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     r = requests.get(url, headers=_headers(auth), timeout=30, params=[
         ("ranges", f"'{sheet_name}'!A1:Q"),
         ("ranges", f"'{sheet_name}'!S1:T"),
-        ("ranges", f"'{sheet_name}'!U1:U"),      # 앱 전용 고객ID(숨김 열)
         ("valueRenderOption", "FORMATTED_VALUE"),
         ("dateTimeRenderOption", "FORMATTED_STRING"),
     ])
@@ -277,19 +276,16 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     ranges = (r.json() or {}).get("valueRanges", [])
     left = (ranges[0].get("values", []) if len(ranges) > 0 else [])    # A~Q
     right = (ranges[1].get("values", []) if len(ranges) > 1 else [])   # S~T
-    uids = (ranges[2].get("values", []) if len(ranges) > 2 else [])    # U
 
     # A~Q 와 S~T 를 한 줄로 합친다 (R 자리는 빈칸으로 채워 열 번호를 맞춘다)
     values = []
-    for i in range(max(len(left), len(right), len(uids))):
+    for i in range(max(len(left), len(right))):
         a = list(left[i]) if i < len(left) else []
         b = list(right[i]) if i < len(right) else []
-        u = list(uids[i]) if i < len(uids) else []
         a += [""] * (17 - len(a))      # A..Q = 17칸
         a.append("")                   # R 자리(멘트는 뒤에서 채움)
         b += [""] * (2 - len(b))       # S, T
         a += b
-        a += (u + [""])[:1]            # U (고객ID)
         values.append(a)
 
     header_idx = -1
@@ -312,7 +308,7 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
         def cell(idx: int) -> str:
             return (row[idx] if len(row) > idx else "") or ""
         cr = CustomerRow(row=i + 1, seq=cell(0).strip(), total=cell(7).strip(),
-                         ment=cell(COL_MENT).rstrip(), uid=cell(COL_UID).strip())
+                         ment=cell(COL_MENT).rstrip())
         for ci, key, _label in FIELDS:
             cr.values[key] = cell(ci).strip()
         if not cr.get("customer"):
@@ -357,6 +353,27 @@ def new_uid() -> str:
     return uuid.uuid4().hex[:16]
 
 
+def read_uids(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
+    """U열(고객ID)을 읽는다 → {행번호: uid}.
+
+    **목록 조회(batchGet)에 넣으면 안 된다.** 시트가 T열까지만 있으면 U 범위가
+    문법적으로는 맞아도 격자 밖이라 400 이 나고, 그러면 요청에 묶인 고객 목록까지
+    통째로 실패한다(실제로 그렇게 시트 전체가 안 열렸다).
+    그래서 따로 읽고, 실패하면 그냥 빈 값으로 둔다 — 이력 기능만 잠시 못 쓸 뿐이다.
+    """
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_UID)}1:{col_letter(COL_UID)}"))
+    r = requests.get(url, headers=_headers(auth), timeout=20)
+    if r.status_code != 200:
+        return {}                     # U열이 아직 없는 시트 — 조용히 넘어간다
+    out = {}
+    for i, row in enumerate((r.json() or {}).get("values", [])):
+        v = (row[0] if row else "") or ""
+        if str(v).strip():
+            out[i + 1] = str(v).strip()
+    return out
+
+
 def write_uid(auth: GoogleAuth, sheet_id: str, sheet_name: str,
               row: int, uid: str) -> None:
     """U열에 고객ID 를 적는다 (다른 칸은 건드리지 않는다)."""
@@ -368,13 +385,44 @@ def write_uid(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     _check(r)
 
 
+def _sheet_props(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
+    """시트(탭)의 gid 와 격자 크기."""
+    url = config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
+    r = requests.get(url, headers=_headers(auth), timeout=30,
+                     params={"fields": "sheets(properties(sheetId,title,gridProperties))"})
+    _check(r)
+    for sh in (r.json() or {}).get("sheets", []):
+        p = sh.get("properties", {})
+        if p.get("title") == sheet_name:
+            g = p.get("gridProperties", {}) or {}
+            return {"gid": int(p.get("sheetId", 0)),
+                    "cols": int(g.get("columnCount", 0)),
+                    "rows": int(g.get("rowCount", 0))}
+    raise GoogleError(f"'{sheet_name}' 시트를 찾지 못했습니다.")
+
+
 def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
                       header_row: int) -> None:
-    """U열에 머리글을 넣고 열을 숨긴다. 이미 돼 있으면 아무 것도 안 한다.
+    """U열을 쓸 수 있게 준비한다 (열 확보 → 머리글 → 숨김).
 
-    사람이 볼 값이 아니라서 숨기지만, 혹시 열을 펼쳐 봤을 때 무엇인지 알 수 있게
-    머리글은 남긴다. 실패해도(권한/구조) 기능 자체는 동작하므로 조용히 넘어간다.
+    시트가 T열까지만 있으면 U 는 아예 존재하지 않아 읽기·쓰기 모두 400 이 난다.
+    그럴 땐 먼저 열을 늘린다. 사람이 볼 값이 아니라 숨기지만, 열을 펼쳐 봤을 때
+    무엇인지 알 수 있도록 머리글은 남긴다.
     """
+    props = _sheet_props(auth, sheet_id, sheet_name)
+    gid = props["gid"]
+    reqs = []
+    if props["cols"] <= COL_UID:
+        # 격자에 U열이 없다 → 필요한 만큼 열을 추가한다
+        reqs.append({"appendDimension": {
+            "sheetId": gid, "dimension": "COLUMNS",
+            "length": COL_UID + 1 - props["cols"],
+        }})
+    if reqs:
+        rb = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+                           headers=_headers(auth), timeout=30, json={"requests": reqs})
+        _check(rb)
+
     a1 = f"{col_letter(COL_UID)}{header_row}"
     url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, a1))
     r = requests.get(url, headers=_headers(auth), timeout=20)
@@ -389,15 +437,15 @@ def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
                       json={"values": [[UID_HEADER]]})
     _check(rp)
     # 열 숨기기
-    gid = _sheet_gid(auth, sheet_id, sheet_name)
-    req = {"requests": [{"updateDimensionProperties": {
-        "range": {"sheetId": gid, "dimension": "COLUMNS",
-                  "startIndex": COL_UID, "endIndex": COL_UID + 1},
-        "properties": {"hiddenByUser": True},
-        "fields": "hiddenByUser",
-    }}]}
-    rb = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
-                       headers=_headers(auth), timeout=30, json=req)
+    rb = requests.post(
+        config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+        headers=_headers(auth), timeout=30,
+        json={"requests": [{"updateDimensionProperties": {
+            "range": {"sheetId": gid, "dimension": "COLUMNS",
+                      "startIndex": COL_UID, "endIndex": COL_UID + 1},
+            "properties": {"hiddenByUser": True},
+            "fields": "hiddenByUser",
+        }}]})
     _check(rb)
 
 
