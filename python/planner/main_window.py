@@ -29,6 +29,7 @@ from . import (
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
+from .customer_history import CustomerHistoryDialog
 from .edit_dialog import EditDialog
 from .icon import make_icon
 from .models import (
@@ -172,6 +173,7 @@ class MainWindow(QMainWindow):
         self.sheet_rows: list = []
         self.sheet_choices: dict = {}
         self._sheet_last_row = 0
+        self._sheet_header_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
         self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
         self._terms_map: dict = {}       # 금융사 → 자주 쓴 계약조건
@@ -179,6 +181,8 @@ class MainWindow(QMainWindow):
         self._fired_cal_alarms: set = set()   # (일정, 분) — 중복 알람 방지
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
         self._ment_copied: set = self._load_ment_log()
+        # 고객ID → [{date, text}] — 이력 타임라인의 직접 메모
+        self._notes: dict = self._load_notes()
 
         # 저장된 테마 반영
         theme.set_theme(self.settings.dark_mode)
@@ -365,6 +369,7 @@ class MainWindow(QMainWindow):
         self.settings = AppSettings.load(self.cfg_file)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
         self._ment_copied = self._load_ment_log()
+        self._notes = self._load_notes()
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -625,6 +630,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_cust_load)
         for text, slot in [("고객 추가", self.on_customer_add),
                            ("수정", self.on_customer_edit),
+                           ("이력", self.on_customer_history),
                            ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -678,9 +684,32 @@ class MainWindow(QMainWindow):
     def _save_ment_log(self):
         try:
             import json
-            config.data_file("ment_copied.json").write_text(
-                json.dumps(sorted(self._ment_copied), ensure_ascii=False),
-                encoding="utf-8")
+            config.atomic_write(
+                config.data_file("ment_copied.json"),
+                json.dumps(sorted(self._ment_copied), ensure_ascii=False))
+        except Exception:
+            pass
+        self._touch_sync()
+
+    # ---- 고객 메모 (이력 타임라인) ----
+    def _load_notes(self) -> dict:
+        try:
+            import json
+            p = config.data_file("customer_notes.json")
+            if p.exists():
+                o = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(o, dict):
+                    return o
+        except Exception:
+            pass
+        return {}
+
+    def _save_notes(self):
+        try:
+            import json
+            config.atomic_write(
+                config.data_file("customer_notes.json"),
+                json.dumps(self._notes, ensure_ascii=False, indent=2))
         except Exception:
             pass
         self._touch_sync()
@@ -751,7 +780,7 @@ class MainWindow(QMainWindow):
                 # 1) 목록 + 요약 (요청 1회, 분량 큰 안내멘트는 제외)
                 _hdr, rows, summary = sheets.read_rows(self.gauth, sid, sname)
                 last = rows[-1].row if rows else _hdr
-                self.sig_sheet_rows.emit((rows, summary), last, "")
+                self.sig_sheet_rows.emit((rows, summary, _hdr), last, "")
                 # 2) 안내멘트는 목록을 띄운 뒤 뒤이어 채운다
                 try:
                     ments = sheets.read_ments(self.gauth, sid, sname)
@@ -786,6 +815,7 @@ class MainWindow(QMainWindow):
         self.sheet_rows = []
         self._sheet_pending = []
         self._sheet_last_row = 0
+        self._sheet_header_row = 0
         self._sheet_loaded = False
         self.sheet_choices = {}
         self._terms_map = {}
@@ -806,9 +836,10 @@ class MainWindow(QMainWindow):
             self.lbl_cust.setText("불러오기 실패")
             QMessageBox.warning(self, config.APP_NAME, "시트를 불러오지 못했습니다:\n" + err)
             return
-        rows, summary = payload
+        rows, summary, hdr = payload
         self.sheet_rows = rows
         self._sheet_last_row = last_row
+        self._sheet_header_row = hdr
         self.sheet_choices = sheets.choices(rows)
         self._terms_map = sheets.terms_by_finance(rows)
         self._sheet_pending = []
@@ -965,7 +996,8 @@ class MainWindow(QMainWindow):
         self._sheet_last_row = last + 1
 
         # 화면에 먼저 반영 (임시 행)
-        pend = sheets.CustomerRow(row=last + 1, seq="", total="")
+        uid = sheets.new_uid()          # 메모/이력을 붙들어 둘 불변 ID
+        pend = sheets.CustomerRow(row=last + 1, seq="", total="", uid=uid)
         pend.values = dict(vals)
         self._sheet_pending.append(pend)
         self.refresh_customers()
@@ -985,7 +1017,8 @@ class MainWindow(QMainWindow):
                     v["doc"] = sheets.image_formula(url)
                 # 순번은 앱이 계산해서 넣는다(A열이 수식이면 "" → 수식에 맡김)
                 seq = sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot)
-                newrow = sheets.append_row(self.gauth, sid, sname, v, last, seq=seq)
+                newrow = sheets.append_row(self.gauth, sid, sname, v, last,
+                                           seq=seq, uid=uid)
                 self.sig_sheet_written.emit(pend, newrow, "")
             except Exception as e:
                 self.sig_sheet_written.emit(pend, None, str(e))
@@ -1053,6 +1086,47 @@ class MainWindow(QMainWindow):
                 cr.values = old         # 롤백 (UI 갱신은 핸들러에서)
                 self.sig_sheet_written.emit(None, None, str(e))
         threading.Thread(target=worker, daemon=True).start()
+
+    def on_customer_history(self):
+        """선택한 고객의 이력 타임라인."""
+        if not self._sheet_ready():
+            return
+        cr = self._sel_customer()
+        if cr is None:
+            QMessageBox.information(self, config.APP_NAME, "이력을 볼 고객을 선택하세요.")
+            return
+        if cr in self._sheet_pending:
+            self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 여세요.")
+            return
+
+        uid = (cr.uid or "").strip()
+        if not uid:
+            # v1.1.25 이전에 등록된 고객은 ID 가 없다. 이력을 처음 열 때 그 고객에게만
+            # 발급한다(전체 일괄 쓰기는 수백 셀 쓰기가 되고 중간에 실패하면 절반만 적힌다).
+            uid = sheets.new_uid()
+            cr.uid = uid
+            sid = self.settings.sheet_id.strip()
+            sname = self.settings.sheet_name.strip()
+            hdr = self._sheet_header_row
+
+            def worker():
+                try:
+                    if hdr:
+                        sheets.ensure_uid_column(self.gauth, sid, sname, hdr)
+                    sheets.write_uid(self.gauth, sid, sname, cr.row, uid)
+                except Exception:
+                    pass      # ID 를 못 적어도 이 창은 열린다 (다음에 다시 시도)
+            threading.Thread(target=worker, daemon=True).start()
+
+        notes = self._notes.get(uid, [])
+        new_notes = CustomerHistoryDialog.run(
+            cr, notes, self._ment_key(cr) in self._ment_copied, self)
+        if new_notes != notes:
+            if new_notes:
+                self._notes[uid] = new_notes
+            else:
+                self._notes.pop(uid, None)
+            self._save_notes()
 
     def on_customer_del(self):
         if not self._sheet_ready():
@@ -2054,6 +2128,30 @@ class MainWindow(QMainWindow):
         out.sort(key=lambda x: x[1])
         return out
 
+    def _expiring_customers(self, today):
+        """만기가 다가온(또는 막 지난) 재계약 대상.
+
+        반환: [(행, 만기일, D-day)] — 급한 순.
+        """
+        months = int(getattr(self.settings, "expiry_months", 0) or 0)
+        if months <= 0:
+            return []                      # 0 = 기능 끔
+        ahead = months * 31
+        out = []
+        for cr in self.sheet_rows:
+            if cr.get("status").strip() == "취소":
+                continue                   # 취소된 계약은 만기도 재계약도 없다
+            d = sheets.expiry_date(cr)
+            if d is None:
+                continue                   # 계약조건에 개월 수가 없으면 계산 불가
+            left = (d - today).days
+            # 이미 지난 건도 한 달간은 남겨 둔다 — 놓친 건이 조용히 사라지면 안 된다
+            if not (-30 <= left <= ahead):
+                continue
+            out.append((cr, d, left))
+        out.sort(key=lambda x: x[2])
+        return out
+
     def build_briefing(self) -> str:
         today = date.today()
         lines = [datetime.now().strftime("%Y년 %m월 %d일 (%a)"), ""]
@@ -2101,6 +2199,19 @@ class MainWindow(QMainWindow):
                 tag = "오늘 출고" if dday == 0 else f"출고 {dday}일차"
                 lines.append(f"  · {cr.get('customer')}  ({tag}, {d.strftime('%m-%d')})")
             lines.append("  → [고객관리] 탭에서 [복사] 를 눌러 안내멘트를 보내세요.")
+
+        # ---- 만기 재계약 (만기 N개월 전 ~ 만기 후 30일) ----
+        exp = self._expiring_customers(today)
+        if exp:
+            lines += ["", "━━━━━━━━━━━━━━━━━━━━",
+                      f"[만기 재계약]  {len(exp)}건"]
+            for cr, d, left in exp[:12]:
+                tag = f"만기 D-{left}" if left > 0 else (
+                    "오늘 만기" if left == 0 else f"만기 {-left}일 지남")
+                lines.append(f"  · {cr.get('customer')}  ({tag}, {d:%Y-%m-%d})")
+            if len(exp) > 12:
+                lines.append(f"  … 외 {len(exp) - 12}건")
+            lines.append("  → [고객관리] 탭에서 [이력] 로 상담 내역을 확인하고 재계약을 준비하세요.")
 
         lines += ["", "━━━━━━━━━━━━━━━━━━━━", "[이번주 요약]  (오늘~7일)",
                   f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건"]

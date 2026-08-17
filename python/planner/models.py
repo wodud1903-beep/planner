@@ -257,6 +257,8 @@ class AppSettings:
     # 구글 캘린더 알림(리마인더) — PC 를 꺼도 휴대폰으로 알림이 온다
     cal_reminder_on: bool = True
     cal_reminder_min: int = 30
+    # 만기 재계약 알림: 만기 몇 개월 전부터 브리핑에 띄울지 (0 = 끔)
+    expiry_months: int = 3
     # 구글 시트 고객관리 연동
     sheet_on: bool = False
     sheet_id: str = config.DEF_SHEET_ID
@@ -281,6 +283,7 @@ class AppSettings:
             "closeToTray": self.close_to_tray,
             "calReminderOn": self.cal_reminder_on,
             "calReminderMin": self.cal_reminder_min,
+            "expiryMonths": self.expiry_months,
             "sheetOn": self.sheet_on,
             "sheetId": self.sheet_id,
             "sheetName": self.sheet_name,
@@ -317,6 +320,12 @@ class AppSettings:
             s.cal_reminder_min = int(o.get("calReminderMin", 30))
         except Exception:
             s.cal_reminder_min = 30
+        # 구버전 설정 파일에는 이 키가 없다 → 기본 3개월.
+        # 이 파일은 Drive 로 다른 PC 에도 전파되므로 없는 키에 절대 터지면 안 된다.
+        try:
+            s.expiry_months = max(0, min(24, int(o.get("expiryMonths", 3))))
+        except Exception:
+            s.expiry_months = 3
         s.sheet_on = bool(o.get("sheetOn", False))
         s.sheet_id = o.get("sheetId", config.DEF_SHEET_ID) or config.DEF_SHEET_ID
         s.sheet_name = o.get("sheetName", config.DEF_SHEET_NAME) or config.DEF_SHEET_NAME

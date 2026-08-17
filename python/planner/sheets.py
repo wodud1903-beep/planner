@@ -70,6 +70,12 @@ MONEY_FIELDS = ["price", "fee", "incentive"]
 
 LAST_COL = 19                           # T
 
+# U 고객ID — 앱이 쓰는 숨김 열.
+# 고객명·순번은 언제든 바뀌므로(이름 수정, 브라우저에서 행 삭제 시 순번 밀림)
+# 메모/이력을 붙들어 둘 불변 키가 필요하다. 사람이 볼 값이 아니라 열을 숨겨 둔다.
+COL_UID = 20
+UID_HEADER = "고객ID(앱 전용 · 지우지 마세요)"
+
 # 고객 추가는 한 번에 하나씩 (행 번호가 겹쳐 앞 고객이 덮어써지는 것을 막는다)
 _APPEND_LOCK = threading.Lock()
 
@@ -166,6 +172,7 @@ class CustomerRow:
     seq: str = ""            # 순번 (자동)
     total: str = ""          # 합계 (자동)
     ment: str = ""           # R 고객안내멘트 (자동, 복사용)
+    uid: str = ""            # U 고객ID (앱 전용 숨김 열 — 메모/이력을 붙들어 두는 키)
     values: dict = field(default_factory=dict)   # 직접기재 필드키 → 값
 
     def get(self, key: str) -> str:
@@ -262,6 +269,7 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     r = requests.get(url, headers=_headers(auth), timeout=30, params=[
         ("ranges", f"'{sheet_name}'!A1:Q"),
         ("ranges", f"'{sheet_name}'!S1:T"),
+        ("ranges", f"'{sheet_name}'!U1:U"),      # 앱 전용 고객ID(숨김 열)
         ("valueRenderOption", "FORMATTED_VALUE"),
         ("dateTimeRenderOption", "FORMATTED_STRING"),
     ])
@@ -269,15 +277,19 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     ranges = (r.json() or {}).get("valueRanges", [])
     left = (ranges[0].get("values", []) if len(ranges) > 0 else [])    # A~Q
     right = (ranges[1].get("values", []) if len(ranges) > 1 else [])   # S~T
+    uids = (ranges[2].get("values", []) if len(ranges) > 2 else [])    # U
 
     # A~Q 와 S~T 를 한 줄로 합친다 (R 자리는 빈칸으로 채워 열 번호를 맞춘다)
     values = []
-    for i in range(max(len(left), len(right))):
+    for i in range(max(len(left), len(right), len(uids))):
         a = list(left[i]) if i < len(left) else []
         b = list(right[i]) if i < len(right) else []
+        u = list(uids[i]) if i < len(uids) else []
         a += [""] * (17 - len(a))      # A..Q = 17칸
         a.append("")                   # R 자리(멘트는 뒤에서 채움)
-        a += b                         # S, T
+        b += [""] * (2 - len(b))       # S, T
+        a += b
+        a += (u + [""])[:1]            # U (고객ID)
         values.append(a)
 
     header_idx = -1
@@ -300,7 +312,7 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
         def cell(idx: int) -> str:
             return (row[idx] if len(row) > idx else "") or ""
         cr = CustomerRow(row=i + 1, seq=cell(0).strip(), total=cell(7).strip(),
-                         ment=cell(COL_MENT).rstrip())
+                         ment=cell(COL_MENT).rstrip(), uid=cell(COL_UID).strip())
         for ci, key, _label in FIELDS:
             cr.values[key] = cell(ci).strip()
         if not cr.get("customer"):
@@ -337,6 +349,56 @@ def read_ments(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
         if v.strip():
             out[i + 1] = v.rstrip()
     return out
+
+
+def new_uid() -> str:
+    """새 고객ID."""
+    import uuid
+    return uuid.uuid4().hex[:16]
+
+
+def write_uid(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+              row: int, uid: str) -> None:
+    """U열에 고객ID 를 적는다 (다른 칸은 건드리지 않는다)."""
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_UID)}{row}"))
+    r = requests.put(url, headers=_headers(auth), timeout=20,
+                     params={"valueInputOption": "RAW"},
+                     json={"values": [[uid]]})
+    _check(r)
+
+
+def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+                      header_row: int) -> None:
+    """U열에 머리글을 넣고 열을 숨긴다. 이미 돼 있으면 아무 것도 안 한다.
+
+    사람이 볼 값이 아니라서 숨기지만, 혹시 열을 펼쳐 봤을 때 무엇인지 알 수 있게
+    머리글은 남긴다. 실패해도(권한/구조) 기능 자체는 동작하므로 조용히 넘어간다.
+    """
+    a1 = f"{col_letter(COL_UID)}{header_row}"
+    url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, a1))
+    r = requests.get(url, headers=_headers(auth), timeout=20)
+    cur = ""
+    if r.status_code == 200:
+        vals = (r.json() or {}).get("values", [])
+        cur = str(vals[0][0]) if (vals and vals[0]) else ""
+    if cur.strip():
+        return                                   # 이미 준비됨
+    rp = requests.put(url, headers=_headers(auth), timeout=20,
+                      params={"valueInputOption": "RAW"},
+                      json={"values": [[UID_HEADER]]})
+    _check(rp)
+    # 열 숨기기
+    gid = _sheet_gid(auth, sheet_id, sheet_name)
+    req = {"requests": [{"updateDimensionProperties": {
+        "range": {"sheetId": gid, "dimension": "COLUMNS",
+                  "startIndex": COL_UID, "endIndex": COL_UID + 1},
+        "properties": {"hiddenByUser": True},
+        "fields": "hiddenByUser",
+    }}]}
+    rb = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+                       headers=_headers(auth), timeout=30, json=req)
+    _check(rb)
 
 
 def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
@@ -385,6 +447,41 @@ def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,
         if s.isdigit():
             mx = max(mx, int(s))
     return str(mx + 1) if mx else ""
+
+
+def contract_months(terms: str) -> int | None:
+    """계약조건 텍스트에서 계약기간(개월)을 뽑는다.
+
+    '60개월 / 2만km / 무보증' → 60.  시트에 계약기간 열이 따로 없어서
+    자유 입력인 계약조건에서 읽어낸다. 표기가 없으면 None (그 고객은 만기 계산에서 제외).
+    """
+    t = (terms or "").strip()
+    if not t:
+        return None
+    m = re.search(r"(\d{1,3})\s*개\s*월", t)
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except Exception:
+        return None
+    return n if 1 <= n <= 120 else None
+
+
+def expiry_date(row: CustomerRow):
+    """계약 만기일. 계산할 수 없으면 None.
+
+    리스 개시는 보통 출고 시점이라 **출고일 + 계약기간**으로 본다.
+    아직 출고 전이면 계약일로 잠정 계산한다.
+    """
+    n = contract_months(row.get("terms"))
+    if not n:
+        return None
+    base = parse_date(row.get("deliver_date")) or parse_date(row.get("contract_date"))
+    if base is None:
+        return None
+    from .followup import add_months      # 말일 보정이 이미 검증돼 있어 재사용
+    return add_months(base, n)
 
 
 def terms_by_finance(rows: list[CustomerRow]) -> dict:
@@ -530,7 +627,7 @@ def _copy_row_style(auth: GoogleAuth, sheet_id: str, gid: int,
 
 
 def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-               values: dict, last_row: int, seq: str = "") -> int:
+               values: dict, last_row: int, seq: str = "", uid: str = "") -> int:
     """맨 아래에 고객 한 줄 추가. 새 행 번호를 반환.
 
     순서: (1) 직전 행의 서식·드롭다운·수식 복사 → (2) 직접기재 칸 + 순번 기록.
@@ -549,6 +646,13 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
             pass
         extra = {0: seq} if seq else None   # A열 순번 (수식이면 seq="" 라 건너뜀)
         _write_cells(auth, sheet_id, sheet_name, new_row, values, extra)
+        if uid:
+            # 고객ID 는 별도로 쓴다 — _write_cells 는 FIELDS(직접기재 칸)만 다루고,
+            # U 는 사람이 만지는 칸이 아니라서 그 목록에 넣지 않았다.
+            try:
+                write_uid(auth, sheet_id, sheet_name, new_row, uid)
+            except Exception:
+                pass       # ID 를 못 적어도 고객 등록 자체는 성공시킨다
         return new_row
 
 
@@ -580,6 +684,12 @@ def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int) -> Non
     except Exception:
         pass
     _write_cells(auth, sheet_id, sheet_name, row, blank, extra)
+    # 고객ID 도 비운다 — 이 행을 새 고객이 재사용할 때 지운 고객의 이력이
+    # 그대로 따라붙으면 안 된다.
+    try:
+        write_uid(auth, sheet_id, sheet_name, row, "")
+    except Exception:
+        pass
 
 
 def sheet_url(sheet_id: str) -> str:

@@ -111,6 +111,13 @@ class SettingsDialog(QDialog):
         sl.addRow("시트 주소", self.ed_sheet_id)
         self.ed_sheet_name = QLineEdit()
         sl.addRow("시트(탭) 이름", self.ed_sheet_name)
+        self.sp_expiry = QSpinBox()
+        self.sp_expiry.setRange(0, 24)
+        self.sp_expiry.setSuffix(" 개월 전부터 (0 = 끔)")
+        sl.addRow("만기 재계약 알림", self.sp_expiry)
+        sl.addRow(QLabel(
+            "계약조건의 '60개월' 같은 표기로 만기일을 계산해\n"
+            "시작 브리핑에 재계약 대상 고객을 알려줍니다."))
         sl.addRow(QLabel(
             "함수 칸(순번·합계·고객센터번호·사고접수연락처·고객안내멘트)은\n"
             "프로그램이 건드리지 않고 시트 수식 그대로 둡니다.\n"
@@ -189,6 +196,7 @@ class SettingsDialog(QDialog):
         self.chk_sheet.setChecked(s.sheet_on)
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
+        self.sp_expiry.setValue(s.expiry_months)
         self.chk_dark.setChecked(s.dark_mode)
         self.cmb_close.setCurrentIndex(0 if s.close_to_tray else 1)
         self.chk_hot.setChecked(s.hot_on)
@@ -214,6 +222,7 @@ class SettingsDialog(QDialog):
         # 주소를 통째로 붙여넣어도 ID 만 뽑아 저장 (사용자가 ID 를 찾을 필요 없게)
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
+        s.expiry_months = self.sp_expiry.value()
         s.dark_mode = self.chk_dark.isChecked()
         s.close_to_tray = bool(self.cmb_close.currentData())
         s.hot_on = self.chk_hot.isChecked()
