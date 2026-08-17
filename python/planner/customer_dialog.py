@@ -157,12 +157,13 @@ class CustomerDialog(QDialog):
     ]
 
     def __init__(self, caption: str, values: dict, choices: dict,
-                 ment: str = "", parent=None):
+                 ment: str = "", parent=None, terms_map: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle(caption)
         self.resize(600, 760)
         self.widgets: dict = {}
         self._ment = ment or ""
+        self._terms_map = terms_map or {}     # 금융사 → 자주 쓴 계약조건
 
         root = QVBoxLayout(self)
 
@@ -215,7 +216,20 @@ class CustomerDialog(QDialog):
                 w.setPlainText(cur)
                 # Tab 으로 다음 입력창으로 넘어가게 (기본은 Tab 문자가 입력됨)
                 w.setTabChangesFocus(True)
-                form.addRow(label, w)
+                if key == "terms":
+                    # 금융사별로 자주 쓴 계약조건을 골라 넣을 수 있게
+                    holder = QWidget()
+                    vl = QVBoxLayout(holder)
+                    vl.setContentsMargins(0, 0, 0, 0)
+                    vl.setSpacing(3)
+                    self.cmb_terms = QComboBox()
+                    self.cmb_terms.setToolTip("이 금융사로 자주 쓴 계약조건")
+                    self.cmb_terms.activated.connect(self._pick_terms)
+                    vl.addWidget(self.cmb_terms)
+                    vl.addWidget(w)
+                    form.addRow(label, holder)
+                else:
+                    form.addRow(label, w)
             else:
                 w = QLineEdit()
                 w.setText(cur)
@@ -224,6 +238,12 @@ class CustomerDialog(QDialog):
 
         scroll.setWidget(inner)
         root.addWidget(scroll, 1)
+
+        # 금융사가 바뀌면 계약조건 후보를 그 금융사 것으로 교체
+        fin_w = self.widgets.get("finance", (None, ""))[0]
+        if fin_w is not None and hasattr(self, "cmb_terms"):
+            fin_w.currentTextChanged.connect(self._reload_terms)
+            self._reload_terms(fin_w.currentText())
 
         # 고객안내멘트 복사 (시트 R열 — 자동 계산되는 값)
         mrow = QHBoxLayout()
@@ -247,6 +267,29 @@ class CustomerDialog(QDialog):
         row.addWidget(ok)
         row.addWidget(cancel)
         root.addLayout(row)
+
+    def _reload_terms(self, finance: str):
+        """선택한 금융사로 자주 쓴 계약조건을 목록에 채운다."""
+        items = self._terms_map.get((finance or "").strip(), [])
+        self.cmb_terms.blockSignals(True)
+        self.cmb_terms.clear()
+        if items:
+            self.cmb_terms.addItem(f"↓ 자주 쓴 계약조건 {len(items)}개 — 골라서 넣기")
+            for t in items[:12]:
+                self.cmb_terms.addItem(t)
+            self.cmb_terms.setEnabled(True)
+        else:
+            self.cmb_terms.addItem("(이 금융사로 저장된 계약조건이 아직 없습니다)")
+            self.cmb_terms.setEnabled(False)
+        self.cmb_terms.setCurrentIndex(0)
+        self.cmb_terms.blockSignals(False)
+
+    def _pick_terms(self, idx: int):
+        if idx <= 0:
+            return
+        w, _k = self.widgets["terms"]
+        w.setPlainText(self.cmb_terms.itemText(idx))
+        self.cmb_terms.setCurrentIndex(0)
 
     def _copy_ment(self):
         QGuiApplication.clipboard().setText(self._ment)
@@ -282,9 +325,10 @@ class CustomerDialog(QDialog):
         return w.png_bytes()
 
     @classmethod
-    def run(cls, caption: str, values: dict, choices: dict, ment: str = "", parent=None):
+    def run(cls, caption: str, values: dict, choices: dict, ment: str = "",
+            parent=None, terms_map: dict | None = None):
         """반환: (값 dict, 새 이미지 bytes) 또는 None(취소)."""
-        d = cls(caption, values, choices, ment, parent)
+        d = cls(caption, values, choices, ment, parent, terms_map)
         if d.exec() != QDialog.Accepted:
             return None
         return d.values(), d.new_image()

@@ -337,6 +337,54 @@ def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     return str(mx + 1) if mx else ""
 
 
+def terms_by_finance(rows: list[CustomerRow]) -> dict:
+    """금융사 → 그 금융사로 쓴 계약조건 목록(자주 쓴 순).
+
+    실제 입력해 온 값에서 뽑으므로 조건을 코드에 박아 둘 필요가 없다.
+    """
+    bucket: dict = {}
+    for r in rows or []:
+        fin = r.get("finance").strip()
+        t = r.get("terms").strip()
+        if not fin or not t:
+            continue
+        bucket.setdefault(fin, {})
+        bucket[fin][t] = bucket[fin].get(t, 0) + 1
+    return {fin: [t for t, _n in sorted(d.items(), key=lambda kv: -kv[1])]
+            for fin, d in bucket.items()}
+
+
+def month_stats(rows: list[CustomerRow], today) -> dict:
+    """이번달/지난달 출고 실적 집계 (출고일 기준)."""
+    def ym(d):
+        return (d.year, d.month)
+
+    cur = ym(today)
+    prev_month = today.month - 1 or 12
+    prev_year = today.year - (1 if today.month == 1 else 0)
+    prev = (prev_year, prev_month)
+
+    res = {"cur_cnt": 0, "cur_fee": 0, "prev_cnt": 0, "prev_fee": 0, "by_finance": {}}
+    for r in rows or []:
+        d = parse_date(r.get("deliver_date"))
+        if d is None:
+            continue
+        fee = 0
+        try:
+            fee = int(digits_only(r.total) or 0)
+        except Exception:
+            fee = 0
+        if ym(d) == cur:
+            res["cur_cnt"] += 1
+            res["cur_fee"] += fee
+            fin = r.get("finance").strip() or "기타"
+            res["by_finance"][fin] = res["by_finance"].get(fin, 0) + 1
+        elif ym(d) == prev:
+            res["prev_cnt"] += 1
+            res["prev_fee"] += fee
+    return res
+
+
 def choices(rows: list[CustomerRow]) -> dict:
     """기존 데이터에서 콤보박스 후보를 모은다(하드코딩하지 않기 위해)."""
     res: dict = {}

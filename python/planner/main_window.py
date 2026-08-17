@@ -161,6 +161,8 @@ class MainWindow(QMainWindow):
         self._sheet_last_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
         self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
+        self._terms_map: dict = {}       # 금융사 → 자주 쓴 계약조건
+        self._sheet_loaded = False       # 첫 시트 로딩 완료 여부(브리핑 대기용)
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
         self._ment_copied: set = self._load_ment_log()
 
@@ -207,19 +209,22 @@ class MainWindow(QMainWindow):
 
         # 시작 시 자동 백업 + 연결 시 계정확인→동기화→불러오기
         self._startup_brief_pending = True
+        self._brief_waits = 0
         self._backup(manual=False)
         if self.gauth.is_connected():
             self._start_account_sync()               # 끝에서 fetch_all_async 호출
-            QTimer.singleShot(15000, self._do_startup_brief)  # 네트워크 지연 대비
+            # 네트워크가 아주 느려도 이 시점엔 무조건 표시
+            QTimer.singleShot(15000, lambda: self._do_startup_brief(force=True))
         else:
-            QTimer.singleShot(600, self._do_startup_brief)
+            QTimer.singleShot(600, lambda: self._do_startup_brief(force=True))
 
         # 시작 시 조용히 업데이트 확인
         QTimer.singleShot(4000, lambda: self.check_update(manual=False))
 
-        # 창이 뜬 뒤 고객관리 시트를 자동으로 불러온다.
-        # (백그라운드 스레드 + 지연 실행이라 시작이 느려지지 않는다)
-        QTimer.singleShot(2500, lambda: self.load_sheet_async(manual=False))
+        # 창이 뜬 직후 고객관리 시트를 자동으로 불러온다.
+        # (백그라운드 스레드라 시작이 느려지지 않는다. 브리핑의 '안내멘트 미발송'
+        #  안내에 필요하므로 너무 늦지 않게 시작한다)
+        QTimer.singleShot(800, lambda: self.load_sheet_async(manual=False))
 
         self.chk_startup.setChecked(_startup_set())
 
@@ -233,9 +238,18 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._on_tick)
         self.timer.start(1000)
 
-    def _do_startup_brief(self):
-        """시작 브리핑을 한 번만 표시 (데이터 로딩 후 또는 타임아웃 시)."""
+    def _do_startup_brief(self, force: bool = False):
+        """시작 브리핑을 한 번만 표시 (데이터 로딩 후 또는 타임아웃 시).
+
+        안내멘트 미발송 안내를 담으려면 시트가 필요하므로, 아직 안 왔으면
+        잠깐(최대 3회 = 약 6초) 기다렸다가 표시한다.
+        """
         if not self._startup_brief_pending:
+            return
+        if (not force and self.settings.sheet_on and not self._sheet_loaded
+                and self._brief_waits < 3):
+            self._brief_waits += 1
+            QTimer.singleShot(2000, self._do_startup_brief)
             return
         self._startup_brief_pending = False
         self.show_briefing(manual=False)
@@ -737,7 +751,9 @@ class MainWindow(QMainWindow):
         self.sheet_rows = rows
         self._sheet_last_row = last_row
         self.sheet_choices = sheets.choices(rows)
+        self._terms_map = sheets.terms_by_finance(rows)
         self._sheet_pending = []
+        self._sheet_loaded = True
         self._show_summary(summary)
         self.refresh_customers()
 
@@ -762,7 +778,33 @@ class MainWindow(QMainWindow):
                 f"<span style='color:{theme.c('subtext')};'>{label}</span>"
                 f"&nbsp;<span style='color:{col};font-size:15px;"
                 f"font-weight:bold;'>{value}</span>")
-        self.lbl_cust_summary.setText("&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(parts))
+        line1 = "&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(parts)
+
+        # 이번달 실적 (출고일 기준) — 지난달 대비 증감과 금융사 분포
+        st = sheets.month_stats(self.sheet_rows, date.today())
+        sub = theme.c("subtext")
+        acc = theme.c("accent")
+        fee = f"₩{st['cur_fee']:,}" if st["cur_fee"] else "₩0"
+        bits = [f"<span style='color:{sub};'>이번달 출고</span>&nbsp;"
+                f"<span style='color:{acc};font-weight:bold;'>{st['cur_cnt']}건</span>",
+                f"<span style='color:{sub};'>수수료</span>&nbsp;"
+                f"<span style='color:{acc};font-weight:bold;'>{fee}</span>"]
+        if st["prev_cnt"] or st["prev_fee"]:
+            diff = st["cur_fee"] - st["prev_fee"]
+            pct = (diff / st["prev_fee"] * 100) if st["prev_fee"] else 0
+            col = theme.c("status_ok") if diff >= 0 else theme.c("status_bad")
+            arrow = "▲" if diff >= 0 else "▼"
+            bits.append(f"<span style='color:{sub};'>지난달 대비</span>&nbsp;"
+                        f"<span style='color:{col};font-weight:bold;'>"
+                        f"{arrow}{abs(pct):.0f}%</span>"
+                        f"<span style='color:{sub};'> (지난달 {st['prev_cnt']}건)</span>")
+        if st["by_finance"]:
+            top = sorted(st["by_finance"].items(), key=lambda kv: -kv[1])[:4]
+            dist = " · ".join(f"{f} {n}" for f, n in top)
+            bits.append(f"<span style='color:{sub};'>{dist}</span>")
+        line2 = "&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(bits)
+
+        self.lbl_cust_summary.setText(line1 + "<br>" + line2)
         self.lbl_cust_summary.show()
 
     def _visible_sheet_rows(self) -> list:
@@ -850,7 +892,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME,
                                     "먼저 [불러오기]로 시트를 읽어주세요.")
             return
-        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self)
+        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self,
+                                 terms_map=self._terms_map)
         if res is None:
             return
         vals, img = res
@@ -910,7 +953,8 @@ class MainWindow(QMainWindow):
             self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 수정하세요.")
             return
         res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
-                                 cr.values, self.sheet_choices, cr.ment, self)
+                                 cr.values, self.sheet_choices, cr.ment, self,
+                                 terms_map=self._terms_map)
         if res is None:
             return
         vals, img = res
@@ -1857,6 +1901,25 @@ class MainWindow(QMainWindow):
         self._maybe_autosync()
 
     # ------------------------------------------------------------ 브리핑
+    def _ment_due_customers(self, today):
+        """안내멘트를 아직 안 보낸 고객 — 출고일 ~ 출고일+2일 구간만.
+
+        반환: [(행, 출고일, 출고 후 며칠째)]
+        """
+        out = []
+        for cr in self.sheet_rows:
+            d = sheets.parse_date(cr.get("deliver_date"))
+            if d is None:
+                continue
+            dday = (today - d).days
+            if not (0 <= dday <= 2):
+                continue
+            if self._ment_key(cr) in self._ment_copied:
+                continue          # 이미 보냄
+            out.append((cr, d, dday))
+        out.sort(key=lambda x: x[1])
+        return out
+
     def build_briefing(self) -> str:
         today = date.today()
         lines = [datetime.now().strftime("%Y년 %m월 %d일 (%a)"), ""]
@@ -1894,6 +1957,16 @@ class MainWindow(QMainWindow):
             if tk.has_due and tk.due and today <= tk.due < week_end:
                 wk_todo.append((tk.due, "", tk.title))
         wk_todo.sort(key=lambda x: (x[0], x[1]))
+
+        # ---- 안내멘트 미발송 (출고일 ~ 출고일+2일) ----
+        due = self._ment_due_customers(today)
+        if due:
+            lines += ["", "━━━━━━━━━━━━━━━━━━━━",
+                      f"[안내멘트 미발송]  {len(due)}건"]
+            for cr, d, dday in due:
+                tag = "오늘 출고" if dday == 0 else f"출고 {dday}일차"
+                lines.append(f"  · {cr.get('customer')}  ({tag}, {d.strftime('%m-%d')})")
+            lines.append("  → [고객관리] 탭에서 [복사] 를 눌러 안내멘트를 보내세요.")
 
         lines += ["", "━━━━━━━━━━━━━━━━━━━━", "[이번주 요약]  (오늘~7일)",
                   f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건"]
