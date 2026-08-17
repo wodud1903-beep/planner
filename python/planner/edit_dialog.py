@@ -134,8 +134,14 @@ class EditDialog(QDialog):
     @classmethod
     def edit_todo(cls, item: TodoItem, parent=None) -> bool:
         d = cls("할일 편집", parent)
-        d._days_required = False
-        d.gb_days.hide()
+        # 반복 할일이면 요일칸을 보여주고 설정을 유지한다.
+        # (예전엔 요일칸을 숨긴 채 repeats/weekdays 를 무조건 지워서, 제목 오타만
+        #  고쳐도 매주 울리던 알람이 조용히 멈췄다)
+        d._days_required = bool(item.repeats)
+        if item.repeats:
+            d._set_days(item.weekdays)
+        else:
+            d.gb_days.hide()
         d.chk_nodue.hide()
         d.ed_title.setText(item.title)
         d.dt_date.setDate(_to_qdate(item.run_date or date.today()))
@@ -149,8 +155,8 @@ class EditDialog(QDialog):
         item.run_time = _from_qtime(d.dt_time.time())
         item.has_time = True
         item.alarm = d.chk_alarm.isChecked()
-        item.repeats = False
-        item.weekdays = ""
+        if item.repeats:
+            item.weekdays = d._get_days()
         item.ment = d.txt_ment.toPlainText()
         return True
 

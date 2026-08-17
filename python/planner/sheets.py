@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import urllib.parse
 from dataclasses import dataclass, field
 
@@ -68,6 +69,9 @@ COL_DOC = 18         # S 견적서/계약서 (이미지)
 MONEY_FIELDS = ["price", "fee", "incentive"]
 
 LAST_COL = 19                           # T
+
+# 고객 추가는 한 번에 하나씩 (행 번호가 겹쳐 앞 고객이 덮어써지는 것을 막는다)
+_APPEND_LOCK = threading.Lock()
 
 # 상단 요약(발주 현황) 범위 — N1:O4 (라벨, 값)
 SUMMARY_RANGE = "N1:O4"
@@ -119,18 +123,40 @@ def fmt_date(d) -> str:
 
 
 def parse_date(s: str):
-    """'2026. 8. 14' / '2026-08-14' / '2026.8.14' 등을 date 로. 못 읽으면 None."""
+    """'2026. 8. 14' / '2026-08-14' / '2026년 8월 14일' 등을 date 로. 못 읽으면 None.
+
+    시트에 사람이 손으로 적은 값은 형식이 제각각이다. 못 읽는 형식을 '빈 값' 으로
+    오해하면 저장할 때 날짜가 지워지므로(과거 실제 버그), 최대한 넓게 받아들인다.
+    """
+    from datetime import date as _date
     t = (s or "").strip()
     if not t:
         return None
-    m = re.match(r"^\s*(\d{4})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})\s*\.?\s*$", t)
-    if not m:
-        return None
-    try:
-        from datetime import date as _date
-        return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except Exception:
-        return None
+    # '2026-08-14 0:00:00' 처럼 시간이 붙은 경우 앞부분만 본다
+    t = t.split("T")[0].split(" 0:")[0].strip()
+
+    def _mk(y, mo, d):
+        try:
+            y = int(y)
+            if y < 100:                    # '26. 8. 14' → 2026
+                y += 2000
+            return _date(y, int(mo), int(d))
+        except Exception:
+            return None
+
+    # 2026. 8. 14 / 2026-08-14 / 2026.8.14 / 26. 8. 14
+    m = re.match(r"^(\d{2,4})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})\s*\.?$", t)
+    if m:
+        return _mk(m.group(1), m.group(2), m.group(3))
+    # 2026년 8월 14일
+    m = re.match(r"^(\d{2,4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?$", t)
+    if m:
+        return _mk(m.group(1), m.group(2), m.group(3))
+    # 20260814
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})$", t)
+    if m:
+        return _mk(m.group(1), m.group(2), m.group(3))
+    return None
 
 
 @dataclass
@@ -277,8 +303,11 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
                          ment=cell(COL_MENT).rstrip())
         for ci, key, _label in FIELDS:
             cr.values[key] = cell(ci).strip()
-        if not cr.get("customer") and not cr.seq:
-            continue          # 완전히 빈 줄은 건너뜀
+        if not cr.get("customer"):
+            # 고객명이 없으면 빈 줄로 본다.
+            # (삭제한 행은 순번이 수식이라 A열이 남는데, 예전엔 '순번도 비어야'
+            #  건너뛰어서 삭제할 때마다 빈 줄이 하나씩 쌓였다)
+            continue
         out.append(cr)
 
     # 상단 요약(N1:O4)은 이미 받은 데이터에서 뽑는다 — 요청을 더 보내지 않는다
@@ -307,6 +336,27 @@ def read_ments(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
         v = (row[0] if row else "") or ""
         if v.strip():
             out[i + 1] = v.rstrip()
+    return out
+
+
+def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
+    """S열(견적서/계약서)을 **수식 그대로** 읽는다 → {행번호: '=IMAGE(...)'}.
+
+    셀 안 그림은 =IMAGE() 수식이라 표시값(FORMATTED_VALUE)이 빈 문자열이다.
+    그래서 목록을 읽을 때는 '이미지가 없다' 와 구분되지 않았고, 고객을 수정해
+    저장하면 S열이 빈 값으로 덮여 그림이 사라졌다(과거 실제 버그).
+    여기서 수식을 따로 읽어 '이미 등록된 이미지가 있음' 을 알 수 있게 한다.
+    """
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, "S1:S"))
+    r = requests.get(url, headers=_headers(auth), timeout=30,
+                     params={"valueRenderOption": "FORMULA"})
+    _check(r)
+    out = {}
+    for i, row in enumerate((r.json() or {}).get("values", [])):
+        v = (row[0] if row else "") or ""
+        if str(v).strip():
+            out[i + 1] = str(v).strip()
     return out
 
 
@@ -484,17 +534,22 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     """맨 아래에 고객 한 줄 추가. 새 행 번호를 반환.
 
     순서: (1) 직전 행의 서식·드롭다운·수식 복사 → (2) 직접기재 칸 + 순번 기록.
+
+    추가는 API 왕복이 여러 번이라 몇 초가 걸린다. 그 사이 두 번째 추가가 끼어들면
+    같은 행에 겹쳐 써서 앞 고객이 지워지므로(과거 실제 버그) 한 번에 하나씩 처리한다.
+    행 번호 자체는 호출자가 미리 예약해서 넘긴다.
     """
-    new_row = last_row + 1
-    try:
-        gid = _sheet_gid(auth, sheet_id, sheet_name)
-        _copy_row_style(auth, sheet_id, gid, last_row, new_row)
-    except Exception:
-        # 서식/수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
-        pass
-    extra = {0: seq} if seq else None      # A열 순번 (수식이면 seq="" 라 건너뜀)
-    _write_cells(auth, sheet_id, sheet_name, new_row, values, extra)
-    return new_row
+    with _APPEND_LOCK:
+        new_row = last_row + 1
+        try:
+            gid = _sheet_gid(auth, sheet_id, sheet_name)
+            _copy_row_style(auth, sheet_id, gid, last_row, new_row)
+        except Exception:
+            # 서식/수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
+            pass
+        extra = {0: seq} if seq else None   # A열 순번 (수식이면 seq="" 라 건너뜀)
+        _write_cells(auth, sheet_id, sheet_name, new_row, values, extra)
+        return new_row
 
 
 def update_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,

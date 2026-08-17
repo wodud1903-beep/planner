@@ -92,17 +92,45 @@ def check():
             "notes": rel.get("body", ""), "name": rel.get("name", tag)}
 
 
+def _rm(path: str) -> None:
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
 def download(asset_url: str) -> str:
-    """자산을 임시 파일로 내려받고 경로 반환."""
+    """자산을 임시 파일로 내려받고 경로 반환.
+
+    **받은 크기를 반드시 검증한다.** stream=True 로 받다가 연결이 끊겨도
+    iter_content 는 예외 없이 정상 종료한다. 예전엔 검증이 없어 절반짜리 exe 가
+    그대로 설치되고, 교체 배치가 백업본까지 지워 앱이 아예 실행되지 않았다.
+    """
     r = requests.get(asset_url, headers=_headers("application/octet-stream"),
                      timeout=180, stream=True)
     if r.status_code != 200:
         raise RuntimeError(f"다운로드 실패 (HTTP {r.status_code})")
+    expect = int(r.headers.get("Content-Length") or 0)
     fd, path = tempfile.mkstemp(suffix=".exe", prefix="planner_upd_")
-    with os.fdopen(fd, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1 << 16):
-            if chunk:
-                f.write(chunk)
+    got = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1 << 16):
+                if chunk:
+                    f.write(chunk)
+                    got += len(chunk)
+    except Exception as e:
+        _rm(path)
+        raise RuntimeError(f"다운로드 중 연결이 끊겼습니다: {e}")
+
+    if expect and got != expect:
+        _rm(path)
+        raise RuntimeError(
+            f"다운로드가 완전하지 않습니다 ({got:,} / {expect:,} 바이트).\n"
+            "네트워크 상태를 확인한 뒤 다시 시도하세요.")
+    if got < 1_000_000:        # 정상 exe 는 50MB 안팎 — 1MB 미만이면 비정상
+        _rm(path)
+        raise RuntimeError(f"받은 파일이 너무 작습니다 ({got:,} 바이트).")
     return path
 
 
@@ -188,9 +216,9 @@ timeout /t 2 /nobreak >nul
 explorer.exe "%DST%"
 echo [update] relaunched >> "%LOG%"
 
-rem 4) 정리
+rem 4) 정리 — 직전 버전(%OLD%)은 남겨둔다.
+rem     새 exe 가 못 뜨는 경우 되돌릴 수단이 이것뿐이라 지우면 안 된다.
 del "%SRC%" >nul 2>&1
-del "%OLD%" >nul 2>&1
 goto done
 :giveup
 echo [update] GIVE UP - target still locked >> "%LOG%"

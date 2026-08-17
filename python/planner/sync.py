@@ -40,9 +40,19 @@ def _local_updated() -> str:
 
 def _set_local_updated(ts: str) -> None:
     try:
-        _meta_path().write_text(json.dumps({"updatedAt": ts}), encoding="utf-8")
+        config.atomic_write(_meta_path(), json.dumps({"updatedAt": ts}))
     except Exception:
         pass
+
+
+def touch_local() -> None:
+    """로컬 데이터가 바뀐 시각을 기록한다 — **오프라인에서도** 부른다.
+
+    예전엔 push/pull 때만 시각이 올라갔는데 push 는 온라인일 때만 예약된다.
+    그래서 오프라인에서 한 작업은 시각이 그대로였고, 다음 실행의 pull 이 원격을
+    더 최신으로 보고 통째로 덮어써서 그날 작업이 전부 사라졌다.
+    """
+    _set_local_updated(_now())
 
 
 def migrate_legacy() -> None:
@@ -67,10 +77,22 @@ def migrate_legacy() -> None:
 
 
 def build_bundle() -> dict:
+    """올릴 번들. **없는 파일은 키 자체를 넣지 않는다.**
+
+    예전엔 없는 파일을 "" 로 채워 올렸다. 받는 쪽은 그 "" 를 파일에 그대로 써서
+    멀쩡한 데이터를 0바이트로 만들었고, 읽기가 예외를 삼켜 조용히 사라졌다.
+    """
     files = {}
     for n in _FILES:
         p = config.data_dir() / n
-        files[n] = p.read_text(encoding="utf-8") if p.exists() else ""
+        if not p.exists():
+            continue
+        try:
+            txt = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if txt.strip():
+            files[n] = txt
     return {"updatedAt": _now(), "files": files}
 
 
@@ -87,11 +109,14 @@ def pull(auth) -> bool:
     rup = b.get("updatedAt", "")
     if rup and rup > _local_updated():
         for n, content in (b.get("files") or {}).items():
-            if n in _FILES:
-                try:
-                    (config.data_dir() / n).write_text(content or "", encoding="utf-8")
-                except Exception:
-                    pass
+            if n not in _FILES:
+                continue
+            if not (content or "").strip():
+                continue      # 빈 내용으로 멀쩡한 로컬 파일을 지우지 않는다
+            try:
+                config.atomic_write(config.data_dir() / n, content)
+            except Exception:
+                pass
         _set_local_updated(rup)
         return True
     return False

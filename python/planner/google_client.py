@@ -18,6 +18,7 @@ from __future__ import annotations
 import http.server
 import socket
 import threading
+import time
 import urllib.parse
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -54,6 +55,15 @@ class GoogleTask:
     due: Optional[date] = None
     has_due: bool = False
     list_name: str = ""
+
+
+class PartialResult(Exception):
+    """일부만 불러온 결과. data 는 가져온 만큼, message 는 사용자 안내."""
+
+    def __init__(self, data, message: str):
+        super().__init__(message)
+        self.data = data
+        self.message = message
 
 
 class GoogleError(Exception):
@@ -310,6 +320,8 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
     if not cal_ids:  # 선택 정보가 없으면 전부 조회
         cal_ids = [c["id"] for c in r.json().get("items", []) if c.get("id")]
 
+    failed: list[str] = []
+
     def fetch_one(cal_id: str) -> list[CalEvent]:
         url = config.CALENDAR_EVENTS_URL.format(cal_id=urllib.parse.quote(cal_id))
         try:
@@ -322,8 +334,10 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
                 "fields": "items(start,summary,iCalUID,id)",
             }, timeout=20)
         except Exception:
+            failed.append(cal_id)      # 조용히 삼키면 일정이 통째로 사라진다
             return []
         if er.status_code != 200:
+            failed.append(cal_id)
             return []
         out = []
         for it in er.json().get("items", []):
@@ -345,6 +359,12 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
         for res in ex.map(fetch_one, cal_ids):
             events.extend(res)
     events.sort(key=lambda e: e.start)
+    if failed:
+        # 부분 실패를 성공처럼 보여주면 안 된다 — 그 캘린더의 일정이 안 보이고
+        # 정시 알람도 울리지 않는데 사용자는 '일정 없음' 으로 오해한다.
+        raise PartialResult(events,
+                            f"캘린더 {len(failed)}개를 불러오지 못했습니다. "
+                            "잠시 후 [새로고침] 을 눌러주세요.")
     return events
 
 
@@ -490,12 +510,23 @@ def granted_scopes(auth: GoogleAuth) -> list[str]:
 
 
 def get_user_email(auth: GoogleAuth) -> str:
-    try:
-        r = requests.get(config.USERINFO_URL, headers=auth._headers(), timeout=15)
-        if r.status_code == 200:
-            return (r.json().get("email") or "").strip().lower()
-    except Exception:
-        pass
+    """로그인 계정 이메일. 실패하면 "".
+
+    이 값으로 계정별 데이터 폴더가 정해지므로, 실패하면 앱이 엉뚱한(대개 빈)
+    폴더를 쓰게 된다. PC 부팅 직후에는 앱이 네트워크보다 먼저 뜨는 일이 흔하므로
+    몇 초 간격으로 몇 번 더 시도한다.
+    """
+    for wait in (0, 2, 5):
+        if wait:
+            time.sleep(wait)
+        try:
+            r = requests.get(config.USERINFO_URL, headers=auth._headers(), timeout=15)
+            if r.status_code == 200:
+                return (r.json().get("email") or "").strip().lower()
+            if r.status_code in (401, 403):
+                return ""      # 권한 문제는 기다려도 안 풀린다
+        except Exception:
+            pass
     return ""
 
 

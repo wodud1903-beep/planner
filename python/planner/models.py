@@ -228,7 +228,7 @@ def load_list(path: Path, cls):
 
 def save_list(path: Path, items) -> None:
     data = [it.to_json() for it in items]
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    config.atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 @dataclass
@@ -324,8 +324,8 @@ class AppSettings:
 
     def save(self, path: Path) -> None:
         try:
-            path.write_text(json.dumps(self.to_json(), ensure_ascii=False, indent=2),
-                            encoding="utf-8")
+            config.atomic_write(
+                path, json.dumps(self.to_json(), ensure_ascii=False, indent=2))
         except Exception:
             pass
 

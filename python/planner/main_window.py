@@ -60,6 +60,18 @@ class _PendingOp:
     deadline: datetime = field(default_factory=datetime.now)
 
 
+def _next_weekday(from_date: date, weekdays: str) -> date:
+    """반복 할일의 다음 차례 날짜. weekdays 는 '1'=일 … '7'=토 문자열."""
+    days = {c for c in (weekdays or "") if c.isdigit()}
+    if not days:
+        return from_date + timedelta(days=7)
+    for n in range(1, 8):
+        d = from_date + timedelta(days=n)
+        if str(d.isoweekday() % 7 + 1) in days:
+            return d
+    return from_date + timedelta(days=7)
+
+
 def _startup_set() -> bool:
     if sys.platform != "win32":
         return False
@@ -114,6 +126,7 @@ class MainWindow(QMainWindow):
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
     sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
+    sig_sheet_docs = Signal(object)                  # {행번호: S열 =IMAGE() 수식}
     sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
     def __init__(self):
@@ -163,6 +176,7 @@ class MainWindow(QMainWindow):
         self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
         self._terms_map: dict = {}       # 금융사 → 자주 쓴 계약조건
         self._sheet_loaded = False       # 첫 시트 로딩 완료 여부(브리핑 대기용)
+        self._fired_cal_alarms: set = set()   # (일정, 분) — 중복 알람 방지
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
         self._ment_copied: set = self._load_ment_log()
 
@@ -184,6 +198,7 @@ class MainWindow(QMainWindow):
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
         self.sig_sheet_ments.connect(self._on_sheet_ments)
+        self.sig_sheet_docs.connect(self._on_sheet_docs)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
         # 동기화 푸시 디바운스 타이머
@@ -210,12 +225,15 @@ class MainWindow(QMainWindow):
         # 시작 시 자동 백업 + 연결 시 계정확인→동기화→불러오기
         self._startup_brief_pending = True
         self._brief_waits = 0
-        self._backup(manual=False)
         if self.gauth.is_connected():
+            # 백업은 계정이 정해진 뒤에(_on_account_ready) 한다.
+            # 여기서 하면 계정 폴더가 아직 안 정해져 엉뚱한 폴더를 백업한다.
             self._start_account_sync()               # 끝에서 fetch_all_async 호출
             # 네트워크가 아주 느려도 이 시점엔 무조건 표시
             QTimer.singleShot(15000, lambda: self._do_startup_brief(force=True))
         else:
+            # 미연결이면 계정 구분이 없으니 지금 백업해도 폴더가 맞다
+            self._backup(manual=False)
             QTimer.singleShot(600, lambda: self._do_startup_brief(force=True))
 
         # 시작 시 조용히 업데이트 확인
@@ -300,12 +318,22 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_account_ready(self, email: str):
-        if email:
-            self.account_email = email
-            config.set_account(email)
-            self.lbl_account.setText(f"· {email}")
-            sync.migrate_legacy()
-            self.reload_data()   # 계정 폴더 기준으로 다시 로드
+        if not email:
+            # 계정을 확인하지 못하면 어느 폴더가 이 사람 데이터인지 알 수 없다.
+            # 이때 동기화를 강행하면 공용 폴더(대개 비어 있음)를 번들로 올려
+            # 다른 PC 의 데이터까지 지워버린다. 그래서 아예 건너뛴다.
+            self.lbl_account.setText("· 계정 확인 실패 — 동기화를 건너뜁니다")
+            self._backup(manual=False)
+            self.fetch_all_async()
+            return
+        self.account_email = email
+        config.set_account(email)
+        self.lbl_account.setText(f"· {email}")
+        sync.migrate_legacy()
+        self.reload_data()   # 계정 폴더 기준으로 다시 로드
+        # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
+        self._backup(manual=False)
+
         # Drive 에서 최신본 받아오기(백그라운드)
         def worker():
             changed = False
@@ -349,7 +377,12 @@ class MainWindow(QMainWindow):
         self._last_seen_mtime = self._data_mtime()
 
     def _touch_sync(self):
-        """데이터 변경 후 호출 → 잠시 뒤 Drive 로 업로드(디바운스)."""
+        """데이터 변경 후 호출 → 잠시 뒤 Drive 로 업로드(디바운스).
+
+        업로드는 온라인일 때만 하지만, **로컬이 바뀐 시각은 항상** 남긴다.
+        안 그러면 오프라인에서 한 작업이 다음 실행의 pull 에 덮어써진다.
+        """
+        sync.touch_local()
         if self.gauth.is_connected():
             self._sync_timer.start(2500)
 
@@ -726,6 +759,13 @@ class MainWindow(QMainWindow):
                         self.sig_sheet_ments.emit(ments)
                 except Exception:
                     pass
+                # 3) 견적서/계약서(S열)는 수식 그대로 읽어야 '이미지 있음' 을 안다
+                try:
+                    docs = sheets.read_docs(self.gauth, sid, sname)
+                    if docs:
+                        self.sig_sheet_docs.emit(docs)
+                except Exception:
+                    pass
             except Exception as e:
                 self.sig_sheet_rows.emit(None, 0, str(e))
         threading.Thread(target=worker, daemon=True).start()
@@ -740,6 +780,25 @@ class MainWindow(QMainWindow):
                 changed = True
         if changed:
             self.refresh_customers()
+
+    def _reset_sheet_cache(self):
+        """다른 시트/탭으로 바뀌었을 때 — 캐시한 행 정보를 모두 버린다."""
+        self.sheet_rows = []
+        self._sheet_pending = []
+        self._sheet_last_row = 0
+        self._sheet_loaded = False
+        self.sheet_choices = {}
+        self._terms_map = {}
+        self.lbl_cust_summary.hide()
+        self._summary_data = []
+        self.refresh_customers()
+
+    def _on_sheet_docs(self, docs: dict):
+        """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채운다."""
+        for cr in self.sheet_rows:
+            v = docs.get(cr.row)
+            if v:
+                cr.values["doc"] = v
 
     def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
@@ -766,13 +825,14 @@ class MainWindow(QMainWindow):
     }
 
     def _show_summary(self, summary):
-        """시트 N1:O4 의 발주 현황을 목록 위에 색으로 구분해 표시."""
-        if not summary:
-            self.lbl_cust_summary.hide()
-            return
-        self._summary_data = list(summary)
+        """시트 N1:O4 의 발주 현황 + 이번달 실적을 목록 위에 표시.
+
+        발주 현황(N1:O4)이 없는 시트도 있으므로, 요약이 비어 있어도 이번달 실적
+        줄은 그린다. (예전엔 요약이 없으면 여기서 바로 빠져나가 실적이 아예 안 보였다)
+        """
+        self._summary_data = list(summary or [])
         parts = []
-        for label, value in summary:
+        for label, value in (summary or []):
             col = self.SUMMARY_COLORS.get(label.strip(), theme.c("accent"))
             parts.append(
                 f"<span style='color:{theme.c('subtext')};'>{label}</span>"
@@ -804,7 +864,7 @@ class MainWindow(QMainWindow):
             bits.append(f"<span style='color:{sub};'>{dist}</span>")
         line2 = "&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(bits)
 
-        self.lbl_cust_summary.setText(line1 + "<br>" + line2)
+        self.lbl_cust_summary.setText((line1 + "<br>" + line2) if line1 else line2)
         self.lbl_cust_summary.show()
 
     def _visible_sheet_rows(self) -> list:
@@ -896,17 +956,21 @@ class MainWindow(QMainWindow):
                                  terms_map=self._terms_map)
         if res is None:
             return
-        vals, img = res
+        vals, img, _cleared = res
         if img and not self._confirm_image_share():
             return
+        # 행 번호를 **먼저 예약**한다. 추가는 API 왕복이 여러 번이라 몇 초가 걸리는데,
+        # 그 사이 두 번째 추가가 같은 번호를 집어 앞 고객을 덮어썼다(과거 실제 버그).
+        last = self._sheet_last_row
+        self._sheet_last_row = last + 1
+
         # 화면에 먼저 반영 (임시 행)
-        pend = sheets.CustomerRow(row=self._sheet_last_row + 1, seq="", total="")
+        pend = sheets.CustomerRow(row=last + 1, seq="", total="")
         pend.values = dict(vals)
         self._sheet_pending.append(pend)
         self.refresh_customers()
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
-        last = self._sheet_last_row
         name = (vals.get("customer") or "고객").replace("/", "_")[:40]
 
         rows_snapshot = list(self.sheet_rows)
@@ -957,11 +1021,17 @@ class MainWindow(QMainWindow):
                                  terms_map=self._terms_map)
         if res is None:
             return
-        vals, img = res
+        vals, img, doc_cleared = res
         if img and not self._confirm_image_share():
             return
         old = dict(cr.values)
-        cr.values = dict(vals)          # 화면 먼저
+        # 다이얼로그는 손대지 않은 칸(견적서, 못 읽은 날짜)의 키를 아예 안 준다.
+        # 화면에도 기존 값을 그대로 유지해야 표가 빈칸으로 보이지 않는다.
+        merged = dict(cr.values)
+        merged.update(vals)
+        if doc_cleared:
+            merged["doc"] = ""
+        cr.values = merged              # 화면 먼저
         self.refresh_customers()
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
@@ -975,6 +1045,8 @@ class MainWindow(QMainWindow):
                         self.gauth, img,
                         f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
                     v["doc"] = sheets.image_formula(url)
+                elif doc_cleared:
+                    v["doc"] = ""       # 지우기를 누른 경우에만 S열을 비운다
                 sheets.update_row(self.gauth, sid, sname, cr.row, v)
                 self.sig_sheet_written.emit(None, cr.row, "")
             except Exception as e:
@@ -1027,6 +1099,10 @@ class MainWindow(QMainWindow):
         if err:
             if pend is not None and pend in self._sheet_pending:
                 self._sheet_pending.remove(pend)
+                # 예약해 둔 행 번호를 돌려준다 — 단 그 뒤에 다른 추가가 더 큰 번호를
+                # 가져갔으면 그대로 둬야 그 추가가 덮어써지지 않는다.
+                if self._sheet_last_row == pend.row:
+                    self._sheet_last_row = pend.row - 1
             self.refresh_customers()
             QMessageBox.warning(self, config.APP_NAME, "시트 저장 실패:\n" + err)
             return
@@ -1115,6 +1191,7 @@ class MainWindow(QMainWindow):
     def on_settings_click(self):
         was_connected = self.gauth.is_connected()
         prev_dark = self.settings.dark_mode
+        prev_sheet = (self.settings.sheet_id.strip(), self.settings.sheet_name.strip())
         dlg = SettingsDialog(self.gauth, self.settings, self)
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
@@ -1123,6 +1200,14 @@ class MainWindow(QMainWindow):
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
             if self.settings.dark_mode != prev_dark:
                 self.apply_theme()   # 다크모드 즉시 반영
+            now_sheet = (self.settings.sheet_id.strip(),
+                         self.settings.sheet_name.strip())
+            if now_sheet != prev_sheet:
+                # 시트/탭이 바뀌면 들고 있던 행 번호는 전부 무의미하다.
+                # 안 비우면 이전 탭의 행 번호로 새 탭에 써서 엉뚱한 줄을 덮어쓴다.
+                self._reset_sheet_cache()
+                if self.gauth.is_connected():
+                    self.load_sheet_async(manual=False)
         self.update_google_status()
         # 로그인/로그아웃이 있었으면 데이터 갱신
         if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
@@ -1172,6 +1257,9 @@ class MainWindow(QMainWindow):
                 try:
                     self.sig_events_done.emit(
                         google_client.fetch_calendar_events(self.gauth, back_days, 14), "")
+                except google_client.PartialResult as p:
+                    # 일부 캘린더만 실패 — 받아온 만큼은 쓰되 안내는 한다
+                    self.sig_events_done.emit(p.data, p.message)
                 except Exception as e:
                     self.sig_events_done.emit(None, str(e))
 
@@ -1212,10 +1300,31 @@ class MainWindow(QMainWindow):
 
     def _on_events_done(self, events, err: str):
         self.btn_fetch.setEnabled(True)
-        if events is not None:
-            self.cal_events = events
-            self.refresh_calendar()
-            self._run_followups()
+        if events is None:
+            self._report_fetch_error(err)
+            return
+        self.cal_events = events
+        self.refresh_calendar()
+        self._run_followups()
+        if err:
+            # 일부 캘린더만 실패한 경우 — 빠진 일정이 있다는 걸 알려야 한다.
+            # (예전엔 조용히 삼켜서 '오늘 일정 없음' 으로 보였고 알람도 안 울렸다)
+            self._report_fetch_error(err)
+
+    def _report_fetch_error(self, err: str):
+        """조회 실패를 사용자에게 보인다.
+
+        예전엔 err 을 받아만 두고 한 번도 쓰지 않아, 토큰이 죽어도 화면은 어제
+        데이터를 그대로 보여주고 상태는 초록색 '연결됨' 이었다. 그 사이 일정 알람이
+        전부 멈춰도 알 길이 없었다.
+        """
+        if not err:
+            return
+        msg = err.splitlines()[0][:80]
+        if not self.gauth.is_connected():
+            msg = "연결이 끊겼습니다 — [설정] → Google 로그인"
+        self.lbl_status.setText("구글: " + msg)
+        self.lbl_status.setStyleSheet("color:#c00;")
 
     def _run_followups(self):
         """캘린더에서 팔로업 대상을 찾아 내 할일로 자동 등록."""
@@ -1327,6 +1436,12 @@ class MainWindow(QMainWindow):
 
     def _on_tasks_done(self, tasks, err: str, fetch_epoch: int = 0):
         if tasks is None:
+            self._report_fetch_error(err)
+            return
+        if fetch_epoch and fetch_epoch < self._data_epoch:
+            # 이 조회는 최근 쓰기보다 먼저 출발했다 — 방금 추가한 할일이 없는
+            # 낡은 목록이므로 버린다. (예전엔 그대로 덮어써서 새 할일이 사라졌고,
+            # 사용자가 다시 추가해 구글에 중복이 생겼다)
             return
         self.gtasks = tasks
         self._prune_pending_ops(tasks, fetch_epoch)
@@ -1708,10 +1823,20 @@ class MainWindow(QMainWindow):
         local_ids = {k[1] for k in keys if k[0] == "local"}
         google_items = [k[1] for k in keys if k[0] == "google"]
 
-        # 1) 로컬 할일: 완료 = 목록에서 제거
+        # 1) 로컬 할일: 완료 = 목록에서 제거.
+        #    단 반복 할일은 지우지 않고 **다음 차례로 넘긴다**
+        #    (예전엔 반복 여부를 안 봐서 완료 한 번에 반복 설정이 영구 삭제됐다)
         if local_ids:
-            self.todos = [t for t in self.todos if id(t) not in local_ids]
+            keep = []
+            for t in self.todos:
+                if id(t) not in local_ids:
+                    keep.append(t)
+                elif t.repeats:
+                    t.run_date = _next_weekday(t.run_date or date.today(), t.weekdays)
+                    keep.append(t)
+            self.todos = keep
             save_list(self.todo_file, self.todos)
+            self._touch_sync()
 
         # 2) 구글 Tasks: 화면에서 먼저 지우고, 완료 처리는 백그라운드에서
         jobs = []
@@ -1879,12 +2004,21 @@ class MainWindow(QMainWindow):
                 changed = True
         if changed:
             self.task_alarms.save()
-        # 4) 구글 캘린더 시간 일정 (정시)
+        # 4) 구글 캘린더 시간 일정 (정시) — 분당 1회만.
+        #    tick 이 1초라 예전엔 0초·1초에 두 번 울려 팝업을 두 번 닫아야 했다.
+        minute_key = now.replace(second=0, microsecond=0)
         for ev in self.cal_events:
             if (ev.has_time and ev.start.date() == now.date()
-                    and ev.start.hour == now.hour and ev.start.minute == now.minute
-                    and now.second < 2):
+                    and ev.start.hour == now.hour and ev.start.minute == now.minute):
+                key = (ev.uid or ev.summary, minute_key)
+                if key in self._fired_cal_alarms:
+                    continue
+                self._fired_cal_alarms.add(key)
                 self.fire_alarm("[구글] " + ev.summary, "")
+        if len(self._fired_cal_alarms) > 200:      # 오래된 기록 정리
+            self._fired_cal_alarms = {
+                k for k in self._fired_cal_alarms
+                if k[1] > now - timedelta(hours=2)}
 
     def _on_tick(self):
         self.check_alarms()
@@ -1989,8 +2123,17 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 백업
     def _backup(self, manual: bool):
+        try:
+            self._do_backup(manual)
+        except Exception as e:
+            # 백업이 실패해도 앱은 계속 돌아야 한다. last_backup 을 세우지 않으므로
+            # 다음 기회에 다시 시도한다(예전엔 여기서 터지면 매 초 예외가 났다).
+            if manual:
+                QMessageBox.warning(self, config.APP_NAME, "백업 실패:\n" + str(e))
+
+    def _do_backup(self, manual: bool):
         bk_dir = config.data_dir() / "backup"
-        bk_dir.mkdir(exist_ok=True)
+        bk_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         for f in (self.todo_file, self.alarm_file, self.taskalarm_file):
             if f.exists():

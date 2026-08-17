@@ -75,8 +75,8 @@ class FollowupTracker:
 
     def save(self):
         try:
-            self.path.write_text(json.dumps(sorted(self.done), ensure_ascii=False),
-                                 encoding="utf-8")
+            config.atomic_write(
+                self.path, json.dumps(sorted(self.done), ensure_ascii=False))
         except Exception:
             pass
 

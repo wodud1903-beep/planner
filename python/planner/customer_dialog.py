@@ -71,6 +71,7 @@ class ImagePasteBox(QFrame):
         self.setFocusPolicy(Qt.StrongFocus)
         self._png: bytes = b""          # 새로 붙여넣은 이미지
         self._existing: str = ""        # 시트에 이미 들어있는 값(수식/텍스트)
+        self._cleared: bool = False     # [지우기] 로 기존 이미지를 없앴는지
 
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 8, 8, 8)
@@ -126,9 +127,18 @@ class ImagePasteBox(QFrame):
 
     def clear_image(self):
         self._png = b""
+        # 이미 시트에 등록돼 있던 이미지도 함께 지우겠다는 뜻으로 본다.
+        # (예전엔 _existing 을 그대로 둬서 [지우기] 가 아무 일도 하지 않았다)
+        if self._existing:
+            self._cleared = True
+            self._existing = ""
         self.preview.clear()
         self.preview.hide()
         self.lbl.setText("여기를 클릭하고 Ctrl+V 로 견적서/계약서 이미지를 붙여넣으세요")
+
+    def was_cleared(self) -> bool:
+        """등록돼 있던 이미지를 [지우기] 로 없앴는지."""
+        return bool(getattr(self, "_cleared", False)) and not self._png
 
     def png_bytes(self) -> bytes:
         return self._png
@@ -199,9 +209,19 @@ class CustomerDialog(QDialog):
                 chk.setChecked(d is None)      # 값이 없거나 못 읽으면 '미정'
                 chk.toggled.connect(lambda on, e=de: e.setEnabled(not on))
                 de.setEnabled(not chk.isChecked())
+                # 앱이 못 읽는 형식(예: '8/14 예정')이 들어있으면, 사용자가 날짜를
+                # 직접 건드리지 않는 한 그 칸을 건드리지 않는다.
+                # (예전엔 '미정' 과 똑같이 취급해 저장 한 번에 날짜가 지워졌다)
+                unreadable = bool(cur.strip()) and d is None
+                de.dateChanged.connect(
+                    lambda _v, h=holder: h.setProperty("touched", True))
+                chk.toggled.connect(
+                    lambda _v, h=holder: h.setProperty("touched", True))
+                holder.setProperty("touched", False)
+                holder.setProperty("unreadable", unreadable)
                 hl.addWidget(de, 1)
                 hl.addWidget(chk)
-                w = (de, chk)
+                w = (de, chk, holder)
                 form.addRow(label, holder)
             elif kind == "image":
                 w = ImagePasteBox()
@@ -309,10 +329,15 @@ class CustomerDialog(QDialog):
             elif kind == "money":
                 out[key] = w.value()          # 콤마 없는 숫자
             elif kind == "date":
-                de, chk = w
+                de, chk, holder = w
+                if holder.property("unreadable") and not holder.property("touched"):
+                    continue      # 못 읽은 원래 값을 그대로 둔다 (키를 안 넣는다)
                 out[key] = "" if chk.isChecked() else sheets.fmt_date(de.date().toPython())
             elif kind == "image":
-                out[key] = w.existing()      # 새 이미지는 new_image() 로 따로 전달
+                # 견적서/계약서(S열)는 여기서 절대 내보내지 않는다.
+                # 표시값이 빈 문자열인 =IMAGE() 수식을 되돌려 써서 그림을 지웠었다.
+                # 새 이미지는 new_image(), 지우기는 doc_cleared() 로 따로 전달한다.
+                continue
             elif kind == "text":
                 out[key] = w.toPlainText().strip()
             else:
@@ -324,11 +349,16 @@ class CustomerDialog(QDialog):
         w, _kind = self.widgets["doc"]
         return w.png_bytes()
 
+    def doc_cleared(self) -> bool:
+        """등록돼 있던 견적서/계약서를 [지우기] 로 없앴는지."""
+        w, _kind = self.widgets["doc"]
+        return w.was_cleared()
+
     @classmethod
     def run(cls, caption: str, values: dict, choices: dict, ment: str = "",
             parent=None, terms_map: dict | None = None):
-        """반환: (값 dict, 새 이미지 bytes) 또는 None(취소)."""
+        """반환: (값 dict, 새 이미지 bytes, 기존 이미지 지움 여부) 또는 None(취소)."""
         d = cls(caption, values, choices, ment, parent, terms_map)
         if d.exec() != QDialog.Accepted:
             return None
-        return d.values(), d.new_image()
+        return d.values(), d.new_image(), d.doc_cleared()

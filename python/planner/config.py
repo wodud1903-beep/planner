@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.1.23"
+APP_VERSION = "1.1.24"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -126,6 +126,22 @@ DEF_FOLLOW_MENT = (
     "차량 출고 후 한 달이 지났는데 이용에 불편한 점은 없으신지요?\n"
     "필요하신 부분 있으시면 언제든 편하게 연락 주세요."
 )
+
+
+def atomic_write(path, text: str) -> None:
+    """임시파일에 쓴 뒤 교체 — 도중에 죽어도 원본이 깨지지 않는다.
+
+    예전엔 write_text 로 바로 덮어써서, 저장 중 강제종료/정전이 나면 파일이
+    반쯤 잘린 채 남았다. 읽는 쪽은 예외를 삼키고 빈 목록을 돌려주므로
+    다음 저장에서 그 빈 상태가 확정돼 할일이 통째로 사라졌다.
+    """
+    p = Path(path)
+    tmp = p.with_name(p.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)          # 같은 볼륨이면 원자적으로 교체된다
 
 
 def base_dir() -> Path:
