@@ -502,7 +502,11 @@ def terms_by_finance(rows: list[CustomerRow]) -> dict:
 
 
 def month_stats(rows: list[CustomerRow], today) -> dict:
-    """이번달/지난달 출고 실적 집계 (출고일 기준)."""
+    """이번달/지난달 출고 실적 집계 (출고일 기준).
+
+    진행현황이 '취소' 인 건은 제외한다 — 출고일이 적혀 있어도 실제 실적이 아니라서
+    포함하면 건수와 수수료가 부풀고 지난달 대비 증감까지 어긋난다.
+    """
     def ym(d):
         return (d.year, d.month)
 
@@ -513,6 +517,8 @@ def month_stats(rows: list[CustomerRow], today) -> dict:
 
     res = {"cur_cnt": 0, "cur_fee": 0, "prev_cnt": 0, "prev_fee": 0, "by_finance": {}}
     for r in rows or []:
+        if r.get("status").strip() == "취소":
+            continue
         d = parse_date(r.get("deliver_date"))
         if d is None:
             continue

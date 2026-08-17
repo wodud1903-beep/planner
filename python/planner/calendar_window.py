@@ -1,8 +1,9 @@
-"""구글 캘린더 창 — 월 달력을 보고 날짜를 클릭해 일정을 직접 추가.
+"""구글 캘린더 창 — 월 달력을 보고 날짜를 클릭해 일정을 추가·수정·삭제.
 
 - 달력(월 보기)에 일정이 있는 날을 굵게 표시
 - 날짜 클릭 → 그 날의 일정 목록 표시
 - 날짜 더블클릭 또는 [이 날짜에 일정 추가] → 구글 캘린더에 바로 등록(쓰기)
+- 아래 목록에서 일정 더블클릭 또는 [수정]/[삭제] → 기존 일정 편집
 - [브라우저에서 열기] → 실제 구글 캘린더 웹으로 이동
 """
 
@@ -15,9 +16,9 @@ from datetime import date, datetime, time, timedelta
 from PySide6.QtCore import QDate, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat
 from PySide6.QtWidgets import (
-    QCalendarWidget, QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSizePolicy,
-    QTimeEdit, QVBoxLayout, QWidget,
+    QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+    QPushButton, QSizePolicy, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from . import config, google_client, holiday, theme
@@ -107,9 +108,17 @@ class EventCalendar(QCalendarWidget):
 
 
 class AddEventDialog(QDialog):
-    def __init__(self, day: date, calendars: list[dict], parent=None):
+    """일정 추가 / 수정 공용.
+
+    event 를 주면 '수정' 모드가 된다. 다른 캘린더로 옮기는 것은 구글에서 별도
+    move 요청이라 수정 모드에서는 캘린더 선택을 잠근다(제목·날짜·시각만 바꾼다).
+    """
+
+    def __init__(self, day: date, calendars: list[dict], parent=None, event=None):
         super().__init__(parent)
-        self.setWindowTitle(f"일정 추가 · {day.strftime('%Y-%m-%d (%a)')}")
+        self.edit_mode = event is not None
+        self.setWindowTitle(("일정 수정 · " if self.edit_mode else "일정 추가 · ")
+                            + day.strftime("%Y-%m-%d (%a)"))
         self.setMinimumWidth(380)
         self.day = day
         form = QFormLayout(self)
@@ -123,6 +132,13 @@ class AddEventDialog(QDialog):
             self.cmb_cal.addItem(label, c["id"])
         form.addRow("캘린더", self.cmb_cal)
 
+        # 수정할 때 날짜도 옮길 수 있어야 한다(하루 밀린 일정을 고치는 일이 잦다)
+        self.de_day = QDateEdit()
+        self.de_day.setCalendarPopup(True)
+        self.de_day.setDisplayFormat("yyyy-MM-dd")
+        self.de_day.setDate(QDate(day.year, day.month, day.day))
+        form.addRow("날짜", self.de_day)
+
         self.chk_allday = QCheckBox("종일")
         self.chk_allday.setChecked(True)
         self.chk_allday.toggled.connect(lambda on: self.dt_time.setEnabled(not on))
@@ -134,9 +150,20 @@ class AddEventDialog(QDialog):
         self.dt_time.setEnabled(False)
         form.addRow("시각", self.dt_time)
 
+        if self.edit_mode:
+            self.ed_title.setText(event.summary)
+            self.chk_allday.setChecked(not event.has_time)
+            if event.has_time:
+                self.dt_time.setTime(QTime(event.start.hour, event.start.minute))
+            idx = self.cmb_cal.findData(event.cal_id)
+            if idx >= 0:
+                self.cmb_cal.setCurrentIndex(idx)
+            self.cmb_cal.setEnabled(False)
+            self.cmb_cal.setToolTip("수정할 때는 다른 캘린더로 옮길 수 없습니다.")
+
         row = QHBoxLayout()
         row.addStretch()
-        ok = QPushButton("추가")
+        ok = QPushButton("저장" if self.edit_mode else "추가")
         ok.setDefault(True)
         ok.clicked.connect(self._ok)
         cancel = QPushButton("취소")
@@ -153,11 +180,13 @@ class AddEventDialog(QDialog):
 
     def values(self):
         t = self.dt_time.time()
+        qd = self.de_day.date()
         return {
             "title": self.ed_title.text().strip(),
             "calendar_id": self.cmb_cal.currentData(),
             "all_day": self.chk_allday.isChecked(),
             "time": time(t.hour(), t.minute()),
+            "day": date(qd.year(), qd.month(), qd.day()),
         }
 
 
@@ -168,6 +197,7 @@ class CalendarWindow(QWidget):
     sig_events = Signal(object, str, int)   # (list[CalEvent]|None, error, 조회시작 epoch)
     sig_cals = Signal(object)               # list[dict]
     sig_added = Signal(object, object, str)  # (임시기록, 실제 CalEvent|None, error)
+    sig_changed = Signal(str, str)           # (error, 성공 메시지) — 수정/삭제 결과
 
     def __init__(self, auth: google_client.GoogleAuth, parent=None):
         super().__init__(parent)
@@ -197,13 +227,21 @@ class CalendarWindow(QWidget):
         top = QHBoxLayout()
         self.btn_add = QPushButton("이 날짜에 일정 추가")
         self.btn_add.clicked.connect(self._add_for_selected)
+        self.btn_edit = QPushButton("선택 일정 수정")
+        self.btn_edit.clicked.connect(self._edit_selected)
+        self.btn_del = QPushButton("선택 일정 삭제")
+        self.btn_del.clicked.connect(self._delete_selected)
         self.btn_refresh = QPushButton("새로고침")
+        # '불러오는 중…' 으로 글자가 길어져도 잘리지 않게 폭을 미리 잡아 둔다
+        self.btn_refresh.setMinimumWidth(110)
         self.btn_refresh.clicked.connect(self.reload)
         self.btn_web = QPushButton("브라우저에서 열기")
         self.btn_web.clicked.connect(lambda: webbrowser.open("https://calendar.google.com/"))
         self.btn_close = QPushButton("닫기")
         self.btn_close.clicked.connect(self.close)
         top.addWidget(self.btn_add)
+        top.addWidget(self.btn_edit)
+        top.addWidget(self.btn_del)
         top.addWidget(self.btn_refresh)
         top.addStretch()
         top.addWidget(self.btn_web)
@@ -222,11 +260,13 @@ class CalendarWindow(QWidget):
         v.addWidget(self.lbl_day)
         self.lst = QListWidget()
         self.lst.setFixedHeight(120)   # 하단 상세 목록은 고정 높이(달력이 대부분 차지)
+        self.lst.itemDoubleClicked.connect(lambda _i: self._edit_selected())
         v.addWidget(self.lst)
 
         self.sig_events.connect(self._on_events)
         self.sig_cals.connect(self._on_cals)
         self.sig_added.connect(self._on_added)
+        self.sig_changed.connect(self._on_changed)
         self.apply_theme()
 
         # 체감 속도 향상: 메인 창이 이미 받아둔 일정으로 즉시 화면을 그린다.
@@ -237,6 +277,17 @@ class CalendarWindow(QWidget):
 
         # 창이 먼저 뜨고 나서(다음 이벤트 루프 틱) 백그라운드 로딩 → 여는 순간 멈춤 방지
         QTimer.singleShot(0, self.reload)
+
+    def goto_date(self, d: date):
+        """그 날짜로 달력을 옮기고 아래에 그 날 일정을 펼친다."""
+        if d is None:
+            return
+        qd = QDate(d.year, d.month, d.day)
+        self.cal.setSelectedDate(qd)
+        self.cal.setCurrentPage(d.year, d.month)
+        self._on_day_selected(qd)
+        if self.lst.count():
+            self.lst.setCurrentRow(0)      # 바로 [수정]/[삭제] 를 누를 수 있게
 
     def apply_theme(self):
         """다크/라이트 전환 시 창 배경·글자색을 현재 테마로 갱신."""
@@ -322,7 +373,77 @@ class CalendarWindow(QWidget):
             self.lst.addItem("(일정 없음) — 더블클릭하거나 [이 날짜에 일정 추가]")
             return
         for e in day_evs:
-            self.lst.addItem(f"{e.time_text()}  {e.summary}")
+            li = QListWidgetItem(f"{e.time_text()}  {e.summary}")
+            li.setData(Qt.UserRole, e)      # 수정/삭제에 쓸 원본 일정
+            self.lst.addItem(li)
+
+    # ---- 수정 / 삭제 ----
+    def _selected_event(self):
+        li = self.lst.currentItem()
+        ev = li.data(Qt.UserRole) if li else None
+        if ev is None:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "아래 목록에서 일정을 먼저 선택하세요.")
+            return None
+        if not getattr(ev, "event_id", ""):
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "이 일정은 아직 구글에 등록 중이거나 식별할 수 없어\n"
+                "수정·삭제할 수 없습니다. [새로고침] 후 다시 시도하세요.")
+            return None
+        return ev
+
+    def _edit_selected(self):
+        ev = self._selected_event()
+        if ev is None:
+            return
+        cals = self.calendars or [{"id": ev.cal_id or "primary",
+                                   "name": "내 캘린더", "primary": True}]
+        dlg = AddEventDialog(ev.start.date(), cals, self, event=ev)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        vals = dlg.values()
+
+        def worker():
+            try:
+                google_client.update_event(
+                    self.auth, ev.cal_id, ev.event_id, vals["title"], vals["day"],
+                    start_time=None if vals["all_day"] else vals["time"],
+                    all_day=vals["all_day"], description=ev.description)
+                self.sig_changed.emit("", "일정을 수정했습니다.")
+            except Exception as e:
+                self.sig_changed.emit(str(e), "")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _delete_selected(self):
+        ev = self._selected_event()
+        if ev is None:
+            return
+        if QMessageBox.question(
+                self, config.APP_NAME,
+                f"'{ev.summary}' 일정을 구글 캘린더에서 삭제할까요?\n"
+                "삭제하면 휴대폰 등 다른 기기에서도 사라집니다.") != QMessageBox.Yes:
+            return
+
+        # 화면에서 먼저 지운다 (되돌리기는 실패 응답에서 새로고침으로 처리)
+        self.events = [e for e in self.events
+                       if getattr(e, "event_id", "") != ev.event_id]
+        self._redraw()
+
+        def worker():
+            try:
+                google_client.delete_event(self.auth, ev.cal_id, ev.event_id)
+                self.sig_changed.emit("", "일정을 삭제했습니다.")
+            except Exception as e:
+                self.sig_changed.emit(str(e), "")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_changed(self, err: str, msg: str):
+        """수정/삭제 결과 처리 — 어느 쪽이든 서버 기준으로 다시 맞춘다."""
+        if err:
+            QMessageBox.warning(self, config.APP_NAME, "실패했습니다:\n" + err)
+        self._epoch += 1
+        self.reload()
 
     # ---- 추가 ----
     def _add_for_selected(self):
@@ -334,6 +455,7 @@ class CalendarWindow(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values()
+        d = vals["day"]          # 대화상자에서 날짜를 바꿨을 수 있다
 
         # ── 네트워크보다 먼저 화면에 그린다 (POST 가 오래 걸려도 즉시 보인다) ──
         if vals["all_day"]:

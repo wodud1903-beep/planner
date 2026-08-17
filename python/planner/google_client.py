@@ -41,6 +41,11 @@ class CalEvent:
     has_time: bool
     summary: str
     uid: str = ""
+    # 수정/삭제하려면 '어느 캘린더의 어느 일정' 인지 알아야 한다.
+    # uid(iCalUID)는 반복 일정에서 여러 건이 공유하므로 조작 키로 쓸 수 없다.
+    cal_id: str = ""
+    event_id: str = ""
+    description: str = ""
 
     def time_text(self) -> str:
         return self.start.strftime("%H:%M") if self.has_time else "종일"
@@ -331,7 +336,7 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
                 "singleEvents": "true",
                 "orderBy": "startTime",
                 "maxResults": 250,
-                "fields": "items(start,summary,iCalUID,id)",
+                "fields": "items(start,end,summary,description,iCalUID,id)",
             }, timeout=20)
         except Exception:
             failed.append(cal_id)      # 조용히 삼키면 일정이 통째로 사라진다
@@ -351,6 +356,9 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
                 has_time=has_time,
                 summary=it.get("summary", "(제목 없음)"),
                 uid=it.get("iCalUID", it.get("id", "")),
+                cal_id=cal_id,
+                event_id=it.get("id", ""),
+                description=it.get("description", "") or "",
             ))
         return out
 
@@ -604,7 +612,82 @@ def insert_event(auth: GoogleAuth, calendar_id: str, summary: str,
             has_time = True
     return CalEvent(start=dt, has_time=has_time,
                     summary=j.get("summary", summary),
-                    uid=j.get("iCalUID", j.get("id", "")))
+                    uid=j.get("iCalUID", j.get("id", "")),
+                    cal_id=calendar_id or "primary",
+                    event_id=j.get("id", ""),
+                    description=description)
+
+
+def _event_body(summary: str, day: date, start_time=None, end_time=None,
+                all_day: bool = True, description: str = "") -> dict:
+    """일정 본문(추가·수정 공용)."""
+    body = {"summary": summary, "description": description or ""}
+    if all_day or start_time is None:
+        body["start"] = {"date": day.strftime("%Y-%m-%d")}
+        body["end"] = {"date": (day + timedelta(days=1)).strftime("%Y-%m-%d")}
+    else:
+        tz = datetime.now().astimezone().tzinfo
+        sdt = datetime(day.year, day.month, day.day,
+                       start_time.hour, start_time.minute, tzinfo=tz)
+        edt = (datetime(day.year, day.month, day.day,
+                        end_time.hour, end_time.minute, tzinfo=tz)
+               if end_time is not None else sdt + timedelta(hours=1))
+        body["start"] = {"dateTime": sdt.isoformat()}
+        body["end"] = {"dateTime": edt.isoformat()}
+    return body
+
+
+def update_event(auth: GoogleAuth, calendar_id: str, event_id: str, summary: str,
+                 day: date, start_time=None, end_time=None,
+                 all_day: bool = True, description: str = "") -> CalEvent:
+    """기존 일정 수정. 수정된 일정을 돌려준다."""
+    if not event_id:
+        raise GoogleError("이 일정은 수정할 수 없습니다 (일정 ID 없음).")
+    headers = auth._headers()
+    headers["Content-Type"] = "application/json"
+    body = _event_body(summary, day, start_time, end_time, all_day, description)
+    cid = urllib.parse.quote(calendar_id or "primary")
+    url = config.CALENDAR_EVENTS_URL.format(cal_id=cid) + "/" + urllib.parse.quote(event_id)
+    r = requests.patch(url, headers=headers, json=body, timeout=20)
+    if r.status_code not in (200, 201):
+        if r.status_code == 403:
+            raise GoogleError(_task_write_error(r))
+        if r.status_code == 404:
+            raise GoogleError("일정을 찾을 수 없습니다. [새로고침] 후 다시 시도하세요.")
+        raise GoogleError(f"일정 수정 실패 (HTTP {r.status_code})")
+    try:
+        j = r.json() or {}
+    except Exception:
+        j = {}
+    st = j.get("start", {})
+    dt, has_time = _parse_rfc3339(st.get("dateTime") or st.get("date") or "")
+    if dt is None:
+        dt = (datetime(day.year, day.month, day.day) if (all_day or start_time is None)
+              else datetime(day.year, day.month, day.day,
+                            start_time.hour, start_time.minute))
+        has_time = not (all_day or start_time is None)
+    return CalEvent(start=dt, has_time=has_time,
+                    summary=j.get("summary", summary),
+                    uid=j.get("iCalUID", j.get("id", "")),
+                    cal_id=calendar_id or "primary",
+                    event_id=j.get("id", event_id),
+                    description=description)
+
+
+def delete_event(auth: GoogleAuth, calendar_id: str, event_id: str) -> None:
+    """일정 삭제."""
+    if not event_id:
+        raise GoogleError("이 일정은 삭제할 수 없습니다 (일정 ID 없음).")
+    cid = urllib.parse.quote(calendar_id or "primary")
+    url = config.CALENDAR_EVENTS_URL.format(cal_id=cid) + "/" + urllib.parse.quote(event_id)
+    r = requests.delete(url, headers=auth._headers(), timeout=20)
+    # 410 = 이미 지워짐 → 목적은 달성된 것이므로 성공으로 본다
+    if r.status_code not in (200, 204, 410):
+        if r.status_code == 403:
+            raise GoogleError(_task_write_error(r))
+        if r.status_code == 404:
+            raise GoogleError("일정을 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.")
+        raise GoogleError(f"일정 삭제 실패 (HTTP {r.status_code})")
 
 
 # ---------------------------------------------------------------------------

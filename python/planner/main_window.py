@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
         self._touch_sync()
 
     # ------------------------------------------------------------ 캘린더 창
-    def open_calendar(self):
+    def open_calendar(self, goto: date | None = None):
         if not self.gauth.is_connected():
             QMessageBox.information(self, config.APP_NAME,
                                     "먼저 [설정]에서 Google 로그인 하세요.")
@@ -449,6 +449,14 @@ class MainWindow(QMainWindow):
         self._cal_win.show()
         self._cal_win.raise_()
         self._cal_win.activateWindow()
+        if goto is not None:
+            self._cal_win.goto_date(goto)
+
+    def _on_week_dblclick(self, index):
+        """이번주 일정을 더블클릭 → 캘린더 창을 그 날짜로 연다."""
+        r = index.row()
+        d = self.week_dates[r] if 0 <= r < len(self.week_dates) else None
+        self.open_calendar(goto=d)
 
     def add_optimistic_event(self, ev) -> None:
         """캘린더 창에서 방금 추가한 일정을 재조회 없이 이번주 목록에 바로 반영."""
@@ -589,6 +597,8 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lbl_week)
         self.tbl_week = self._make_table(["날짜", "시각", "구분", "내용"], [130, 80, 80, 620])
         self.tbl_week.setMaximumHeight(250)
+        # 일정을 더블클릭하면 캘린더 창이 그 날짜로 열린다 (바로 수정·삭제 가능)
+        self.tbl_week.doubleClicked.connect(self._on_week_dblclick)
         v.addWidget(self.tbl_week)
 
         # 내 할일 조작줄
@@ -656,10 +666,14 @@ class MainWindow(QMainWindow):
         self.lbl_cust = QLabel("고객관리 시트를 불러오려면 [불러오기]를 누르세요.")
         v.addWidget(self.lbl_cust)
 
+        # 안내멘트는 [복사] 버튼만 들어가므로 버튼 폭이면 충분하다(96→62).
+        # 거기서 아낀 폭을 고객명·금융사·차종·날짜에 나눠 줬다.
+        # 전체 폭은 그대로라 가로 스크롤이 더 늘지 않는다.
         self.tbl_cust = self._make_table(
             ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일",
              "진행현황", "안내멘트"],
-            [46, 196, 94, 146, 92, 92, 74, 96])
+            [46, 210, 100, 154, 95, 95, 74, 62],
+            stretch_last=False)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         v.addWidget(self.tbl_cust)
         return w
@@ -1211,7 +1225,12 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tbl_alarm)
         return w
 
-    def _make_table(self, headers, widths) -> QTableWidget:
+    def _make_table(self, headers, widths, stretch_last: bool = True) -> QTableWidget:
+        """표 하나.
+
+        stretch_last=False 면 지정한 폭을 그대로 지킨다. 마지막 열이 버튼 열
+        (안내멘트)인 표에서 켜 두면 버튼 칸만 늘어나 보기 나쁘다.
+        """
         t = QTableWidget(0, len(headers))
         t.setHorizontalHeaderLabels(headers)
         t.verticalHeader().setVisible(False)
@@ -1221,7 +1240,7 @@ class MainWindow(QMainWindow):
         t.setShowGrid(True)
         for i, wdt in enumerate(widths):
             t.setColumnWidth(i, wdt)
-        t.horizontalHeader().setStretchLastSection(True)
+        t.horizontalHeader().setStretchLastSection(stretch_last)
         return t
 
     def _build_tray(self):
