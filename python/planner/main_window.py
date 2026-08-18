@@ -681,7 +681,7 @@ class MainWindow(QMainWindow):
         self.tbl_cust = self._make_table(
             ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일",
              "진행현황", "수수료", "안내멘트", "견적서"],
-            [44, 196, 96, 148, 92, 92, 70, 104, 62, 78],
+            [44, 196, 96, 148, 92, 92, 70, 104, 76, 78],
             stretch_last=False)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         # 표가 실제 크기를 갖는 시점은 탭을 처음 열 때다. 그 전에 계산한 폭은
@@ -1031,7 +1031,8 @@ class MainWindow(QMainWindow):
                 cell.setFont(f)
             # 안내멘트 복사 버튼 (+ 보낸 적 있으면 표시)
             done = self._ment_key(cr) in self._ment_copied
-            btn = QPushButton("✅ 복사됨" if done else "복사")
+            # 글자가 길면 칸을 넘어 잘린다. 보낸 표시는 앞의 체크와 초록색으로만 한다.
+            btn = QPushButton("✓ 복사" if done else "복사")
             btn.setEnabled(not pend)
             btn.setToolTip("고객안내멘트를 클립보드로 복사합니다"
                            + ("\n(이미 복사한 적이 있습니다)" if done else ""))
