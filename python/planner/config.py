@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -93,6 +93,12 @@ SHEETS_BATCH_UPDATE_URL = SHEETS_BASE_URL + ":batchUpdate"
 # 기본 고객관리 시트 (설정에서 변경 가능)
 DEF_SHEET_ID = "1L6UwkuywIEAffPvQX9GWwsP8Ix_6fP8uakNFfV1iAm8"
 DEF_SHEET_NAME = "미출고차량"
+
+# 차종별 수당율 전용 스프레드시트 — **고정**.
+# 수당율은 회사가 한 곳에서 관리하는 값이라, 각 PC 가 어떤 고객관리 시트를 쓰든
+# 항상 이 파일 하나만 바라본다. (고객관리 시트에 두면 시트를 바꾼 PC 끼리
+# 서로 다른 수당율을 쓰게 된다)
+RATES_SHEET_ID = "1PSjqA7wvIBHusjYHFfD9cLKP-EbtdFrCkNqlZHz2jm0"
 
 # 콜백 서버가 시도할 포트 범위 (델파이 원본과 동일)
 REDIRECT_PORT_RANGE = range(49200, 49231)

@@ -250,8 +250,9 @@ class SettingsDialog(QDialog):
 
     def _open_rates(self):
         from .rate_dialog import RateDialog
-        sid = sheets.parse_sheet_id(self.ed_sheet_id.text()) if self.chk_sheet.isChecked() else ""
-        RateDialog(self, auth=self.gauth if sid else None, sheet_id=sid).exec()
+        # 수당율은 고객관리 시트와 무관하게 **전용 스프레드시트 한 곳**만 쓴다.
+        auth = self.gauth if self.gauth.is_connected() else None
+        RateDialog(self, auth=auth, sheet_id=config.RATES_SHEET_ID).exec()
 
     def _on_ok(self):
         s = self.settings

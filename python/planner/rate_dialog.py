@@ -107,10 +107,10 @@ class RateDialog(QDialog):
         lbl = QLabel(
             "수당율을 고치면 [수당계산기] 탭에 바로 반영됩니다.\n"
             "'화물차' 를 체크하면 공급가를 1.1 로, 아니면 1.1572 로 나눠 계산합니다.\n"
-            + ("고친 값은 고객관리 시트의 '수당율' 탭에 저장돼, 다른 PC 에서 다른 계정으로\n"
-               "로그인해도 같은 수당율을 쓰게 됩니다."
+            + ("고친 값은 회사 공용 '수당율' 스프레드시트에 저장됩니다.\n"
+               "다른 PC 에서 다른 계정으로 로그인해도 같은 수당율을 쓰게 됩니다."
                if self._auth is not None and self._sheet_id else
-               "(구글 시트 연동이 꺼져 있어 이 PC 에만 저장됩니다)"))
+               "(구글 로그인 전이라 이 PC 에만 저장됩니다)"))
         lbl.setStyleSheet(f"color:{theme.c('subtext')};")
         v.addWidget(lbl)
 
@@ -178,5 +178,7 @@ class RateDialog(QDialog):
         if err:
             QMessageBox.warning(
                 self, config.APP_NAME,
-                "수당율을 이 PC 에는 저장했지만 공유 시트에 올리지 못했습니다.\n"
-                "다른 PC 에는 반영되지 않습니다.\n\n" + err.splitlines()[0][:120])
+                "수당율을 이 PC 에는 저장했지만 공용 시트에 올리지 못했습니다.\n"
+                "다른 PC 에는 반영되지 않습니다.\n"
+                "공용 수당율 시트에 편집 권한이 있는지 확인해 주세요.\n\n"
+                + err.splitlines()[0][:120])

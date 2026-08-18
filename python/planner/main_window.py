@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
         self.reload_data()   # 계정 폴더 기준으로 다시 로드
         # 이제야 이 계정의 시트 설정을 알 수 있다 → 바로 불러오기 시도
         self._auto_load_sheet()
+        self.fetch_rates_async()      # 공유 수당율(전용 시트)도 함께 받아온다
         # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
         self._backup(manual=False)
 
@@ -886,14 +887,6 @@ class MainWindow(QMainWindow):
                         self.sig_sheet_docs.emit(docs)
                 except Exception:
                     pass
-                # 5) 공유 수당율(수당율 탭) — 다른 계정 PC 에서 고친 값을 받아온다.
-                #    개인 드라이브 동기화는 계정별이라 여기까지 전달되지 않는다.
-                try:
-                    rates = sheets.read_rates(self.gauth, sid)
-                    if rates:
-                        self.sig_sheet_rates.emit(rates)
-                except Exception:
-                    pass
                 # 4) 고객ID(U열) — 아직 U열이 없는 시트면 그냥 빈 값이다.
                 #    목록 조회에 묶으면 U열 없는 시트에서 목록까지 통째로 실패한다.
                 try:
@@ -941,6 +934,25 @@ class MainWindow(QMainWindow):
         if changed:
             self._migrate_ment_keys()
             self.refresh_customers()
+
+    def fetch_rates_async(self):
+        """공유 수당율을 전용 스프레드시트에서 받아온다.
+
+        고객관리 시트를 안 쓰는 PC 도 계산기는 쓰므로, 시트 연동 여부와 상관없이
+        구글에 연결돼 있으면 받아온다. 권한이 없거나 실패하면 조용히 넘어가고
+        이 PC 에 저장된 마지막 값으로 계산한다.
+        """
+        if not self.gauth.is_connected():
+            return
+
+        def worker():
+            try:
+                rates = sheets.read_rates(self.gauth, config.RATES_SHEET_ID)
+                if rates:
+                    self.sig_sheet_rates.emit(rates)
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_sheet_rates(self, rates: dict):
         """공유 수당율이 도착 → 이 PC 에도 저장하고 계산기에 반영."""
@@ -1486,6 +1498,7 @@ class MainWindow(QMainWindow):
                 self.apply_theme()   # 다크모드 즉시 반영
             if hasattr(self, "tab_comm"):
                 self.tab_comm.reload_rates()   # 수당율을 고쳤을 수 있다
+            self.fetch_rates_async()
             # 계약조건 목록을 고쳤을 수 있으니 다시 합쳐 둔다
             self._terms_map = sheets.merge_terms(
                 load_terms_presets(), sheets.terms_by_finance(self.sheet_rows))
