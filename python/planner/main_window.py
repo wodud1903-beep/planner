@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
@@ -684,8 +684,17 @@ class MainWindow(QMainWindow):
             [44, 196, 96, 148, 92, 92, 70, 104, 62, 78],
             stretch_last=False)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
+        # 표가 실제 크기를 갖는 시점은 탭을 처음 열 때다. 그 전에 계산한 폭은
+        # 화면과 안 맞아 오른쪽에 흰 칸이 남는다 → 크기가 바뀔 때마다 다시 맞춘다.
+        self.tbl_cust.viewport().installEventFilter(self)
         v.addWidget(self.tbl_cust)
         return w
+
+    def eventFilter(self, obj, ev):
+        if (ev.type() == QEvent.Resize
+                and hasattr(self, "tbl_cust") and obj is self.tbl_cust.viewport()):
+            self._fit_cust_columns()
+        return super().eventFilter(obj, ev)
 
     # 진행현황 색상 (글자만 — 배경은 건드리지 않는다)
     STATUS_COLORS = {"출고": "#2F6FD0", "발주": "#4FA45C", "취소": "#D23B3B"}
@@ -693,6 +702,8 @@ class MainWindow(QMainWindow):
     # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
     COL_STATUS = 6
     COL_FEE = 7
+    # 짧은 값이라 가운데로 모아야 읽기 좋은 열 (순번·계약일·출고일·진행현황)
+    CENTER_COLS = (0, 4, 5, 6)
     COL_MENT_BTN = 8
     COL_DOC_BTN = 9
 
@@ -1007,6 +1018,8 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.UserRole, cr.row)
                 if c == self.COL_FEE:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                elif c in self.CENTER_COLS:
+                    item.setTextAlignment(Qt.AlignCenter)
                 self.tbl_cust.setItem(r, c, item)
             # 진행현황: 출고=파랑 / 발주=연초록 / 취소=빨강, 굵게 (글자만)
             col = self.STATUS_COLORS.get(status.strip())
@@ -1056,6 +1069,9 @@ class MainWindow(QMainWindow):
         (Stretch)으로 두면 창보다 넓을 때 그 열이 되레 찌그러진다.
         그래서 '남을 때만' 더해 준다.
         """
+        if getattr(self, "_fitting_cols", False):
+            return          # 폭을 바꾸면 스크롤바가 생겼다 사라지며 다시 불린다
+        self._fitting_cols = True
         try:
             vp = self.tbl_cust.viewport().width()
             used = sum(self.tbl_cust.columnWidth(i)
@@ -1067,6 +1083,8 @@ class MainWindow(QMainWindow):
             self.tbl_cust.setColumnWidth(1, base + max(0, spare))
         except Exception:
             pass
+        finally:
+            self._fitting_cols = False
 
     def _sel_customer(self):
         r = self.tbl_cust.currentRow()
