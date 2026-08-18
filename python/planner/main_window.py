@@ -143,6 +143,8 @@ class MainWindow(QMainWindow):
         _w = min(1120, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
         self.setFixedSize(_w, _h)
+        self._centered_once = False
+        self._center_on_screen()
 
         # 데이터
         self.todo_file = config.data_file("todos.json")
@@ -2375,6 +2377,36 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 트레이/종료
     def _toast(self, title: str, text: str):
         self.tray.showMessage(title, text, self._app_icon, 4000)
+
+    def _center_on_screen(self):
+        """창을 모니터 가운데로 옮긴다.
+
+        위치를 지정하지 않으면 창이 화면 왼쪽 위에 붙어 제목표시줄이 화면 밖으로
+        올라가는 일이 있다. 그러면 창을 끌어 옮길 수가 없다.
+        """
+        try:
+            scr = self.screen() or QGuiApplication.primaryScreen()
+            avail = scr.availableGeometry()
+            fg = self.frameGeometry()
+            if fg.width() <= 1 or fg.height() <= 1:     # 아직 표시 전
+                fg.setSize(self.size())
+            fg.moveCenter(avail.center())
+            # 제목표시줄과 왼쪽 가장자리가 화면 밖으로 나가지 않게
+            if fg.top() < avail.top():
+                fg.moveTop(avail.top())
+            if fg.left() < avail.left():
+                fg.moveLeft(avail.left())
+            self.move(fg.topLeft())
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        # 창틀 크기는 화면에 뜬 뒤에야 정확히 알 수 있다 → 첫 표시 때 한 번 더 맞춘다.
+        # (이후 사용자가 옮긴 위치는 그대로 둔다)
+        super().showEvent(event)
+        if not getattr(self, "_centered_once", False):
+            self._centered_once = True
+            self._center_on_screen()
 
     def show_window(self):
         self.showNormal()
