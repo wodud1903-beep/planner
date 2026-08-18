@@ -34,6 +34,11 @@ LIGHT = {
     "status_bad": "#C0392B",
     "scroll": "#B3C4D6",
     "scroll_hover": "#98AEC3",
+    "chip_text": "#1B2B3A",
+    "chip1": "#BBD6F2",
+    "chip2": "#C9E6C9",
+    "chip3": "#F6DCC0",
+    "chip4": "#DCD3F0",
 }
 
 # 다크: 남색빛을 빼고 더 어두운 차콜 계열로
@@ -64,6 +69,11 @@ DARK = {
     "status_bad": "#E88",
     "scroll": "#333941",
     "scroll_hover": "#434A54",
+    "chip_text": "#EAF1F8",
+    "chip1": "#31465C",
+    "chip2": "#33513A",
+    "chip3": "#5A4630",
+    "chip4": "#443A5E",
 }
 
 # 따뜻한 크림톤 — 가계부 앱 같은 부드러운 느낌 (오래 봐도 눈이 편하다)
@@ -94,6 +104,11 @@ WARM = {
     "status_bad": "#C0562F",
     "scroll": "#DFCBB6",
     "scroll_hover": "#CBB49C",
+    "chip_text": "#40312A",
+    "chip1": "#F6D9BE",
+    "chip2": "#E9DFC7",
+    "chip3": "#F3CDBF",
+    "chip4": "#E2D7C4",
 }
 
 # 바이올렛 — 금융앱 같은 산뜻한 보라 포인트
@@ -124,6 +139,11 @@ VIOLET = {
     "status_bad": "#D6455D",
     "scroll": "#CFC8EE",
     "scroll_hover": "#B7ADE6",
+    "chip_text": "#241F3D",
+    "chip1": "#D8D0FA",
+    "chip2": "#CFE3FB",
+    "chip3": "#DCEFD9",
+    "chip4": "#F7DCE8",
 }
 
 # 미드나잇 — 다크의 보라 계열 변형
@@ -154,6 +174,11 @@ MIDNIGHT = {
     "status_bad": "#FF8A9B",
     "scroll": "#332E4A",
     "scroll_hover": "#443D60",
+    "chip_text": "#F0EDFF",
+    "chip1": "#3B3363",
+    "chip2": "#2F4759",
+    "chip3": "#4A3A5F",
+    "chip4": "#334A3E",
 }
 
 # 이름 → (표시이름, 팔레트, 어두운 테마인가)
@@ -190,6 +215,12 @@ def theme_name() -> str:
 
 def is_dark() -> bool:
     return _is_dark
+
+
+def chip_colors() -> list:
+    """캘린더 칸에 일정을 칠할 때 쓰는 색 (여러 개면 번갈아 쓴다)."""
+    return [_current.get(f"chip{i}", _current.get("select_bg", "#DDD"))
+            for i in range(1, 5)]
 
 
 def c(key: str) -> str:

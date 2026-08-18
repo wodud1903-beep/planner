@@ -13,8 +13,8 @@ import threading
 import webbrowser
 from datetime import date, datetime, time, timedelta
 
-from PySide6.QtCore import QDate, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QColor, QTextCharFormat
+from PySide6.QtCore import QDate, QRect, Qt, QTime, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QTextCharFormat
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
@@ -41,6 +41,11 @@ class EventCalendar(QCalendarWidget):
     def set_events(self, by_date: dict):
         self._by_date = by_date or {}
         self.updateCells()
+
+    def _chip_bg(self, i: int) -> str:
+        """한 칸에 일정이 여러 개면 색을 번갈아 써 서로 구분되게 한다."""
+        pal = theme.chip_colors()
+        return pal[i % len(pal)]
 
     def paintCell(self, painter, rect, qd):  # noqa: N802
         d = date(qd.year(), qd.month(), qd.day())
@@ -78,31 +83,40 @@ class EventCalendar(QCalendarWidget):
         painter.setPen(numcol)
         painter.drawText(rect.adjusted(5, 3, -4, 0), Qt.AlignLeft | Qt.AlignTop, str(qd.day()))
 
-        # 일정명
+        # 일정명 — 색칠한 띠(칩) 위에 굵은 글씨로. 날짜 숫자와 확실히 구분된다.
         evs = self._by_date.get(d, [])
         if evs:
             fe = painter.font()
             fe.setPointSize(8)
-            fe.setBold(False)
+            fe.setBold(True)
             painter.setFont(fe)
             fm = painter.fontMetrics()
-            line_h = fm.height() + 1
+            # 칩 여백은 최소로 — 칸에 들어가는 일정 수가 예전보다 줄면 안 된다
+            chip_h = fm.height() + 2
+            line_h = chip_h + 1
             top = rect.top() + 20
             avail = rect.height() - 22
             maxlines = max(0, avail // line_h)
-            painter.setPen(QColor(theme.c("text")))
             shown = evs if len(evs) <= maxlines else evs[:max(0, maxlines - 1)]
+
+            painter.setRenderHint(QPainter.Antialiasing, True)
             for i, (tm, summ) in enumerate(shown):
                 label = (tm + " " if tm else "") + summ
-                label = fm.elidedText(label, Qt.ElideRight, rect.width() - 8)
-                painter.drawText(rect.left() + 4, top + i * line_h,
-                                 rect.width() - 8, line_h,
-                                 Qt.AlignLeft | Qt.AlignVCenter, label)
+                y = top + i * line_h
+                box = QRect(rect.left() + 3, y, rect.width() - 7, chip_h)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(self._chip_bg(i)))
+                painter.drawRoundedRect(box, 4, 4)
+                painter.setPen(QColor(theme.c("chip_text")))
+                painter.drawText(box.adjusted(5, 0, -4, 0),
+                                 Qt.AlignLeft | Qt.AlignVCenter,
+                                 fm.elidedText(label, Qt.ElideRight, box.width() - 9))
+            painter.setBrush(Qt.NoBrush)
             if len(evs) > maxlines and maxlines >= 1:
                 more = f"+{len(evs) - len(shown)}건"
                 painter.setPen(QColor(theme.c("accent")))
-                painter.drawText(rect.left() + 4, top + len(shown) * line_h,
-                                 rect.width() - 8, line_h,
+                painter.drawText(rect.left() + 5, top + len(shown) * line_h,
+                                 rect.width() - 9, line_h,
                                  Qt.AlignLeft | Qt.AlignVCenter, more)
         painter.restore()
 
