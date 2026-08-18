@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
@@ -94,15 +94,23 @@ class _BrandTable(QWidget):
 class RateDialog(QDialog):
     """브랜드별 수당율 표를 고치는 창."""
 
-    def __init__(self, parent=None):
+    sig_pushed = Signal(str)     # 공유 시트 업로드 결과 (오류 문구, 성공이면 "")
+
+    def __init__(self, parent=None, auth=None, sheet_id: str = ""):
         super().__init__(parent)
         self.setWindowTitle("차종별 수당율 관리")
-        self.resize(620, 660)
+        self.resize(620, 680)
+        self._auth = auth
+        self._sheet_id = (sheet_id or "").strip()
 
         v = QVBoxLayout(self)
         lbl = QLabel(
             "수당율을 고치면 [수당계산기] 탭에 바로 반영됩니다.\n"
-            "'화물차' 를 체크하면 공급가를 1.1 로, 아니면 1.1572 로 나눠 계산합니다.")
+            "'화물차' 를 체크하면 공급가를 1.1 로, 아니면 1.1572 로 나눠 계산합니다.\n"
+            + ("고친 값은 고객관리 시트의 '수당율' 탭에 저장돼, 다른 PC 에서 다른 계정으로\n"
+               "로그인해도 같은 수당율을 쓰게 됩니다."
+               if self._auth is not None and self._sheet_id else
+               "(구글 시트 연동이 꺼져 있어 이 PC 에만 저장됩니다)"))
         lbl.setStyleSheet(f"color:{theme.c('subtext')};")
         v.addWidget(lbl)
 
@@ -129,6 +137,8 @@ class RateDialog(QDialog):
         row.addWidget(b_cancel)
         v.addLayout(row)
 
+        self.sig_pushed.connect(self._on_pushed)
+
     def _reset(self):
         if QMessageBox.question(
                 self, config.APP_NAME,
@@ -148,4 +158,25 @@ class RateDialog(QDialog):
                 "최소 한 개는 남겨 주세요.")
             return
         commission.save_rates(rates)
+
+        # 공유 시트에도 올린다 — 다른 계정으로 쓰는 PC 까지 같은 값이 되도록.
+        if self._auth is not None and self._sheet_id:
+            import threading
+
+            from . import sheets as _sheets
+
+            def worker():
+                try:
+                    _sheets.write_rates(self._auth, self._sheet_id, rates)
+                    self.sig_pushed.emit("")
+                except Exception as e:
+                    self.sig_pushed.emit(str(e))
+            threading.Thread(target=worker, daemon=True).start()
         self.accept()
+
+    def _on_pushed(self, err: str):
+        if err:
+            QMessageBox.warning(
+                self, config.APP_NAME,
+                "수당율을 이 PC 에는 저장했지만 공유 시트에 올리지 못했습니다.\n"
+                "다른 PC 에는 반영되지 않습니다.\n\n" + err.splitlines()[0][:120])

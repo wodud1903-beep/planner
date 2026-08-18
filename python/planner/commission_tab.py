@@ -37,18 +37,15 @@ class _BrandPage(QWidget):
         self.ed_price.textEdited.connect(self._on_price_edited)
         form.addRow("차량가 (₩)", self.ed_price)
 
-        self.ed_rate = QLineEdit()
-        self.ed_rate.setPlaceholderText("차종을 고르면 자동으로 채워집니다")
-        self.ed_rate.textEdited.connect(lambda _t: self.recalc())
-        form.addRow("차종 수당율 (%)", self.ed_rate)
-
         self.ed_pay = QLineEdit(str(int(commission.DEF_PAY_RATE)))
         self.ed_pay.textEdited.connect(lambda _t: self.recalc())
         form.addRow("지급율 (%)", self.ed_pay)
 
-        self.chk_truck = QCheckBox("화물차 (공급가 계산이 다릅니다)")
-        self.chk_truck.toggled.connect(lambda _b: self.recalc())
-        form.addRow("", self.chk_truck)
+        # 차종 수당율과 화물차 여부는 설정에서만 관리한다.
+        # 계산할 때 실수로 건드리면 잘못된 금액이 나오므로 입력칸을 두지 않고,
+        # 지금 적용된 값만 읽기 전용으로 보여준다.
+        self.lbl_rate = QLabel("-")
+        form.addRow("적용 수당율", self.lbl_rate)
 
         self.chk_tax = QCheckBox("면세 차량")
         self.chk_tax.toggled.connect(lambda _b: self.recalc())
@@ -97,11 +94,12 @@ class _BrandPage(QWidget):
     def _on_car(self):
         i = self.cmb_car.currentData()
         if isinstance(i, int) and 0 <= i < len(self.items):
-            _name, rate, truck = self.items[i]
-            self.ed_rate.setText(f"{rate:g}")
-            self.chk_truck.blockSignals(True)
-            self.chk_truck.setChecked(bool(truck))
-            self.chk_truck.blockSignals(False)
+            _name, self._rate, self._truck = self.items[i]
+            self.lbl_rate.setText(
+                f"{self._rate:g} %   ({'화물차' if self._truck else '승용차'} 기준)")
+        else:
+            self._rate, self._truck = 0.0, False
+            self.lbl_rate.setText("차종을 선택하세요")
         self.recalc()
 
     def _on_price_edited(self, _t: str):
@@ -126,9 +124,9 @@ class _BrandPage(QWidget):
 
     def recalc(self):
         price = self._num(self.ed_price)
-        rate = self._num(self.ed_rate)
         pay = self._num(self.ed_pay, commission.DEF_PAY_RATE)
-        won = commission.calc(price, rate, self.chk_truck.isChecked(),
+        won = commission.calc(price, getattr(self, "_rate", 0.0),
+                              getattr(self, "_truck", False),
                               pay, self.chk_tax.isChecked())
         self.lbl_result.setText(f"₩ {won:,}")
         self._value = won
@@ -145,6 +143,7 @@ class _BrandPage(QWidget):
         self.lbl_cap.setText("최종 지급수수료  (복사했습니다)")
 
     def apply_theme(self):
+        self.lbl_rate.setStyleSheet(f"color:{theme.c('subtext')};")
         self.lbl_result.setStyleSheet(
             f"font-size:24px;font-weight:bold;color:{theme.c('status_bad')};")
         self.lbl_cap.setStyleSheet(f"color:{theme.c('subtext')};")

@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
     sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
     sig_sheet_docs = Signal(object)                  # {행번호: S열 =IMAGE() 수식}
     sig_sheet_uids = Signal(object)                  # {행번호: U열 고객ID}
+    sig_sheet_rates = Signal(object)                 # 공유 수당율 표
     sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
     def __init__(self):
@@ -210,6 +211,7 @@ class MainWindow(QMainWindow):
         self.sig_sheet_ments.connect(self._on_sheet_ments)
         self.sig_sheet_docs.connect(self._on_sheet_docs)
         self.sig_sheet_uids.connect(self._on_sheet_uids)
+        self.sig_sheet_rates.connect(self._on_sheet_rates)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
         # 동기화 푸시 디바운스 타이머
@@ -884,6 +886,14 @@ class MainWindow(QMainWindow):
                         self.sig_sheet_docs.emit(docs)
                 except Exception:
                     pass
+                # 5) 공유 수당율(수당율 탭) — 다른 계정 PC 에서 고친 값을 받아온다.
+                #    개인 드라이브 동기화는 계정별이라 여기까지 전달되지 않는다.
+                try:
+                    rates = sheets.read_rates(self.gauth, sid)
+                    if rates:
+                        self.sig_sheet_rates.emit(rates)
+                except Exception:
+                    pass
                 # 4) 고객ID(U열) — 아직 U열이 없는 시트면 그냥 빈 값이다.
                 #    목록 조회에 묶으면 U열 없는 시트에서 목록까지 통째로 실패한다.
                 try:
@@ -931,6 +941,17 @@ class MainWindow(QMainWindow):
         if changed:
             self._migrate_ment_keys()
             self.refresh_customers()
+
+    def _on_sheet_rates(self, rates: dict):
+        """공유 수당율이 도착 → 이 PC 에도 저장하고 계산기에 반영."""
+        try:
+            from . import commission
+            if rates != commission.load_rates():
+                commission.save_rates(rates)
+                if hasattr(self, "tab_comm"):
+                    self.tab_comm.reload_rates()
+        except Exception:
+            pass
 
     def _on_sheet_docs(self, docs: dict):
         """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채우고 표를 다시 그린다.

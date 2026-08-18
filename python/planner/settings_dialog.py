@@ -250,7 +250,8 @@ class SettingsDialog(QDialog):
 
     def _open_rates(self):
         from .rate_dialog import RateDialog
-        RateDialog(self).exec()
+        sid = sheets.parse_sheet_id(self.ed_sheet_id.text()) if self.chk_sheet.isChecked() else ""
+        RateDialog(self, auth=self.gauth if sid else None, sheet_id=sid).exec()
 
     def _on_ok(self):
         s = self.settings

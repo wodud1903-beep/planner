@@ -920,3 +920,86 @@ def image_url(cell: str) -> str:
 def image_formula(url: str) -> str:
     """셀 안에 그림으로 보이게 하는 수식 (4 = 원본비율 유지하며 셀에 맞춤)."""
     return f'=IMAGE("{url}", 1)'
+
+
+# ---------------------------------------------------------------------------
+# 수당율 공유 — 고객관리 스프레드시트의 '수당율' 탭
+#
+# 구글 드라이브 동기화는 계정별 개인 저장소라 다른 계정 PC 에는 전달되지 않는다.
+# 반면 고객관리 시트는 이미 여럿이 함께 보는 파일이므로, 수당율을 그 안에 두면
+# 어느 계정으로 로그인하든 같은 값을 쓰게 된다.
+# ---------------------------------------------------------------------------
+RATES_TAB = "수당율"
+_RATE_HEADER = ["브랜드", "차종", "수당율(%)", "화물차"]
+_BRAND_KO = {"hyundai": "현대", "kia": "기아"}
+_KO_BRAND = {v: k for k, v in _BRAND_KO.items()}
+
+
+def read_rates(auth: GoogleAuth, sheet_id: str, tab: str = RATES_TAB):
+    """공유 수당율 표를 읽는다. 탭이 없으면 None (아직 아무도 안 올린 상태)."""
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(tab, "A1:D"))
+    r = requests.get(url, headers=_headers(auth), timeout=20)
+    if r.status_code != 200:
+        return None
+    rows = (r.json() or {}).get("values", [])
+    out: dict = {"hyundai": [], "kia": []}
+    for row in rows:
+        if not row or len(row) < 3:
+            continue
+        brand = str(row[0]).strip()
+        if brand in ("브랜드", ""):
+            continue                      # 머리글
+        key = _KO_BRAND.get(brand, brand.strip().lower())
+        if key not in out:
+            continue
+        name = str(row[1]).strip()
+        if not name:
+            continue
+        try:
+            rate = float(str(row[2]).replace("%", "").strip())
+        except Exception:
+            continue
+        truck = str(row[3]).strip().upper() in ("TRUE", "Y", "예", "1", "O") \
+            if len(row) > 3 else False
+        out[key].append((name, rate, truck))
+    if not (out["hyundai"] or out["kia"]):
+        return None
+    return out
+
+
+def write_rates(auth: GoogleAuth, sheet_id: str, rates: dict,
+                tab: str = RATES_TAB) -> None:
+    """공유 수당율 표를 덮어쓴다. 탭이 없으면 만든다."""
+    # 1) 탭 확보
+    meta = requests.get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
+                        headers=_headers(auth), timeout=30,
+                        params={"fields": "sheets(properties(sheetId,title))"})
+    _check(meta)
+    titles = [(sh.get("properties", {}) or {}).get("title")
+              for sh in (meta.json() or {}).get("sheets", [])]
+    if tab not in titles:
+        r = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+                          headers=_headers(auth), timeout=30,
+                          json={"requests": [{"addSheet": {
+                              "properties": {"title": tab}}}]})
+        _check(r)
+
+    # 2) 기존 내용 비우고 새로 쓴다 (차종을 지운 경우까지 반영)
+    rc = requests.post(
+        config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
+        + "/values/" + _rng(tab, "A1:D10000") + ":clear",
+        headers=_headers(auth), timeout=30, json={})
+    _check(rc)
+
+    values = [list(_RATE_HEADER)]
+    for key in ("hyundai", "kia"):
+        for name, rate, truck in (rates.get(key) or []):
+            values.append([_BRAND_KO.get(key, key), name, rate,
+                           "TRUE" if truck else "FALSE"])
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(tab, f"A1:D{len(values)}"))
+    r = requests.put(url, headers=_headers(auth), timeout=30,
+                     params={"valueInputOption": "RAW"},
+                     json={"values": values})
+    _check(r)
