@@ -145,6 +145,10 @@ class SettingsDialog(QDialog):
             "계약조건의 '60개월' 같은 표기로 만기일을 계산해\n"
             "시작 브리핑에 재계약 대상 고객을 알려줍니다."))
 
+        btn_rates = QPushButton("차종별 수당율 관리…")
+        btn_rates.clicked.connect(self._open_rates)
+        sl.addRow("수당계산기", btn_rates)
+
         self.txt_terms = QTextEdit()
         self.txt_terms.setMinimumHeight(130)
         self.txt_terms.setPlaceholderText(
@@ -243,6 +247,10 @@ class SettingsDialog(QDialog):
         self.chk_shift.setChecked(s.hot_shift)
         idx = self.cmb_key.findText((s.hot_key or "A").upper())
         self.cmb_key.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _open_rates(self):
+        from .rate_dialog import RateDialog
+        RateDialog(self).exec()
 
     def _on_ok(self):
         s = self.settings

@@ -29,6 +29,7 @@ from . import (
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
+from .commission_tab import CommissionTab
 from .customer_history import CustomerHistoryDialog
 from .doc_viewer import DocViewer
 from .edit_dialog import EditDialog
@@ -309,6 +310,8 @@ class MainWindow(QMainWindow):
             self._show_summary(self._summary_data)   # 색상 다시 계산
         if hasattr(self, "tbl_cust"):
             self.refresh_customers()
+        if hasattr(self, "tab_comm"):
+            self.tab_comm.apply_theme()
         # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
         if self._cal_win is not None:
             try:
@@ -563,6 +566,8 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.tabs)
         self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
         self.tabs.addTab(self._build_customer_tab(), "고객관리")
+        self.tab_comm = CommissionTab()
+        self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
 
     def _build_main_tab(self) -> QWidget:
@@ -708,8 +713,34 @@ class MainWindow(QMainWindow):
     COL_DOC_BTN = 9
 
     def _ment_key(self, cr) -> str:
-        """복사 이력 키 — 행 번호는 바뀔 수 있으니 순번+고객명으로 식별."""
+        """안내멘트 복사 이력 키.
+
+        고객ID(시트 U열)가 있으면 그것을 쓴다. 순번·고객명은 언제든 바뀌어서,
+        이름을 조금만 고쳐도 '보냄' 표시가 사라지고 브리핑이 다시 알려 왔다.
+        ID 가 아직 없는 고객만 예전 방식(순번+고객명)으로 식별한다.
+        """
+        uid = (getattr(cr, "uid", "") or "").strip()
+        if uid:
+            return "uid:" + uid
         return f"{cr.seq}|{cr.get('customer')}".strip()
+
+    def _migrate_ment_keys(self):
+        """예전 키(순번+고객명)로 남은 '보냄' 기록을 고객ID 키로 옮긴다.
+
+        이 작업이 없으면 이번 판올림 직후 이미 보낸 고객이 전부 '미발송' 으로 되살아난다.
+        """
+        changed = False
+        for cr in self.sheet_rows:
+            uid = (getattr(cr, "uid", "") or "").strip()
+            if not uid:
+                continue
+            old_key = f"{cr.seq}|{cr.get('customer')}".strip()
+            new_key = "uid:" + uid
+            if old_key in self._ment_copied and new_key not in self._ment_copied:
+                self._ment_copied.add(new_key)
+                changed = True
+        if changed:
+            self._save_ment_log()
 
     def _load_ment_log(self) -> set:
         try:
@@ -890,11 +921,16 @@ class MainWindow(QMainWindow):
         self.refresh_customers()
 
     def _on_sheet_uids(self, uids: dict):
-        """고객ID(U열)가 뒤늦게 도착 → 해당 행에 채운다."""
+        """고객ID(U열)가 뒤늦게 도착 → 채우고, 옛 '보냄' 기록을 ID 키로 옮긴다."""
+        changed = False
         for cr in self.sheet_rows:
             v = uids.get(cr.row)
-            if v:
+            if v and cr.uid != v:
                 cr.uid = v
+                changed = True
+        if changed:
+            self._migrate_ment_keys()
+            self.refresh_customers()
 
     def _on_sheet_docs(self, docs: dict):
         """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채우고 표를 다시 그린다.
@@ -1427,6 +1463,8 @@ class MainWindow(QMainWindow):
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
             if self.settings.dark_mode != prev_dark:
                 self.apply_theme()   # 다크모드 즉시 반영
+            if hasattr(self, "tab_comm"):
+                self.tab_comm.reload_rates()   # 수당율을 고쳤을 수 있다
             # 계약조건 목록을 고쳤을 수 있으니 다시 합쳐 둔다
             self._terms_map = sheets.merge_terms(
                 load_terms_presets(), sheets.terms_by_finance(self.sheet_rows))

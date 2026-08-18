@@ -104,17 +104,39 @@ def parse_sheet_id(url_or_id: str) -> str:
 
 
 def digits_only(s: str) -> str:
-    """'₩57,035,000' → '57035000' (숫자와 마이너스만 남긴다)."""
+    """'₩57,035,000' → '57035000'.
+
+    소수점과 음수를 제대로 다룬다.
+      - '₩1,234.56'  → '1235'   (예전엔 점을 그냥 지워 123456, 즉 100배가 됐다)
+      - '₩-1,000'    → '-1000'  (예전엔 부호가 앞에 없으면 잃어버렸다)
+      - '(₩1,000)'   → '-1000'  (회계 표기의 괄호 = 음수)
+    """
     t = (s or "").strip()
-    neg = t.startswith("-")
-    d = "".join(ch for ch in t if ch.isdigit())
-    return ("-" + d) if (neg and d) else d
+    if not t:
+        return ""
+    neg = False
+    if t.startswith("(") and t.endswith(")"):
+        neg, t = True, t[1:-1]
+    if "-" in t:
+        neg = True
+    kept = "".join(ch for ch in t if ch.isdigit() or ch == ".")
+    if not kept.strip("."):
+        return ""
+    try:
+        n = int(round(float(kept)))
+    except Exception:
+        return ""
+    if n == 0:
+        return "0"
+    return ("-" if neg else "") + str(n)
 
 
 def fmt_money(s: str) -> str:
     """'57035000' → '57,035,000'. 숫자가 없으면 빈 문자열."""
+    if (s or "").strip() == "-":
+        return "-"        # 마이너스를 막 입력한 상태 — 지우면 음수를 못 적는다
     d = digits_only(s)
-    if not d or d == "-":
+    if not d:
         return ""
     neg = d.startswith("-")
     n = d.lstrip("-")

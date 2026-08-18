@@ -11,6 +11,7 @@ import json
 from datetime import date, timedelta
 from pathlib import Path
 
+from . import config
 from .models import TodoItem
 
 _COMPANY_MARKS = ("(주)", "주)", "㈜", "(유)", "주식회사", "(사)")
@@ -98,8 +99,9 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
     if not settings.follow_on or not cal_events:
         return []
     today = date.today()
-    if tracker.last_scan == today:
-        return []
+    # 예전엔 '하루 한 번' 으로 막아 두어, 그날 늦게 만들어진 출고 일정을 새로고침해도
+    # 다음 날까지 팔로업이 등록되지 않았다. 중복은 아래 tracker.done(일정별 기록)이
+    # 막아 주므로 매 조회마다 검사한다.
     tracker.last_scan = today
 
     keyword = (settings.follow_keyword or "출고").strip() or "출고"
