@@ -66,14 +66,126 @@ DARK = {
     "scroll_hover": "#434A54",
 }
 
+# 따뜻한 크림톤 — 가계부 앱 같은 부드러운 느낌 (오래 봐도 눈이 편하다)
+WARM = {
+    "topbar": "#F3E3D3",
+    "topbar_text": "#5B4636",
+    "window_bg": "#FBF3EA",
+    "panel_bg": "#FFFBF6",
+    "text": "#4A3B2F",
+    "subtext": "#8A7663",
+    "accent": "#E08A5C",
+    "border": "#E6D5C3",
+    "header_bg": "#F6E8DA",
+    "select_bg": "#F8DFC8",
+    "select_text": "#4A3B2F",
+    "btn_bg": "#F6E9DC",
+    "btn_hover": "#F0DECB",
+    "btn_pressed": "#E8D2B9",
+    "input_bg": "#FFFCF8",
+    "grid": "#EADBCB",
+    "tab_bg": "#F3E3D3",
+    "today": "#F7C08A",
+    "tomorrow": "#FBEAB4",
+    "row_text": "#3D2F24",
+    "brief_bg": "#F7ECE0",
+    "brief_text": "#4A3B2F",
+    "status_ok": "#4C8C4A",
+    "status_bad": "#C0562F",
+    "scroll": "#DFCBB6",
+    "scroll_hover": "#CBB49C",
+}
+
+# 바이올렛 — 금융앱 같은 산뜻한 보라 포인트
+VIOLET = {
+    "topbar": "#E7E3FB",
+    "topbar_text": "#2E2A45",
+    "window_bg": "#F5F3FE",
+    "panel_bg": "#FFFFFF",
+    "text": "#2E2A45",
+    "subtext": "#6B6688",
+    "accent": "#6C5CE7",
+    "border": "#DEDAF3",
+    "header_bg": "#EDEAFC",
+    "select_bg": "#DED8FB",
+    "select_text": "#241F3D",
+    "btn_bg": "#EFECFD",
+    "btn_hover": "#E4DFFB",
+    "btn_pressed": "#D5CDF8",
+    "input_bg": "#FFFFFF",
+    "grid": "#E5E1F6",
+    "tab_bg": "#E7E3FB",
+    "today": "#FFD08A",
+    "tomorrow": "#FFF0B0",
+    "row_text": "#241F3D",
+    "brief_bg": "#EFECFD",
+    "brief_text": "#2E2A45",
+    "status_ok": "#2E9E6B",
+    "status_bad": "#D6455D",
+    "scroll": "#CFC8EE",
+    "scroll_hover": "#B7ADE6",
+}
+
+# 미드나잇 — 다크의 보라 계열 변형
+MIDNIGHT = {
+    "topbar": "#1E1B2E",
+    "topbar_text": "#E6E2F5",
+    "window_bg": "#15131F",
+    "panel_bg": "#1E1B2E",
+    "text": "#D8D3EC",
+    "subtext": "#9791B5",
+    "accent": "#9B8CFF",
+    "border": "#2E2A45",
+    "header_bg": "#252135",
+    "select_bg": "#332C50",
+    "select_text": "#F0EDFF",
+    "btn_bg": "#272338",
+    "btn_hover": "#312B47",
+    "btn_pressed": "#3C3556",
+    "input_bg": "#191627",
+    "grid": "#2B2740",
+    "tab_bg": "#1E1B2E",
+    "today": "#8A5A2B",
+    "tomorrow": "#6E6224",
+    "row_text": "#F2EFFF",
+    "brief_bg": "#1E1B2E",
+    "brief_text": "#D8D3EC",
+    "status_ok": "#7FD1A6",
+    "status_bad": "#FF8A9B",
+    "scroll": "#332E4A",
+    "scroll_hover": "#443D60",
+}
+
+# 이름 → (표시이름, 팔레트, 어두운 테마인가)
+THEMES = {
+    "light": ("기본 (밝은 청회색)", LIGHT, False),
+    "warm": ("따뜻한 크림", WARM, False),
+    "violet": ("바이올렛", VIOLET, False),
+    "dark": ("다크", DARK, True),
+    "midnight": ("미드나잇 (다크 보라)", MIDNIGHT, True),
+}
+THEME_ORDER = ("light", "warm", "violet", "dark", "midnight")
+
 _current = LIGHT
 _is_dark = False
+_name = "light"
 
 
-def set_theme(dark: bool) -> None:
-    global _current, _is_dark
-    _is_dark = bool(dark)
-    _current = DARK if dark else LIGHT
+def set_theme(theme) -> None:
+    """테마 지정. 이름(str) 또는 예전 방식의 다크 여부(bool) 를 받는다."""
+    global _current, _is_dark, _name
+    if isinstance(theme, bool):                 # 구버전 호출 호환
+        theme = "dark" if theme else "light"
+    key = str(theme or "light").strip().lower()
+    if key not in THEMES:
+        key = "light"
+    _name, (_disp, pal, dark) = key, THEMES[key]
+    _current = pal
+    _is_dark = dark
+
+
+def theme_name() -> str:
+    return _name
 
 
 def is_dark() -> bool:

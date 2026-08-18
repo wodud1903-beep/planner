@@ -7,7 +7,7 @@ import sys
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QFont
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QComboBox
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QComboBox
 
 from . import config, theme
 from .main_window import MainWindow
@@ -107,18 +107,23 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 
 
 class _NoWheelOnCombo(QObject):
-    """드롭다운 위에서 휠을 굴려도 값이 바뀌지 않게 막는다.
+    """드롭다운·숫자·날짜·시각 칸 위에서 휠을 굴려도 값이 바뀌지 않게 막는다.
 
-    표를 스크롤하려고 휠을 굴리다가 그 아래 드롭다운의 금융사·진행현황이
-    엉뚱하게 바뀌는 사고가 잦다. 목록이 펼쳐진 상태에서는 휠로 고르는 게
-    정상이므로 그때는 통과시킨다.
+    화면을 스크롤하려고 휠을 굴리다가 그 아래 있던 금융사·진행현황이나
+    '알림 30분 전' 같은 숫자가 엉뚱하게 바뀌는 사고가 잦다.
+    드롭다운은 목록이 펼쳐진 상태에서 휠로 고르는 게 정상이므로 그때만 통과시킨다.
     """
 
     def eventFilter(self, obj, ev):
-        if ev.type() == QEvent.Wheel and isinstance(obj, QComboBox):
-            if not obj.view().isVisible():
+        if ev.type() == QEvent.Wheel:
+            if isinstance(obj, QComboBox):
+                if not obj.view().isVisible():
+                    ev.ignore()
+                    return True    # 값 변경을 막고, 스크롤은 부모가 처리하게 둔다
+            elif isinstance(obj, QAbstractSpinBox):
+                # 숫자칸(QSpinBox) · 날짜칸(QDateEdit) · 시각칸(QTimeEdit)
                 ev.ignore()
-                return True        # 값 변경을 막고, 스크롤은 부모가 처리하게 둔다
+                return True
         return super().eventFilter(obj, ev)
 
 
@@ -146,7 +151,8 @@ def main() -> int:
     # 저장된 테마(라이트/다크) 선호를 미리 반영 (계정별 설정은 로그인 후 재적용)
     try:
         from .models import AppSettings
-        theme.set_theme(AppSettings.load(config.data_file("plan_cfg.json")).dark_mode)
+        _s = AppSettings.load(config.data_file("plan_cfg.json"))
+        theme.set_theme(getattr(_s, 'theme', '') or ('dark' if _s.dark_mode else 'light'))
     except Exception:
         theme.set_theme(False)
     # 스타일시트 + 팔레트를 함께 적용 (팔레트를 안 주면 윈도우 시스템 다크 테마가

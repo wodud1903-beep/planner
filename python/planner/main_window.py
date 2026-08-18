@@ -192,7 +192,8 @@ class MainWindow(QMainWindow):
         self._notes: dict = self._load_notes()
 
         # 저장된 테마 반영
-        theme.set_theme(self.settings.dark_mode)
+        theme.set_theme(getattr(self.settings, 'theme', '')
+                        or ('dark' if self.settings.dark_mode else 'light'))
 
         self.setWindowIcon(self._app_icon)
         self._build_ui()
@@ -300,7 +301,8 @@ class MainWindow(QMainWindow):
             f"color:{theme.c('topbar_text')};background:transparent;")
 
     def apply_theme(self):
-        theme.set_theme(self.settings.dark_mode)
+        theme.set_theme(getattr(self.settings, "theme", "")
+                        or ("dark" if self.settings.dark_mode else "light"))
         app = QApplication.instance()
         if app:
             theme.apply_to_app(app)   # 스타일시트 + 팔레트 함께
@@ -1486,16 +1488,20 @@ class MainWindow(QMainWindow):
 
     def on_settings_click(self):
         was_connected = self.gauth.is_connected()
-        prev_dark = self.settings.dark_mode
+        prev_theme = (getattr(self.settings, "theme", "")
+                      or ("dark" if self.settings.dark_mode else "light"))
         prev_sheet = (self.settings.sheet_id.strip(), self.settings.sheet_name.strip())
-        dlg = SettingsDialog(self.gauth, self.settings, self)
+        dlg = SettingsDialog(self.gauth, self.settings, self,
+                             account=getattr(self, 'account_email', ''))
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
             self._save_settings()
             self.hotkeys.apply(self.settings)
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
-            if self.settings.dark_mode != prev_dark:
-                self.apply_theme()   # 다크모드 즉시 반영
+            now_theme = (getattr(self.settings, "theme", "")
+                         or ("dark" if self.settings.dark_mode else "light"))
+            if now_theme != prev_theme:
+                self.apply_theme()   # 고른 테마를 즉시 반영
             if hasattr(self, "tab_comm"):
                 self.tab_comm.reload_rates()   # 수당율을 고쳤을 수 있다
             self.fetch_rates_async()

@@ -252,6 +252,7 @@ class AppSettings:
     hot_key: str = "A"
     # 화면 테마
     dark_mode: bool = False
+    theme: str = ""          # 빈 값이면 dark_mode 로 정한다(구버전 호환)
     # 창 닫기(X) 동작: True=트레이로 내려감, False=완전 종료
     close_to_tray: bool = True
     # 구글 캘린더 알림(리마인더) — PC 를 꺼도 휴대폰으로 알림이 온다
@@ -280,6 +281,7 @@ class AppSettings:
             "hotShift": self.hot_shift,
             "hotKey": self.hot_key,
             "darkMode": self.dark_mode,
+            "theme": self.theme,
             "closeToTray": self.close_to_tray,
             "calReminderOn": self.cal_reminder_on,
             "calReminderMin": self.cal_reminder_min,
@@ -314,6 +316,10 @@ class AppSettings:
         s.hot_shift = bool(o.get("hotShift", False))
         s.hot_key = o.get("hotKey", "A")
         s.dark_mode = bool(o.get("darkMode", False))
+        # 구버전 설정 파일엔 theme 키가 없다 → 기존 다크 여부로 정한다
+        s.theme = str(o.get("theme", "") or "").strip().lower()
+        if not s.theme:
+            s.theme = "dark" if s.dark_mode else "light"
         s.close_to_tray = bool(o.get("closeToTray", True))
         s.cal_reminder_on = bool(o.get("calReminderOn", True))
         try:

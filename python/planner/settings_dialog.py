@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import config, sheets
+from . import config, sheets, theme
 from .models import AppSettings
 
 
@@ -52,12 +52,13 @@ def save_terms_presets(presets: dict) -> None:
 class SettingsDialog(QDialog):
     _sig_login = Signal(bool, str)
 
-    def __init__(self, gauth, settings: AppSettings, parent=None):
+    def __init__(self, gauth, settings: AppSettings, parent=None, account: str = ""):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
         self.setMinimumWidth(560)
         self.gauth = gauth
         self.settings = settings
+        self.account = (account or "").strip().lower()
         self.tasks_changed = False  # 로그인/로그아웃 발생 여부
 
         # 항목이 늘어 작은 화면에서 잘리지 않도록 스크롤 안에 담는다
@@ -145,9 +146,18 @@ class SettingsDialog(QDialog):
             "계약조건의 '60개월' 같은 표기로 만기일을 계산해\n"
             "시작 브리핑에 재계약 대상 고객을 알려줍니다."))
 
+        # 수당율은 회사 공통 기준값이라 관리자 계정에서만 고칠 수 있다.
         btn_rates = QPushButton("차종별 수당율 관리…")
         btn_rates.clicked.connect(self._open_rates)
+        can_edit = config.is_rates_admin(self.account)
+        btn_rates.setEnabled(can_edit)
+        if not can_edit:
+            btn_rates.setToolTip("수당율은 관리자 계정에서만 고칠 수 있습니다.")
         sl.addRow("수당계산기", btn_rates)
+        if not can_edit:
+            sl.addRow(QLabel(
+                "수당율은 관리자 계정에서만 수정할 수 있습니다.\n"
+                "이 PC 는 관리자가 저장한 값을 받아서 계산에 씁니다."))
 
         self.txt_terms = QTextEdit()
         self.txt_terms.setMinimumHeight(130)
@@ -168,8 +178,14 @@ class SettingsDialog(QDialog):
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
         vl = QHBoxLayout(gb_v)
-        self.chk_dark = QCheckBox("다크 모드")
-        vl.addWidget(self.chk_dark)
+        trow = QHBoxLayout()
+        trow.addWidget(QLabel("화면 테마"))
+        self.cmb_theme = QComboBox()
+        for key in theme.THEME_ORDER:
+            self.cmb_theme.addItem(theme.THEMES[key][0], key)
+        trow.addWidget(self.cmb_theme, 1)
+        vl.addLayout(trow)
+        vl.addWidget(QLabel("고르면 [확인] 을 눌렀을 때 바로 바뀝니다."))
         vl.addStretch()
         root.addWidget(gb_v)
 
@@ -239,7 +255,9 @@ class SettingsDialog(QDialog):
         self.ed_sheet_name.setText(s.sheet_name)
         self.sp_expiry.setValue(s.expiry_months)
         self.txt_terms.setPlainText(sheets.format_terms_presets(load_terms_presets()))
-        self.chk_dark.setChecked(s.dark_mode)
+        cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
+        i = self.cmb_theme.findData(cur)
+        self.cmb_theme.setCurrentIndex(i if i >= 0 else 0)
         self.cmb_close.setCurrentIndex(0 if s.close_to_tray else 1)
         self.chk_hot.setChecked(s.hot_on)
         self.chk_ctrl.setChecked(s.hot_ctrl)
@@ -250,6 +268,12 @@ class SettingsDialog(QDialog):
 
     def _open_rates(self):
         from .rate_dialog import RateDialog
+        if not config.is_rates_admin(self.account):
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "수당율은 관리자 계정에서만 수정할 수 있습니다.\n"
+                f"(현재 로그인: {self.account or '로그인 안 됨'})")
+            return
         # 수당율은 고객관리 시트와 무관하게 **전용 스프레드시트 한 곳**만 쓴다.
         auth = self.gauth if self.gauth.is_connected() else None
         RateDialog(self, auth=auth, sheet_id=config.RATES_SHEET_ID).exec()
@@ -272,7 +296,9 @@ class SettingsDialog(QDialog):
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.expiry_months = self.sp_expiry.value()
         save_terms_presets(sheets.parse_terms_presets(self.txt_terms.toPlainText()))
-        s.dark_mode = self.chk_dark.isChecked()
+        s.theme = self.cmb_theme.currentData() or "light"
+        # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
+        s.dark_mode = theme.THEMES.get(s.theme, (None, None, False))[2]
         s.close_to_tray = bool(self.cmb_close.currentData())
         s.hot_on = self.chk_hot.isChecked()
         s.hot_ctrl = self.chk_ctrl.isChecked()

@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -99,6 +99,14 @@ DEF_SHEET_NAME = "미출고차량"
 # 항상 이 파일 하나만 바라본다. (고객관리 시트에 두면 시트를 바꾼 PC 끼리
 # 서로 다른 수당율을 쓰게 된다)
 RATES_SHEET_ID = "1PSjqA7wvIBHusjYHFfD9cLKP-EbtdFrCkNqlZHz2jm0"
+
+# 수당율을 고칠 수 있는 계정. 모두가 같은 값을 쓰는 회사 기준값이라,
+# 직원이 실수로 바꾸지 못하도록 관리자 계정에서만 편집을 허용한다.
+RATES_ADMINS = ("wodud1903@gmail.com",)
+
+
+def is_rates_admin(email: str) -> bool:
+    return (email or "").strip().lower() in RATES_ADMINS
 
 # 콜백 서버가 시도할 포트 범위 (델파이 원본과 동일)
 REDIRECT_PORT_RANGE = range(49200, 49231)
