@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import json
+
 import threading
 from datetime import time
 
@@ -21,6 +23,30 @@ from PySide6.QtWidgets import (
 
 from . import config, sheets
 from .models import AppSettings
+
+
+TERMS_FILE = "terms_presets.json"
+
+
+def load_terms_presets() -> dict:
+    """직접 적어 둔 금융사별 계약조건."""
+    try:
+        p = config.data_file(TERMS_FILE)
+        if p.exists():
+            o = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(o, dict):
+                return {k: list(v) for k, v in o.items() if isinstance(v, list)}
+    except Exception:
+        pass
+    return {}
+
+
+def save_terms_presets(presets: dict) -> None:
+    try:
+        config.atomic_write(config.data_file(TERMS_FILE),
+                            json.dumps(presets or {}, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
 
 
 class SettingsDialog(QDialog):
@@ -118,6 +144,17 @@ class SettingsDialog(QDialog):
         sl.addRow(QLabel(
             "계약조건의 '60개월' 같은 표기로 만기일을 계산해\n"
             "시작 브리핑에 재계약 대상 고객을 알려줍니다."))
+
+        self.txt_terms = QTextEdit()
+        self.txt_terms.setMinimumHeight(130)
+        self.txt_terms.setPlaceholderText(
+            "KB캐피탈 | 60개월 / 2만km / 무보증\n"
+            "하나캐피탈 | 48개월 / 연2만km / 보증금 2000만원\n"
+            "선수금 30% 별도협의        ← 금융사를 안 적으면 모든 금융사에 표시")
+        sl.addRow("자주 쓴 계약조건", self.txt_terms)
+        sl.addRow(QLabel(
+            "한 줄에 하나씩 '금융사 | 계약조건' 으로 적으면 고객 등록·수정 창의\n"
+            "계약조건 목록에 먼저 나옵니다. 시트에서 실제로 써 온 조건도 함께 표시됩니다."))
         sl.addRow(QLabel(
             "함수 칸(순번·합계·고객센터번호·사고접수연락처·고객안내멘트)은\n"
             "프로그램이 건드리지 않고 시트 수식 그대로 둡니다.\n"
@@ -197,6 +234,7 @@ class SettingsDialog(QDialog):
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
         self.sp_expiry.setValue(s.expiry_months)
+        self.txt_terms.setPlainText(sheets.format_terms_presets(load_terms_presets()))
         self.chk_dark.setChecked(s.dark_mode)
         self.cmb_close.setCurrentIndex(0 if s.close_to_tray else 1)
         self.chk_hot.setChecked(s.hot_on)
@@ -223,6 +261,7 @@ class SettingsDialog(QDialog):
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.expiry_months = self.sp_expiry.value()
+        save_terms_presets(sheets.parse_terms_presets(self.txt_terms.toPlainText()))
         s.dark_mode = self.chk_dark.isChecked()
         s.close_to_tray = bool(self.cmb_close.currentData())
         s.hot_on = self.chk_hot.isChecked()

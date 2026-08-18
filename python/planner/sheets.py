@@ -532,6 +532,60 @@ def expiry_date(row: CustomerRow):
     return add_months(base, n)
 
 
+def parse_terms_presets(text: str) -> dict:
+    """설정에서 직접 적은 계약조건 목록을 읽는다.
+
+    한 줄에 하나씩 `금융사 | 계약조건` 형식. 금융사를 안 적으면 모든 금융사에
+    공통으로 보여줄 조건(``*``)으로 본다.
+    """
+    out: dict = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "|" in line:
+            fin, terms = line.split("|", 1)
+        else:
+            fin, terms = "*", line
+        fin, terms = fin.strip() or "*", terms.strip()
+        if not terms:
+            continue
+        out.setdefault(fin, [])
+        if terms not in out[fin]:
+            out[fin].append(terms)
+    return out
+
+
+def format_terms_presets(presets: dict) -> str:
+    """저장된 목록을 설정 화면에 보여줄 텍스트로."""
+    lines = []
+    for fin in sorted(presets or {}):
+        for t in presets[fin]:
+            lines.append(f"{fin} | {t}")
+    return "\n".join(lines)
+
+
+def merge_terms(presets: dict, from_sheet: dict) -> dict:
+    """직접 적은 목록을 앞에, 시트에서 뽑은 목록을 뒤에 붙인다.
+
+    직접 적은 것이 우선이지만, 그동안 실제로 써 온 조건도 계속 쓸 수 있게 남긴다.
+    ``*`` 로 적은 공통 조건은 모든 금융사에 붙는다.
+    """
+    common = list((presets or {}).get("*", []))
+    fins = set(presets or {}) | set(from_sheet or {})
+    fins.discard("*")
+    out = {}
+    for fin in fins:
+        seen, items = set(), []
+        for t in list((presets or {}).get(fin, [])) + common + list((from_sheet or {}).get(fin, [])):
+            if t and t not in seen:
+                seen.add(t)
+                items.append(t)
+        if items:
+            out[fin] = items
+    return out
+
+
 def terms_by_finance(rows: list[CustomerRow]) -> dict:
     """금융사 → 그 금융사로 쓴 계약조건 목록(자주 쓴 순).
 
@@ -822,6 +876,23 @@ def upload_image(auth: GoogleAuth, data: bytes, filename: str) -> str:
 
 def image_url(file_id: str) -> str:
     return f"https://drive.google.com/uc?export=view&id={file_id}"
+
+
+def image_url(cell: str) -> str:
+    """'=IMAGE("https://...", 1)' 에서 주소만 뽑는다. 없으면 "".
+
+    S열은 수식으로 읽어 오므로(read_docs) 여기서 주소를 되찾아
+    견적서 원본을 다시 볼 수 있다.
+    """
+    t = (cell or "").strip()
+    if not t:
+        return ""
+    m = re.search(r'=\s*IMAGE\s*\(\s*"([^"]+)"', t, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    if t.lower().startswith("http"):
+        return t.split()[0]
+    return ""
 
 
 def image_formula(url: str) -> str:

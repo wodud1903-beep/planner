@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QFont
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox
 
 from . import config, theme
 from .main_window import MainWindow
@@ -105,6 +106,22 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
 
 
+class _NoWheelOnCombo(QObject):
+    """드롭다운 위에서 휠을 굴려도 값이 바뀌지 않게 막는다.
+
+    표를 스크롤하려고 휠을 굴리다가 그 아래 드롭다운의 금융사·진행현황이
+    엉뚱하게 바뀌는 사고가 잦다. 목록이 펼쳐진 상태에서는 휠로 고르는 게
+    정상이므로 그때는 통과시킨다.
+    """
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Wheel and isinstance(obj, QComboBox):
+            if not obj.view().isVisible():
+                ev.ignore()
+                return True        # 값 변경을 막고, 스크롤은 부모가 처리하게 둔다
+        return super().eventFilter(obj, ev)
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
@@ -123,6 +140,9 @@ def main() -> int:
 
     # 한글 친화 폰트 (없으면 시스템 기본)
     app.setFont(QFont("Malgun Gothic", 10))
+    # 드롭다운은 휠로 바뀌지 않게 (앱 전체에 적용)
+    _nowheel = _NoWheelOnCombo(app)
+    app.installEventFilter(_nowheel)
     # 저장된 테마(라이트/다크) 선호를 미리 반영 (계정별 설정은 로그인 후 재적용)
     try:
         from .models import AppSettings

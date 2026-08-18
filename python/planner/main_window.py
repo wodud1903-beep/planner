@@ -30,12 +30,13 @@ from . import (
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
 from .customer_history import CustomerHistoryDialog
+from .doc_viewer import DocViewer
 from .edit_dialog import EditDialog
 from .icon import make_icon
 from .models import (
     AppSettings, PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
 )
-from .settings_dialog import SettingsDialog
+from .settings_dialog import SettingsDialog, load_terms_presets
 
 # ---------------------------------------------------------------------------
 # 낙관적 UI (즉시 반영)
@@ -138,7 +139,8 @@ class MainWindow(QMainWindow):
         # 단, 작은 화면에서도 잘리지 않도록 화면 크기에 맞춰 고정값을 정한다.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
         _avail = QGuiApplication.primaryScreen().availableGeometry()
-        _w = min(1040, _avail.width() - 20)
+        # 고객관리 표(수수료·견적서 포함)가 가로 스크롤 없이 들어가는 폭
+        _w = min(1120, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
         self.setFixedSize(_w, _h)
 
@@ -642,7 +644,6 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_cust_load)
         for text, slot in [("고객 추가", self.on_customer_add),
                            ("수정", self.on_customer_edit),
-                           ("이력", self.on_customer_history),
                            ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -671,10 +672,12 @@ class MainWindow(QMainWindow):
         # 안내멘트는 [복사] 버튼만 들어가므로 버튼 폭이면 충분하다(96→62).
         # 거기서 아낀 폭을 고객명·금융사·차종·날짜에 나눠 줬다.
         # 전체 폭은 그대로라 가로 스크롤이 더 늘지 않는다.
+        # 수수료(합계)와 견적서 보기를 함께 보여준다.
+        # 가로 스크롤이 생기지 않도록 폭 합계를 창 너비 안에 맞춘다(_fit_cust_columns).
         self.tbl_cust = self._make_table(
             ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일",
-             "진행현황", "안내멘트"],
-            [46, 210, 100, 154, 95, 95, 74, 62],
+             "진행현황", "수수료", "안내멘트", "견적서"],
+            [44, 196, 96, 148, 92, 92, 70, 104, 62, 78],
             stretch_last=False)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         v.addWidget(self.tbl_cust)
@@ -682,6 +685,12 @@ class MainWindow(QMainWindow):
 
     # 진행현황 색상 (글자만 — 배경은 건드리지 않는다)
     STATUS_COLORS = {"출고": "#2F6FD0", "발주": "#4FA45C", "취소": "#D23B3B"}
+
+    # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
+    COL_STATUS = 6
+    COL_FEE = 7
+    COL_MENT_BTN = 8
+    COL_DOC_BTN = 9
 
     def _ment_key(self, cr) -> str:
         """복사 이력 키 — 행 번호는 바뀔 수 있으니 순번+고객명으로 식별."""
@@ -746,9 +755,10 @@ class MainWindow(QMainWindow):
                             f"{cr.get('customer')} 안내멘트를 복사했습니다.")
 
     def _on_cust_dblclick(self, index):
-        if index.column() == 7:      # 안내멘트 열은 버튼이므로 편집창을 열지 않는다
+        # 버튼이 놓인 열(안내멘트·견적서)에서는 창을 열지 않는다
+        if index.column() in (self.COL_MENT_BTN, self.COL_DOC_BTN):
             return
-        self.on_customer_edit()
+        self.on_customer_history()
 
     def _sheet_ready(self, quiet: bool = False) -> bool:
         if not self.settings.sheet_on:
@@ -872,7 +882,8 @@ class MainWindow(QMainWindow):
         self._sheet_last_row = last_row
         self._sheet_header_row = hdr
         self.sheet_choices = sheets.choices(rows)
-        self._terms_map = sheets.terms_by_finance(rows)
+        self._terms_map = sheets.merge_terms(
+            load_terms_presets(), sheets.terms_by_finance(rows))
         self._sheet_pending = []
         self._sheet_loaded = True
         self._show_summary(summary)
@@ -956,18 +967,22 @@ class MainWindow(QMainWindow):
             self.tbl_cust.insertRow(r)
             pend = cr in self._sheet_pending
             status = cr.get("status")
+            fee = sheets.fmt_money(cr.total)
             vals = [cr.seq if not pend else "…",
                     ("[등록중] " if pend else "") + cr.get("customer"),
                     cr.get("finance"), cr.get("model"),
-                    cr.get("contract_date"), cr.get("deliver_date"), status]
+                    cr.get("contract_date"), cr.get("deliver_date"), status,
+                    (f"₩{fee}" if fee else "")]
             for c, val in enumerate(vals):
                 item = QTableWidgetItem(val)
                 item.setData(Qt.UserRole, cr.row)
+                if c == self.COL_FEE:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.tbl_cust.setItem(r, c, item)
             # 진행현황: 출고=파랑 / 발주=연초록 / 취소=빨강, 굵게 (글자만)
             col = self.STATUS_COLORS.get(status.strip())
             if col:
-                cell = self.tbl_cust.item(r, 6)
+                cell = self.tbl_cust.item(r, self.COL_STATUS)
                 cell.setForeground(QColor(col))
                 f = cell.font()
                 f.setBold(True)
@@ -981,18 +996,48 @@ class MainWindow(QMainWindow):
             if done:
                 btn.setStyleSheet(f"color:{theme.c('status_ok')};")
             btn.clicked.connect(lambda _c=False, row=cr: self._copy_customer_ment(row))
-            self.tbl_cust.setCellWidget(r, 7, btn)
+            self.tbl_cust.setCellWidget(r, self.COL_MENT_BTN, btn)
+
+            # 견적서/계약서 보기 — 시트에 이미지가 등록된 고객만 누를 수 있다
+            has_doc = bool(sheets.image_url(cr.get("doc")))
+            dbtn = QPushButton("보기" if has_doc else "—")
+            dbtn.setEnabled(has_doc and not pend)
+            dbtn.setToolTip("등록된 견적서/계약서 이미지를 크게 봅니다"
+                            if has_doc else "등록된 견적서/계약서가 없습니다")
+            dbtn.clicked.connect(lambda _c=False, row=cr: self._show_customer_doc(row))
+            self.tbl_cust.setCellWidget(r, self.COL_DOC_BTN, dbtn)
+
             if pend:
                 fg = QColor(theme.c("subtext"))
-                for c in range(7):
+                for c in range(self.COL_MENT_BTN):
                     cell = self.tbl_cust.item(r, c)
                     if cell is not None:
                         cell.setForeground(fg)
             shown += 1
+        self._fit_cust_columns()
         total = len(rows)
         self.lbl_cust.setText(
             f"고객 {total}건" + (f" · 검색 {shown}건" if q else "")
             + f"   (시트: {self.settings.sheet_name})")
+
+    def _fit_cust_columns(self):
+        """표 오른쪽에 남는 흰 여백을 고객명 열이 흡수하게 한다.
+
+        폭을 고정하면 창보다 좁을 때 오른쪽이 허옇게 비고, 열을 늘리는 방식
+        (Stretch)으로 두면 창보다 넓을 때 그 열이 되레 찌그러진다.
+        그래서 '남을 때만' 더해 준다.
+        """
+        try:
+            vp = self.tbl_cust.viewport().width()
+            used = sum(self.tbl_cust.columnWidth(i)
+                       for i in range(self.tbl_cust.columnCount()))
+            base = getattr(self, "_cust_name_w", None)
+            if base is None:
+                base = self._cust_name_w = self.tbl_cust.columnWidth(1)
+            spare = vp - (used - self.tbl_cust.columnWidth(1) + base)
+            self.tbl_cust.setColumnWidth(1, base + max(0, spare))
+        except Exception:
+            pass
 
     def _sel_customer(self):
         r = self.tbl_cust.currentRow()
@@ -1124,6 +1169,17 @@ class MainWindow(QMainWindow):
                 cr.values = old         # 롤백 (UI 갱신은 핸들러에서)
                 self.sig_sheet_written.emit(None, None, str(e))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_customer_doc(self, cr):
+        """등록된 견적서/계약서 이미지를 크게 본다."""
+        url = sheets.image_url(cr.get("doc"))
+        if not url:
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "이 고객에게 등록된 견적서/계약서가 없습니다.\n"
+                "[수정] 에서 이미지를 붙여넣어 등록할 수 있습니다.")
+            return
+        DocViewer.show_for(cr.get("customer"), url, self.gauth, self)
 
     def on_customer_history(self):
         """선택한 고객의 이력 타임라인."""
@@ -1323,6 +1379,9 @@ class MainWindow(QMainWindow):
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
             if self.settings.dark_mode != prev_dark:
                 self.apply_theme()   # 다크모드 즉시 반영
+            # 계약조건 목록을 고쳤을 수 있으니 다시 합쳐 둔다
+            self._terms_map = sheets.merge_terms(
+                load_terms_presets(), sheets.terms_by_finance(self.sheet_rows))
             now_sheet = (self.settings.sheet_id.strip(),
                          self.settings.sheet_name.strip())
             if now_sheet != prev_sheet:
