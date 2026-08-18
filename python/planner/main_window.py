@@ -252,7 +252,7 @@ class MainWindow(QMainWindow):
         # 창이 뜬 직후 고객관리 시트를 자동으로 불러온다.
         # (백그라운드 스레드라 시작이 느려지지 않는다. 브리핑의 '안내멘트 미발송'
         #  안내에 필요하므로 너무 늦지 않게 시작한다)
-        QTimer.singleShot(800, lambda: self.load_sheet_async(manual=False))
+        QTimer.singleShot(800, self._auto_load_sheet)
 
         self.chk_startup.setChecked(_startup_set())
 
@@ -341,6 +341,8 @@ class MainWindow(QMainWindow):
         self.lbl_account.setText(f"· {email}")
         sync.migrate_legacy()
         self.reload_data()   # 계정 폴더 기준으로 다시 로드
+        # 이제야 이 계정의 시트 설정을 알 수 있다 → 바로 불러오기 시도
+        self._auto_load_sheet()
         # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
         self._backup(manual=False)
 
@@ -795,6 +797,23 @@ class MainWindow(QMainWindow):
             return
         webbrowser.open(sheets.sheet_url(sid))
 
+    def _auto_load_sheet(self, tries: int = 0):
+        """시작 후 고객관리 시트를 자동으로 불러온다.
+
+        구글 계정 확인이 끝나야 **그 계정의 설정**(시트 사용 여부·주소)을 알 수 있는데,
+        그건 네트워크 왕복이라 몇 초 걸린다. 예전에는 시작 0.8초에 딱 한 번만
+        시도하고, 아직 설정을 모르면 조용히 포기해 버려서 불러오기가 아예
+        일어나지 않았다. 이제 준비될 때까지 잠깐씩 다시 확인한다.
+        """
+        if getattr(self, "_auto_load_started", False) or self._sheet_loaded:
+            return
+        if self._sheet_ready(quiet=True):
+            self._auto_load_started = True
+            self.load_sheet_async(manual=False)
+            return
+        if tries < 12:                       # 약 20초까지 기다려 본다
+            QTimer.singleShot(1500, lambda: self._auto_load_sheet(tries + 1))
+
     def load_sheet_async(self, manual: bool = False):
         """시트를 백그라운드로 읽어온다 (창이 멈추지 않게)."""
         if not self._sheet_ready(quiet=not manual):
@@ -867,11 +886,19 @@ class MainWindow(QMainWindow):
                 cr.uid = v
 
     def _on_sheet_docs(self, docs: dict):
-        """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채운다."""
+        """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채우고 표를 다시 그린다.
+
+        표는 이미 그려진 뒤에 이 값이 도착한다. 다시 그리지 않으면 [보기] 버튼이
+        '이미지 없음(—)' 상태로 굳어 눌러도 아무 반응이 없다.
+        """
+        changed = False
         for cr in self.sheet_rows:
             v = docs.get(cr.row)
-            if v:
+            if v and cr.values.get("doc") != v:
                 cr.values["doc"] = v
+                changed = True
+        if changed:
+            self.refresh_customers()
 
     def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
