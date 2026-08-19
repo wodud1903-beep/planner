@@ -25,7 +25,8 @@ _MEMO_QUIET_MIN = 340
 
 
 class AlarmWindow(QWidget):
-    def __init__(self, title: str, ment: str, stack_index: int, siren: bool = True):
+    def __init__(self, title: str, ment: str, stack_index: int, siren: bool = True,
+                 html: str = ""):
         super().__init__()
         self._siren = siren
         self._blink = 0
@@ -36,7 +37,8 @@ class AlarmWindow(QWidget):
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setFixedWidth(640)
+        # 브리핑은 훑어보는 화면이라 조금 넓게 잡는다
+        self.setFixedWidth(640 if siren else 720)
 
         # 색상: 사이렌(알람)은 진한 남회색, 조용한 안내(브리핑)는 밝은 Tablet Light 톤
         if siren:
@@ -92,10 +94,14 @@ class AlarmWindow(QWidget):
 
         self.txt = QTextEdit()
         self.txt.setReadOnly(True)
-        self.txt.setPlainText(ment)
+        # 브리핑은 색·크기를 입힌 HTML 로 온다. 복사(toPlainText)는 그대로 된다.
+        if html:
+            self.txt.setHtml(html)
+        else:
+            self.txt.setPlainText(ment)
         self.txt.setStyleSheet(memo_css)
         if ment.strip():
-            self.txt.setFixedHeight(self._memo_height(ment, siren))
+            self.txt.setFixedHeight(self._memo_height(ment, siren, bool(html)))
             body.addWidget(self.txt)
         else:
             self.txt.hide()
@@ -141,13 +147,19 @@ class AlarmWindow(QWidget):
         self._snooze_timer.timeout.connect(self._snooze_tick)
 
     # ---- 메모 높이 계산 ----
-    def _memo_height(self, ment: str, siren: bool) -> int:
+    def _memo_height(self, ment: str, siren: bool, rich: bool = False) -> int:
         if siren:
             return _MEMO_SIREN
-        # 브리핑: 내용 줄 수에 맞춰 확장(스크롤 없이 다 보이게), 화면 높이로 제한
+        # 브리핑: 내용에 맞춰 늘려 스크롤 없이 다 보이게 하되, 화면 높이로 제한.
+        # HTML 은 머리글·여백 때문에 줄 수로 어림하면 자꾸 모자란다.
+        # 그래서 문서에 실제 폭을 알려 주고 렌더 높이를 직접 물어본다.
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        lines = ment.count("\n") + 1
-        needed = 40 + lines * 22
+        if rich:
+            doc = self.txt.document()
+            doc.setTextWidth(self.width() - 60)
+            needed = int(doc.size().height()) + 28
+        else:
+            needed = 40 + (ment.count("\n") + 1) * 22
         return max(_MEMO_QUIET_MIN, min(needed, screen.height() - 220))
 
     # ---- 스타일 헬퍼 ----
@@ -222,8 +234,9 @@ class AlarmWindow(QWidget):
         super().closeEvent(event)
 
 
-def popup(title: str, ment: str, stack_index: int, siren: bool = True) -> AlarmWindow:
-    w = AlarmWindow(title, ment, stack_index, siren)
+def popup(title: str, ment: str, stack_index: int, siren: bool = True,
+          html: str = "") -> AlarmWindow:
+    w = AlarmWindow(title, ment, stack_index, siren, html)
     _open_alarms.append(w)
     w.show_no_activate()
     return w

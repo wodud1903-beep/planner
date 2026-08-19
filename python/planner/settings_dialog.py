@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import config, sheets, theme
+from . import config, searchcombo, sheets, theme
 from .models import AppSettings
 
 
@@ -181,6 +181,7 @@ class SettingsDialog(QDialog):
         trow = QHBoxLayout()
         trow.addWidget(QLabel("화면 테마"))
         self.cmb_theme = QComboBox()
+        searchcombo.install(self.cmb_theme)
         for key in theme.THEME_ORDER:
             self.cmb_theme.addItem(theme.THEMES[key][0], key)
         trow.addWidget(self.cmb_theme, 1)
@@ -193,6 +194,7 @@ class SettingsDialog(QDialog):
         gb_c = QGroupBox("창 닫기(X) 버튼")
         cl = QVBoxLayout(gb_c)
         self.cmb_close = QComboBox()
+        searchcombo.install(self.cmb_close)
         self.cmb_close.addItem("트레이로 내리기 (알람 계속 동작)", True)
         self.cmb_close.addItem("완전 종료", False)
         cl.addWidget(self.cmb_close)
@@ -209,6 +211,7 @@ class SettingsDialog(QDialog):
         self.chk_alt = QCheckBox("Alt")
         self.chk_shift = QCheckBox("Shift")
         self.cmb_key = QComboBox()
+        searchcombo.install(self.cmb_key)
         self.cmb_key.addItems([chr(c) for c in range(ord("A"), ord("Z") + 1)]
                               + [f"F{i}" for i in range(1, 13)])
         krow.addWidget(self.chk_ctrl)

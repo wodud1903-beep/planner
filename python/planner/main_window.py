@@ -14,6 +14,7 @@ import uuid
 import webbrowser
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
+from html import escape as html_escape
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
@@ -25,12 +26,14 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, config, followup, google_client, hotkey, sheets, sync, theme, updater,
+    alarm_window, config, followup, google_client, hotkey, searchcombo, sheets,
+    sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
 from .commission_tab import CommissionTab
 from .customer_history import CustomerHistoryDialog
+from .greeting_tab import GreetingTab
 from .doc_viewer import DocViewer
 from .edit_dialog import EditDialog
 from .icon import make_icon
@@ -316,6 +319,8 @@ class MainWindow(QMainWindow):
             self.refresh_customers()
         if hasattr(self, "tab_comm"):
             self.tab_comm.apply_theme()
+        if hasattr(self, "tab_greet"):
+            self.tab_greet.apply_theme()
         # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
         if self._cal_win is not None:
             try:
@@ -386,6 +391,8 @@ class MainWindow(QMainWindow):
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
         self._ment_copied = self._load_ment_log()
         self._notes = self._load_notes()
+        if hasattr(self, "tab_greet"):
+            self.tab_greet.reload()      # 계정이 바뀌면 그 계정의 문구로
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -571,6 +578,9 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.tabs)
         self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
         self.tabs.addTab(self._build_customer_tab(), "고객관리")
+        self.tab_greet = GreetingTab()
+        self.tab_greet.on_changed = self._touch_sync
+        self.tabs.addTab(self.tab_greet, "인삿말")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
@@ -596,6 +606,7 @@ class MainWindow(QMainWindow):
         # 빠른 필터
         row.addWidget(QLabel("표시:"))
         self.cmb_range = QComboBox()
+        searchcombo.install(self.cmb_range)
         self.cmb_range.addItem("이번주", "week")
         self.cmb_range.addItem("다음주", "next")
         self.cmb_range.addItem("전체", "all")
@@ -2386,85 +2397,178 @@ class MainWindow(QMainWindow):
         out.sort(key=lambda x: x[2])
         return out
 
-    def build_briefing(self) -> str:
+    # ---------------------------------------------------------------- 브리핑
+    # 브리핑은 '읽는 화면' 이 아니라 '훑는 화면' 이다. 그래서 내용을 먼저
+    # 섹션 데이터로 만들고, 그걸 색·크기·이모지를 입힌 HTML 로 그린다.
+    # (평문도 같은 데이터에서 뽑는다 — 두 벌을 따로 고치다 어긋나지 않게)
+    _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
+
+    def _briefing_sections(self) -> list:
         today = date.today()
-        lines = [datetime.now().strftime("%Y년 %m월 %d일 (%a)"), ""]
-        lines.append("[오늘 일정]")
-        cnt_cal = 0
-        for ev in self.cal_events:
-            if ev.start.date() == today:
-                lines.append(f"  · {ev.time_text()}  {ev.summary}")
-                cnt_cal += 1
-        if cnt_cal == 0:
-            lines.append("  (없음)")
-        lines += ["", "[오늘 할일]"]
-        cnt_todo = 0
+        secs = []
+
+        # ---- 오늘 일정 ----
+        items = [{"lead": ev.time_text(), "text": ev.summary}
+                 for ev in self.cal_events if ev.start.date() == today]
+        cnt_cal = len(items)
+        secs.append({"icon": "📅", "title": "오늘 일정", "color": "blue",
+                     "items": items, "empty": "오늘 잡힌 일정이 없습니다"})
+
+        # ---- 오늘 할일 ----
+        items = []
         for it in self.todos:
             if not it.done and it.run_date == today:
-                lines.append(f"  · {it.run_time.strftime('%H:%M')}  {it.title}")
-                cnt_todo += 1
+                items.append({"lead": it.run_time.strftime("%H:%M"), "text": it.title})
         for tk in self.visible_gtasks():
             if tk.has_due and tk.due == today:
-                lines.append(f"  · {tk.title}")
-                cnt_todo += 1
-        if cnt_todo == 0:
-            lines.append("  (없음)")
-        lines += ["", f"오늘: 일정 {cnt_cal}건 / 할일 {cnt_todo}건"]
+                items.append({"lead": "", "text": tk.title})
+        cnt_todo = len(items)
+        secs.append({"icon": "✅", "title": "오늘 할일", "color": "green",
+                     "items": items, "empty": "오늘 할일이 없습니다"})
+
+        # ---- 안내멘트 미발송 (출고일 ~ 출고일+2일) ----
+        due = self._ment_due_customers(today)
+        if due:
+            items = []
+            for cr, d, dday in due:
+                tag = "오늘 출고" if dday == 0 else f"출고 {dday}일차"
+                items.append({"lead": tag, "text": cr.get("customer"),
+                              "sub": d.strftime("%m-%d")})
+            secs.append({"icon": "💬", "title": "안내멘트 미발송", "color": "red",
+                         "items": items,
+                         "hint": "[고객관리] 탭에서 [복사] 를 눌러 안내멘트를 보내세요."})
+
+        # ---- 만기 재계약 ----
+        exp = self._expiring_customers(today)
+        if exp:
+            items = []
+            for cr, d, left in exp[:12]:
+                tag = (f"D-{left}" if left > 0 else
+                       ("오늘 만기" if left == 0 else f"{-left}일 지남"))
+                items.append({"lead": tag, "text": cr.get("customer"),
+                              "sub": f"{d:%Y-%m-%d}"})
+            more = len(exp) - 12
+            secs.append({"icon": "🔔", "title": "만기 재계약", "color": "orange",
+                         "items": items, "count": len(exp),
+                         "more": more if more > 0 else 0,
+                         "hint": "[고객관리] 탭에서 [이력] 로 상담 내역을 확인하고 "
+                                 "재계약을 준비하세요."})
 
         # ---- 이번주 요약 (오늘~+7일) ----
         week_end = today + timedelta(days=7)
-        wk_cal = sorted([e for e in self.cal_events if today <= e.start.date() < week_end],
-                        key=lambda e: e.start)
+        wk_cal = sorted([e for e in self.cal_events
+                         if today <= e.start.date() < week_end], key=lambda e: e.start)
         wk_todo = []
         for it in self.todos:
             if not it.done and it.run_date and today <= it.run_date < week_end:
-                wk_todo.append((it.run_date, it.run_time.strftime('%H:%M'), it.title))
+                wk_todo.append((it.run_date, it.run_time.strftime("%H:%M"), it.title))
         for tk in self.visible_gtasks():
             if tk.has_due and tk.due and today <= tk.due < week_end:
                 wk_todo.append((tk.due, "", tk.title))
         wk_todo.sort(key=lambda x: (x[0], x[1]))
 
-        # ---- 안내멘트 미발송 (출고일 ~ 출고일+2일) ----
-        due = self._ment_due_customers(today)
-        if due:
-            lines += ["", "━━━━━━━━━━━━━━━━━━━━",
-                      f"[안내멘트 미발송]  {len(due)}건"]
-            for cr, d, dday in due:
-                tag = "오늘 출고" if dday == 0 else f"출고 {dday}일차"
-                lines.append(f"  · {cr.get('customer')}  ({tag}, {d.strftime('%m-%d')})")
-            lines.append("  → [고객관리] 탭에서 [복사] 를 눌러 안내멘트를 보내세요.")
+        items = []
+        for e in wk_cal[:12]:
+            items.append({"lead": self._d_label(e.start.date()),
+                          "text": e.summary, "sub": e.time_text(), "kind": "일정"})
+        for d, tm, title in wk_todo[:12]:
+            items.append({"lead": self._d_label(d), "text": title,
+                          "sub": tm, "kind": "할일"})
+        secs.append({"icon": "🗓", "title": "이번주 요약", "color": "violet",
+                     "items": items, "count": len(wk_cal) + len(wk_todo),
+                     "note": f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건",
+                     "more": max(0, len(wk_cal) - 12) + max(0, len(wk_todo) - 12),
+                     "empty": "이번주에 남은 일이 없습니다"})
 
-        # ---- 만기 재계약 (만기 N개월 전 ~ 만기 후 30일) ----
-        exp = self._expiring_customers(today)
-        if exp:
-            lines += ["", "━━━━━━━━━━━━━━━━━━━━",
-                      f"[만기 재계약]  {len(exp)}건"]
-            for cr, d, left in exp[:12]:
-                tag = f"만기 D-{left}" if left > 0 else (
-                    "오늘 만기" if left == 0 else f"만기 {-left}일 지남")
-                lines.append(f"  · {cr.get('customer')}  ({tag}, {d:%Y-%m-%d})")
-            if len(exp) > 12:
-                lines.append(f"  … 외 {len(exp) - 12}건")
-            lines.append("  → [고객관리] 탭에서 [이력] 로 상담 내역을 확인하고 재계약을 준비하세요.")
+        self._brief_today_counts = (cnt_cal, cnt_todo)
+        return secs
 
-        lines += ["", "━━━━━━━━━━━━━━━━━━━━", "[이번주 요약]  (오늘~7일)",
-                  f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건"]
-        if wk_cal:
-            lines.append("· 일정")
-            for e in wk_cal[:12]:
-                lines.append(f"   {e.start.strftime('%m-%d(%a)')} {e.time_text()}  {e.summary}")
-            if len(wk_cal) > 12:
-                lines.append(f"   … 외 {len(wk_cal) - 12}건")
-        if wk_todo:
-            lines.append("· 할일")
-            for d, tm, title in wk_todo[:12]:
-                lines.append(f"   {d.strftime('%m-%d(%a)')} {tm}  {title}")
-            if len(wk_todo) > 12:
-                lines.append(f"   … 외 {len(wk_todo) - 12}건")
+    def _d_label(self, d: date) -> str:
+        return f"{d:%m-%d}({self._WEEKDAY_KO[d.weekday()]})"
+
+    # ---- 평문 (복사·기존 호출 호환) ----
+    def build_briefing(self) -> str:
+        secs = self._briefing_sections()
+        cnt_cal, cnt_todo = self._brief_today_counts
+        d = date.today()
+        lines = [f"{d:%Y년 %m월 %d일} ({self._WEEKDAY_KO[d.weekday()]})", ""]
+        for s in secs:
+            n = s.get("count", len(s["items"]))
+            lines.append(f"[{s['title']}]  {n}건" if n else f"[{s['title']}]")
+            if s.get("note"):
+                lines.append(f"  {s['note']}")
+            if not s["items"]:
+                lines.append(f"  ({s.get('empty', '없음')})")
+            for it in s["items"]:
+                lead = (it.get("lead") or "").strip()
+                sub = (it.get("sub") or "").strip()
+                tail = f"  ({sub})" if sub else ""
+                lines.append(f"  · {lead + '  ' if lead else ''}{it['text']}{tail}")
+            if s.get("more"):
+                lines.append(f"  … 외 {s['more']}건")
+            if s.get("hint"):
+                lines.append(f"  → {s['hint']}")
+            lines.append("")
+        lines.append(f"오늘: 일정 {cnt_cal}건 / 할일 {cnt_todo}건")
         return "\n".join(lines)
 
+    # ---- 색·크기·이모지를 입힌 화면용 ----
+    def build_briefing_html(self) -> str:
+        secs = self._briefing_sections()
+        cnt_cal, cnt_todo = self._brief_today_counts
+        d = date.today()
+        esc = html_escape
+        txt, sub_c, line_c = theme.c("text"), theme.c("subtext"), theme.c("border")
+
+        out = [f"<div style='font-family:Malgun Gothic;color:{txt};'>"]
+        # 날짜 머리글
+        out.append(
+            f"<p style='margin:0 0 2px 0;font-size:20px;font-weight:bold;color:{txt};'>"
+            f"{d:%Y년 %m월 %d일} ({self._WEEKDAY_KO[d.weekday()]})</p>"
+            f"<p style='margin:0 0 10px 0;font-size:13px;color:{sub_c};'>"
+            f"오늘 일정 <b style='color:{theme.strong('blue')};'>{cnt_cal}</b>건"
+            f" &nbsp;·&nbsp; 할일 <b style='color:{theme.strong('green')};'>{cnt_todo}</b>건</p>")
+
+        for s in secs:
+            col = theme.strong(s["color"])
+            bg = theme.strong_bg(s["color"])
+            n = s.get("count", len(s["items"]))
+            badge = (f"<span style='background-color:{bg};color:{col};font-size:12px;"
+                     f"font-weight:bold;'>&nbsp;{n}건&nbsp;</span>" if n else
+                     f"<span style='color:{sub_c};font-size:12px;'>&nbsp;0건&nbsp;</span>")
+            out.append(f"<hr style='border:1px solid {line_c};'>")
+            out.append(
+                f"<p style='margin:8px 0 4px 0;font-size:16px;font-weight:bold;color:{col};'>"
+                f"{s['icon']} {esc(s['title'])} &nbsp;{badge}</p>")
+            if s.get("note"):
+                out.append(f"<p style='margin:0 0 4px 6px;font-size:12px;color:{sub_c};'>"
+                           f"{esc(s['note'])}</p>")
+            if not s["items"]:
+                out.append(f"<p style='margin:2px 0 6px 12px;font-size:13px;color:{sub_c};'>"
+                           f"{esc(s.get('empty', '없음'))}</p>")
+            for it in s["items"]:
+                lead = (it.get("lead") or "").strip()
+                sub = (it.get("sub") or "").strip()
+                head = (f"<span style='background-color:{bg};color:{col};font-weight:bold;'>"
+                        f"&nbsp;{esc(lead)}&nbsp;</span>&nbsp;" if lead else "")
+                tail = (f" <span style='color:{sub_c};font-size:12px;'>{esc(sub)}</span>"
+                        if sub else "")
+                out.append(
+                    f"<p style='margin:3px 0 3px 12px;font-size:14px;color:{txt};'>"
+                    f"{head}<b>{esc(it['text'])}</b>{tail}</p>")
+            if s.get("more"):
+                out.append(f"<p style='margin:2px 0 4px 12px;font-size:12px;color:{sub_c};'>"
+                           f"… 외 {s['more']}건</p>")
+            if s.get("hint"):
+                out.append(
+                    f"<p style='margin:6px 0 8px 12px;font-size:13px;color:{col};'>"
+                    f"👉 {esc(s['hint'])}</p>")
+        out.append("</div>")
+        return "".join(out)
+
     def show_briefing(self, manual: bool):
-        alarm_window.popup("오늘 브리핑", self.build_briefing(), 0, siren=False)
+        alarm_window.popup("오늘 브리핑", self.build_briefing(), 0, siren=False,
+                           html=self.build_briefing_html())
 
     # ------------------------------------------------------------ 백업
     def _backup(self, manual: bool):

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QTimeEdit, QVBoxLayout, QWidget,
 )
 
-from . import config, google_client, holiday, theme
+from . import config, google_client, holiday, searchcombo, theme
 
 
 class EventCalendar(QCalendarWidget):
@@ -141,6 +141,7 @@ class AddEventDialog(QDialog):
         form.addRow("제목", self.ed_title)
 
         self.cmb_cal = QComboBox()
+        searchcombo.install(self.cmb_cal)
         for c in calendars:
             label = ("★ " if c["primary"] else "") + c["name"]
             self.cmb_cal.addItem(label, c["id"])

@@ -18,7 +18,7 @@ from . import config, google_client
 SYNC_FILE = "planner_sync.json"
 _FILES = ["todos.json", "pcalarms.json", "taskalarms.json", "plan_cfg.json",
           "followups.json", "ment_copied.json", "customer_notes.json",
-          "terms_presets.json", "commission_rates.json"]
+          "terms_presets.json", "commission_rates.json", "greetings.json"]
 
 
 def _now() -> str:

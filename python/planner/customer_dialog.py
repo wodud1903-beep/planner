@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import config, sheets
+from . import config, searchcombo, sheets
 
 
 class MoneyEdit(QLineEdit):
@@ -189,10 +189,11 @@ class CustomerDialog(QDialog):
             cur = (values or {}).get(key, "")
             if kind == "combo":
                 w = QComboBox()
-                w.setEditable(True)
                 w.addItem("")
                 for it in (choices or {}).get(key, []):
                     w.addItem(it)
+                # 초성/낱말 검색 — 목록에 없는 값(새 금융사 등)도 그대로 쓸 수 있게
+                searchcombo.install(w, allow_free=True)
                 w.setCurrentText(cur)
                 form.addRow(label, w)
             elif kind == "date":
@@ -244,6 +245,7 @@ class CustomerDialog(QDialog):
                     vl.setSpacing(3)
                     self.cmb_terms = QComboBox()
                     self.cmb_terms.setToolTip("이 금융사로 자주 쓴 계약조건")
+                    searchcombo.install(self.cmb_terms)
                     self.cmb_terms.activated.connect(self._pick_terms)
                     vl.addWidget(self.cmb_terms)
                     vl.addWidget(w)

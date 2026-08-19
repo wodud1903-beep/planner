@@ -7,7 +7,9 @@ import sys
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QFont
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QComboBox
+from PySide6.QtWidgets import (
+    QAbstractSpinBox, QApplication, QComboBox, QLineEdit,
+)
 
 from . import config, theme
 from .main_window import MainWindow
@@ -120,6 +122,10 @@ class _NoWheelOnCombo(QObject):
                 if not obj.view().isVisible():
                     ev.ignore()
                     return True    # 값 변경을 막고, 스크롤은 부모가 처리하게 둔다
+            elif isinstance(obj, QLineEdit) and isinstance(obj.parent(), QComboBox):
+                # 검색형 드롭다운은 안쪽이 입력칸이라 휠이 여기로 먼저 온다
+                ev.ignore()
+                return True
             elif isinstance(obj, QAbstractSpinBox):
                 # 숫자칸(QSpinBox) · 날짜칸(QDateEdit) · 시각칸(QTimeEdit)
                 ev.ignore()

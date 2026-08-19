@@ -223,6 +223,32 @@ def chip_colors() -> list:
             for i in range(1, 5)]
 
 
+# 브리핑처럼 '한눈에 들어와야 하는' 화면에서 쓰는 진한 강조색.
+# 팔레트마다 따로 두면 5벌을 관리해야 해서, 밝은/어두운 두 벌만 둔다.
+_STRONG = {
+    False: {"blue": "#2C6FB5", "green": "#2E7D32", "red": "#C0392B",
+            "orange": "#B4690E", "violet": "#6247D6", "gray": "#5A6B7C"},
+    True: {"blue": "#7FB3E8", "green": "#7FD18B", "red": "#FF8A9B",
+           "orange": "#E8A34A", "violet": "#9B8CFF", "gray": "#9AA7B4"},
+}
+_STRONG_BG = {
+    False: {"blue": "#DCEAF8", "green": "#DDF0DE", "red": "#FBE0DC",
+            "orange": "#FAE8CE", "violet": "#E6E1FB", "gray": "#E4E9EF"},
+    True: {"blue": "#22384D", "green": "#20402A", "red": "#4A2830",
+           "orange": "#4A3620", "violet": "#332C50", "gray": "#2A2F36"},
+}
+
+
+def strong(name: str) -> str:
+    """진한 강조 글자색 (blue/green/red/orange/violet/gray)."""
+    return _STRONG[_is_dark].get(name, c("text"))
+
+
+def strong_bg(name: str) -> str:
+    """강조색과 짝이 되는 옅은 배경색 (건수 배지 등)."""
+    return _STRONG_BG[_is_dark].get(name, c("panel_bg"))
+
+
 def c(key: str) -> str:
     return _current.get(key, "#000000")
 
@@ -306,6 +332,16 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
 QDateEdit:focus, QTimeEdit:focus, QTextEdit:focus {{ border: 1px solid {p['accent']}; }}
 QComboBox QAbstractItemView {{ background: {p['input_bg']}; color: {p['text']};
     selection-background-color: {p['select_bg']}; selection-color: {p['select_text']}; }}
+/* 콤보 안의 입력칸 — 테두리를 또 그리면 이중선이 된다 */
+QComboBox QLineEdit {{ border: none; background: transparent; padding: 0; }}
+/* 검색형 드롭다운의 목록 (QCompleter 팝업 — 콤보의 자식이 아니라 별도 창이다) */
+QListView#searchpopup {{
+    background: {p['panel_bg']}; color: {p['text']};
+    border: 1px solid {p['accent']}; border-radius: 8px;
+    padding: 3px; outline: none;
+}}
+QListView#searchpopup::item {{ padding: 5px 8px; border-radius: 5px; }}
+QListView#searchpopup::item:selected {{ background: {p['select_bg']}; color: {p['select_text']}; }}
 QGroupBox {{
     border: 1px solid {p['border']};
     border-radius: 10px;

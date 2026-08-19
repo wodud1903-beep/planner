@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from . import commission, sheets, theme
+from . import commission, searchcombo, sheets, theme
 
 
 class _BrandPage(QWidget):
@@ -29,6 +29,8 @@ class _BrandPage(QWidget):
         form.setSpacing(10)
 
         self.cmb_car = QComboBox()
+        # 차종이 40개가 넘는다 — 초성("ㅅㄴㅌ")이나 낱말 일부로 바로 찾게 한다
+        searchcombo.install(self.cmb_car)
         self.cmb_car.currentIndexChanged.connect(self._on_car)
         form.addRow("차종", self.cmb_car)
 
