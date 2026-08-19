@@ -1113,7 +1113,7 @@ class MainWindow(QMainWindow):
             self.tbl_cust.setCellWidget(r, self.COL_MENT_BTN, btn)
 
             # 견적서/계약서 보기 — 시트에 이미지가 등록된 고객만 누를 수 있다
-            has_doc = bool(sheets.image_url(cr.get("doc")))
+            has_doc = bool(sheets.doc_url(cr.get("doc")))
             dbtn = QPushButton("보기" if has_doc else "—")
             dbtn.setEnabled(has_doc and not pend)
             dbtn.setToolTip("등록된 견적서/계약서 이미지를 크게 봅니다"
@@ -1291,7 +1291,7 @@ class MainWindow(QMainWindow):
 
     def _show_customer_doc(self, cr):
         """등록된 견적서/계약서 이미지를 크게 본다."""
-        url = sheets.image_url(cr.get("doc"))
+        url = sheets.doc_url(cr.get("doc"))
         if not url:
             QMessageBox.information(
                 self, config.APP_NAME,

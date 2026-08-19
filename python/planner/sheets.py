@@ -900,11 +900,14 @@ def image_url(file_id: str) -> str:
     return f"https://drive.google.com/uc?export=view&id={file_id}"
 
 
-def image_url(cell: str) -> str:
+def doc_url(cell: str) -> str:
     """'=IMAGE("https://...", 1)' 에서 주소만 뽑는다. 없으면 "".
 
     S열은 수식으로 읽어 오므로(read_docs) 여기서 주소를 되찾아
     견적서 원본을 다시 볼 수 있다.
+
+    ⚠ 이름을 image_url 로 지으면 안 된다 — 바로 위의 '파일 id → 주소' 함수와
+      겹쳐 그쪽을 덮어써 버린다(실제로 그렇게 견적서 저장이 통째로 망가졌다).
     """
     t = (cell or "").strip()
     if not t:
