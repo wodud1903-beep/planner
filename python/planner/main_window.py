@@ -580,7 +580,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_customer_tab(), "고객관리")
         self.tab_greet = GreetingTab()
         self.tab_greet.on_changed = self._touch_sync
-        self.tabs.addTab(self.tab_greet, "인삿말")
+        self.tabs.addTab(self.tab_greet, "멘트복사")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")

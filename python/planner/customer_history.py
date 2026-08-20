@@ -25,7 +25,11 @@ from . import config, sheets, theme
 
 
 def _auto_events(cr, ment_sent: bool) -> list[tuple]:
-    """시트에서 파생되는 이력. [(날짜|None, 분류, 내용)]"""
+    """시트에서 파생되는 이력. [(날짜|None, 분류, 내용)]
+
+    만기는 **실제로 출고된 계약** 에만 붙인다(진행현황 '출고' + 출고일 기재).
+    발주만 하고 취소한 건까지 만기가 뜨면 재계약 대상이 아닌 고객이 섞인다.
+    """
     out = []
     d = sheets.parse_date(cr.get("contract_date"))
     if d:
@@ -35,12 +39,15 @@ def _auto_events(cr, ment_sent: bool) -> list[tuple]:
         out.append((d, "출고", "차량 출고"))
         if ment_sent:
             out.append((d, "안내", "고객안내멘트 발송함"))
-    exp = sheets.expiry_date(cr)
-    if exp:
-        n = sheets.contract_months(cr.get("terms"))
-        left = (exp - date.today()).days
-        tail = f"D-{left}" if left > 0 else ("오늘" if left == 0 else f"{-left}일 지남")
-        out.append((exp, "만기", f"계약 만기 예정 ({n}개월, {tail})"))
+    st = (cr.get("status") or "").strip()
+    if st.startswith("출고") and sheets.parse_date(cr.get("deliver_date")):
+        exp = sheets.expiry_date(cr)
+        if exp:
+            n = sheets.contract_months(cr.get("terms"))
+            left = (exp - date.today()).days
+            tail = (f"D-{left}" if left > 0 else
+                    ("오늘" if left == 0 else f"{-left}일 지남"))
+            out.append((exp, "만기", f"계약 만기 예정 ({n}개월, {tail})"))
     return out
 
 
@@ -99,13 +106,18 @@ class CustomerHistoryDialog(QDialog):
 
     def _refresh(self):
         """자동 이력 + 메모를 시간 역순으로 합쳐 다시 그린다."""
-        items = _auto_events(self._cr, self._ment_sent)
+        auto = _auto_events(self._cr, self._ment_sent)
+        # 만기는 앞으로 올 날짜라 시간 역순으로 두면 늘 맨 위를 차지한다.
+        # 지나온 기록을 가리므로 목록에서 빼 두었다가 마지막 줄에 붙인다.
+        expiry = [e for e in auto if e[1] == "만기"]
+        items = [e for e in auto if e[1] != "만기"]
         for i, n in enumerate(self._notes):
             d = sheets.parse_date(n.get("date", "")) or None
             items.append((d, "메모", n.get("text", ""), i))
 
         # 날짜 없는 항목은 맨 아래로
         items.sort(key=lambda t: (t[0] is not None, t[0] or date.min), reverse=True)
+        items += expiry
 
         self.lst.clear()
         if not items:

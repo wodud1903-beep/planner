@@ -11,7 +11,8 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout,
+    QWidget,
 )
 
 from . import config, greetings, theme
@@ -71,6 +72,8 @@ class _ChannelCard(QFrame):
     def __init__(self, on_copy, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.NoFrame)
+        # 가로만 늘어나고 세로는 내용 높이 그대로 — 카드마다 크기가 달라지지 않게
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 12)
         v.setSpacing(8)
@@ -109,7 +112,7 @@ class GreetingEditDialog(QDialog):
 
     def __init__(self, items: list, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("인삿말 문구 편집")
+        self.setWindowTitle("멘트 문구 편집")
         self.resize(720, 560)
         self.items = [dict(it) for it in items]
         self._cur = -1
@@ -262,7 +265,7 @@ class GreetingTab(QWidget):
         v.setSpacing(8)
 
         top = QHBoxLayout()
-        self.lbl_title = QLabel("💬 인삿말 복사")
+        self.lbl_title = QLabel("💬 멘트 복사")
         top.addWidget(self.lbl_title)
         self.lbl_hint = QLabel("버튼을 누르면 문구가 클립보드에 바로 복사됩니다.")
         top.addWidget(self.lbl_hint)
@@ -277,9 +280,17 @@ class GreetingTab(QWidget):
         self.scroll.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
         inner.setObjectName("dlgbody")
-        self.grid = QGridLayout(inner)
-        self.grid.setContentsMargins(2, 2, 2, 2)
+        # 격자를 세로 상자 안에 넣고 남는 공간은 아래 여백이 가져간다.
+        # (격자에 setRowStretch 로 여백을 주면, 채널이 늘어나 그 줄에 카드가
+        #  들어왔을 때 그 줄만 혼자 커져 카드 크기가 들쭉날쭉해진다)
+        wrap = QVBoxLayout(inner)
+        wrap.setContentsMargins(2, 2, 2, 2)
+        wrap.setSpacing(0)
+        self.grid = QGridLayout()
+        self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(10)
+        wrap.addLayout(self.grid)
+        wrap.addStretch(1)
         self.scroll.setWidget(inner)
         v.addWidget(self.scroll, 1)
 
@@ -306,8 +317,6 @@ class GreetingTab(QWidget):
             card.set_channel(ch)
             self.grid.addWidget(card, i // COLS, i % COLS)
             self.cards.append(card)
-        rows = (len(self.items) + COLS - 1) // COLS
-        self.grid.setRowStretch(rows, 1)
         for col in range(COLS):
             self.grid.setColumnStretch(col, 1)
         self.apply_theme()
