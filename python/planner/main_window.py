@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
     sig_sheet_uids = Signal(object)                  # {행번호: U열 고객ID}
     sig_sheet_rates = Signal(object)                 # 공유 수당율 표
     sig_sheet_kb = Signal(object)                    # 공유 업무자료 목록
+    sig_sync_done = Signal(bool, str, bool)          # (바뀜, 오류, 수동여부)
     sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
     def __init__(self):
@@ -221,12 +222,19 @@ class MainWindow(QMainWindow):
         self.sig_sheet_uids.connect(self._on_sheet_uids)
         self.sig_sheet_rates.connect(self._on_sheet_rates)
         self.sig_sheet_kb.connect(self._on_sheet_kb)
+        self.sig_sync_done.connect(self._on_sync_done)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
         # 동기화 푸시 디바운스 타이머
         self._sync_timer = QTimer(self)
         self._sync_timer.setSingleShot(True)
         self._sync_timer.timeout.connect(self._do_sync_push)
+
+        # 주기 동기화 — 앱을 켜 둔 채 지내도 다른 PC 의 변경을 받는다.
+        # 예전엔 켜는 순간에만 받아서, 하루 종일 띄워 두면 영영 못 봤다.
+        self._sync_poll = QTimer(self)
+        self._sync_poll.timeout.connect(lambda: self.sync_now_async(manual=False))
+        self._sync_poll.start(10 * 60 * 1000)
 
         # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
         self._task_refetch_timer = QTimer(self)
@@ -389,6 +397,48 @@ class MainWindow(QMainWindow):
                 changed = False
             self.sig_synced.emit(changed)
         threading.Thread(target=worker, daemon=True).start()
+
+    def sync_now_async(self, manual: bool = False):
+        """받고 → 합쳐서 올린다. 주기 타이머와 [지금 동기화] 가 함께 쓴다."""
+        if not self.gauth.is_connected():
+            if manual:
+                QMessageBox.information(
+                    self, config.APP_NAME,
+                    "구글에 연결되어 있지 않습니다.\n[설정] 에서 Google 로그인을 먼저 해 주세요.")
+            return
+        if getattr(self, "_syncing", False):
+            return                      # 앞의 동기화가 아직 도는 중
+        self._syncing = True
+
+        def worker():
+            changed, err = False, ""
+            try:
+                changed = sync.sync_now(self.gauth)
+            except Exception as e:
+                err = str(e).splitlines()[0][:120]
+            self.sig_sync_done.emit(changed, err, manual)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sync_done(self, changed: bool, err: str, manual: bool):
+        self._syncing = False
+        if changed:
+            self.reload_data()
+            self.refresh_calendar()
+            self.refresh_todo()
+            self.refresh_alarm()
+        if not manual:
+            if changed:
+                self.sig_toast.emit(config.APP_NAME,
+                                    "다른 PC의 변경사항을 받았습니다.")
+            return
+        if err:
+            QMessageBox.warning(self, config.APP_NAME, "동기화 실패:\n" + err)
+        elif changed:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "다른 PC의 변경사항을 받아 반영했습니다.")
+        else:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "이미 최신입니다. 이 PC의 내용도 올렸습니다.")
 
     def _on_synced(self, changed: bool):
         if changed:
@@ -1625,7 +1675,8 @@ class MainWindow(QMainWindow):
         prev_sheet = (self.settings.sheet_id.strip(), self.settings.sheet_name.strip())
         dlg = SettingsDialog(self.gauth, self.settings, self,
                              account=getattr(self, 'account_email', ''),
-                             on_backup=self.open_backup)
+                             on_backup=self.open_backup,
+                             on_sync=lambda: self.sync_now_async(manual=True))
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
             self._save_settings()

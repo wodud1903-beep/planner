@@ -61,14 +61,15 @@ class SettingsDialog(QDialog):
     _sig_login = Signal(bool, str)
 
     def __init__(self, gauth, settings: AppSettings, parent=None, account: str = "",
-                 on_backup=None):
+                 on_backup=None, on_sync=None):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
         self.setMinimumWidth(560)
         self.gauth = gauth
         self.settings = settings
-        # 백업/복원은 파일을 되돌린 뒤 화면까지 다시 그려야 해서 메인 창이 맡는다
+        # 백업/복원·동기화는 파일을 되돌린 뒤 화면까지 다시 그려야 해서 메인 창이 맡는다
         self._on_backup = on_backup
+        self._on_sync = on_sync
         self.account = (account or "").strip().lower()
         self.tasks_changed = False  # 로그인/로그아웃 발생 여부
 
@@ -258,14 +259,22 @@ class SettingsDialog(QDialog):
         root.addWidget(gb_h)
 
         # ---- 백업 / 복원 ----
-        gb_b = QGroupBox("백업 / 복원")
+        gb_b = QGroupBox("백업 / 복원 · 다른 PC 동기화")
         bl = QVBoxLayout(gb_b)
+        brow2 = QHBoxLayout()
         btn_backup = QPushButton("백업 / 복원 창 열기…")
         btn_backup.clicked.connect(self._open_backup)
-        bl.addWidget(btn_backup)
+        brow2.addWidget(btn_backup)
+        btn_sync = QPushButton("지금 동기화")
+        btn_sync.setToolTip("다른 PC 의 변경을 지금 받아오고, 이 PC 의 내용도 올립니다.")
+        btn_sync.clicked.connect(self._sync_now)
+        brow2.addWidget(btn_sync)
+        brow2.addStretch()
+        bl.addLayout(brow2)
         bl.addWidget(QLabel(
             "할일·알람·설정·고객메모·멘트문구를 하루 한 번 자동으로 백업합니다.\n"
-            "잘못 지웠거나 덮어썼을 때 시점을 골라 되돌릴 수 있습니다."))
+            "잘못 지웠거나 덮어썼을 때 시점을 골라 되돌릴 수 있습니다.\n"
+            "동기화는 켤 때와 10분마다 자동으로 돕니다. 급하면 [지금 동기화] 를 누르세요."))
         root.addWidget(gb_b)
 
         root.addStretch()
@@ -319,6 +328,13 @@ class SettingsDialog(QDialog):
         self.chk_kb_shift.setChecked(getattr(s, "kb_hot_shift", False))
         idx = self.cmb_kb_key.findText((getattr(s, "kb_hot_key", "F") or "F").upper())
         self.cmb_kb_key.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _sync_now(self):
+        if callable(self._on_sync):
+            self._on_sync()
+        else:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "메인 창에서만 동기화할 수 있습니다.")
 
     def _open_backup(self):
         if callable(self._on_backup):
