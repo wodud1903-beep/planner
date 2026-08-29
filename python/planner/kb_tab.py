@@ -412,6 +412,12 @@ class KbEditDialog(QDialog):
         root.addWidget(hint)
 
         brow = QHBoxLayout()
+        self.btn_seed = QPushButton("기본 자료 불러오기")
+        self.btn_seed.setToolTip(
+            "앱에 들어 있는 기본 자료 중 목록에 없는 것만 덧붙입니다.\n"
+            "이미 있는 제목은 건드리지 않습니다.")
+        self.btn_seed.clicked.connect(self._add_seed)
+        brow.addWidget(self.btn_seed)
         brow.addStretch()
         ok = QPushButton("저장")
         ok.setDefault(True)
@@ -423,6 +429,7 @@ class KbEditDialog(QDialog):
         root.addLayout(brow)
 
         self._fill()
+        self._sync_seed_btn()
 
     # ---- 묶음 ----
     def _cur_list(self) -> list:
@@ -433,6 +440,14 @@ class KbEditDialog(QDialog):
         self._stash()
         self._cur = -1
         self._fill()
+        self._sync_seed_btn()
+
+    def _sync_seed_btn(self) -> None:
+        """기본 자료는 회사 공통 묶음에만 넣는다(전 직원이 같은 것을 봐야 한다)."""
+        on = self.cmb_src.currentData() == kb.SRC_SHARED
+        self.btn_seed.setEnabled(on)
+        if not on:
+            self.btn_seed.setToolTip("기본 자료는 '회사 공통' 묶음에만 넣을 수 있습니다.")
 
     def _fill(self) -> None:
         self.lst.blockSignals(True)
@@ -492,6 +507,29 @@ class KbEditDialog(QDialog):
         self.lst.setCurrentRow(len(self._cur_list()) - 1)
         self.ed_title.setFocus()
         self.ed_title.selectAll()
+
+    def _add_seed(self) -> None:
+        """앱 기본 자료 중 **제목이 겹치지 않는 것만** 덧붙인다.
+
+        덮어쓰지 않는 이유: 여기까지 고쳐 쓰신 내용을 기본값으로 되돌리면
+        그동안의 수정이 한 번에 사라진다. 없는 것만 채우는 게 안전하다.
+        """
+        lst = self._cur_list()
+        self._stash()
+        have = {(it.get("title") or "").strip() for it in lst}
+        added = [dict(x) for x in kb.SAMPLE
+                 if (x.get("title") or "").strip() not in have]
+        if not added:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "기본 자료가 이미 모두 들어 있습니다.")
+            return
+        lst.extend(added)
+        self._cur = -1
+        self._fill()
+        QMessageBox.information(
+            self, config.APP_NAME,
+            f"기본 자료 {len(added)}건을 덧붙였습니다.\n"
+            "[저장] 을 눌러야 실제로 반영됩니다.")
 
     def _del(self) -> None:
         lst = self._cur_list()
