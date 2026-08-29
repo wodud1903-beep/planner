@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import threading
-import webbrowser
 
 import requests
 from PySide6.QtCore import Qt, Signal
@@ -16,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
 )
 
-from . import config, theme
+from . import browser, config, theme
 
 
 def fetch_image(url: str, auth=None) -> bytes:
@@ -66,7 +65,7 @@ class DocViewer(QDialog):
 
         row = QHBoxLayout()
         btn_web = QPushButton("브라우저에서 열기")
-        btn_web.clicked.connect(lambda: webbrowser.open(self._url))
+        btn_web.clicked.connect(lambda: browser.open_url(self._url))
         btn_close = QPushButton("닫기")
         btn_close.clicked.connect(self.accept)
         row.addWidget(btn_web)

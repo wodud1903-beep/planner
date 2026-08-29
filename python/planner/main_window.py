@@ -11,7 +11,6 @@ from __future__ import annotations
 import sys
 import threading
 import uuid
-import webbrowser
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from html import escape as html_escape
@@ -26,8 +25,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, backup_dialog, config, customer_docs, followup, google_client,
-    hotkey, kb, searchcombo, sheets, sync, theme, updater,
+    alarm_window, backup_dialog, browser, config, customer_docs, followup,
+    google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -930,7 +929,7 @@ class MainWindow(QMainWindow):
         if not sid:
             QMessageBox.information(self, config.APP_NAME, "설정에서 시트 주소를 입력하세요.")
             return
-        webbrowser.open(sheets.sheet_url(sid))
+        browser.open_url(sheets.sheet_url(sid))
 
     def _auto_load_sheet(self, tries: int = 0):
         """시작 후 고객관리 시트를 자동으로 불러온다.

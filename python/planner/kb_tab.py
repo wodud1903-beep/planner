@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QVBoxLayout, QWidget,
 )
 
-from . import config, kb, searchcombo, theme
+from . import browser, config, kb, searchcombo, theme
 
 ALL_CATEGORY = "전체 분류"
 HEAD_MARK = "■"          # 본문에서 '한 덩어리' 의 머리글을 나타내는 표시
@@ -164,7 +164,12 @@ class KbView(QWidget):
         # QTextEdit 를 물려받았으므로 toPlainText()(본문 복사)는 그대로다.
         self.txt_body = QTextBrowser()
         self.txt_body.setReadOnly(True)
-        self.txt_body.setOpenExternalLinks(True)
+        # Qt 에 맡기면 윈도우 기본 브라우저(대개 엣지)로 열린다. 직접 크롬으로 넘긴다.
+        # setOpenLinks(False) 를 같이 꺼야 한다 — 안 그러면 QTextBrowser 가 그 주소를
+        # 제 문서로 열려고 해서 본문이 사라진다.
+        self.txt_body.setOpenExternalLinks(False)
+        self.txt_body.setOpenLinks(False)
+        self.txt_body.anchorClicked.connect(self._open_link)
         rv.addWidget(self.txt_body, 3)
         self.lbl_check_cap = QLabel("체크리스트")
         rv.addWidget(self.lbl_check_cap)
@@ -274,6 +279,12 @@ class KbView(QWidget):
     def _copy_check(self) -> None:
         it = self.lst.current_item_data() or {}
         self._copy("\n".join(it.get("checklist") or []), "체크리스트")
+
+    def _open_link(self, url) -> None:
+        """본문의 주소를 눌렀을 때 — 크롬으로 연다."""
+        addr = url.toString() if hasattr(url, "toString") else str(url)
+        if not browser.open_url(addr):
+            self.lbl_status.setText("링크를 열지 못했습니다: " + addr)
 
     def focus_search(self) -> None:
         self.ed_find.setFocus()
