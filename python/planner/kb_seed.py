@@ -96,13 +96,31 @@ DOCS = [
 # ---------------------------------------------------------------------------
 # 캐피탈·렌터카 — 승계조건표 + 조건표/연락처를 한 장으로
 # ---------------------------------------------------------------------------
+# 전자약정 신청서 접수 시트 (BNK·메리츠·신한카드 공통)
+ECONTRACT_FORM_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "19Uc2PBMpA08OIOr3ZbMzsEucUNQWbYbrxNsXAvsRrDw/edit?gid=841711821#gid=841711821"
+)
+
+
 def _company(name, tags="", succ=None, econtract="", corpdoc="", driver="",
-             web="", call="", accident="", takeover="") -> dict:
+             web="", form="", call="", accident="", takeover="") -> dict:
     """회사 한 곳의 자료를 만든다. 값이 없는 항목은 아예 넣지 않는다.
 
     빈 칸에 '-' 를 적어 두면 화면에서 읽을 게 늘기만 하고 도움이 안 된다.
+
+    차례는 **급할 때 먼저 봐야 하는 것**부터다. 상담 중에 여는 화면이라
+    연락처와 접속 주소가 맨 위에 있어야 한다. 조건은 그 아래에서 읽으면 된다.
     """
     parts = []
+    nums = [(lbl, v) for lbl, v in (("콜센터", call), ("사고처리", accident),
+                                    ("승계부서", takeover)) if v]
+    if nums:
+        parts.append("■ 연락처\n" + "\n".join(f"· {lbl} : {v}" for lbl, v in nums))
+    if web:
+        parts.append("■ 견적 홈페이지\n" + web)
+    if form:
+        parts.append("■ 전자약정 신청서\n" + form)
     if succ:
         lines = ["■ 승계 조건"]
         for label, key in (("최소 납부횟수", "pay"),
@@ -116,14 +134,9 @@ def _company(name, tags="", succ=None, econtract="", corpdoc="", driver="",
         parts.append("\n".join(lines))
     for cap, val in (("■ 전자약정 필요정보", econtract),
                      ("■ 법인약정 필요서류", corpdoc),
-                     ("■ 운전자 범위", driver),
-                     ("■ 견적 홈페이지", web)):
+                     ("■ 운전자 범위", driver)):
         if val:
             parts.append(cap + "\n" + val)
-    nums = [(lbl, v) for lbl, v in (("콜센터", call), ("사고처리", accident),
-                                    ("승계부서", takeover)) if v]
-    if nums:
-        parts.append("■ 연락처\n" + "\n".join(f"· {lbl} : {v}" for lbl, v in nums))
     return {
         "category": CAT_COMPANY, "finance": name, "title": name,
         "tags": (tags + " 승계 전자약정 법인약정 연락처 조건표").strip(),
@@ -218,6 +231,7 @@ COMPANIES = [
               "fee": "300,000원 ~ 1,000,000원",
               "note": "정산일 : 완납일 기준 / 이전서류 바로 발송가능 "
                       "(기간유지 없음) / 승계 후 완납"},
+        form=ECONTRACT_FORM_URL,
         econtract="1. 통신사\n2. 자택주소\n3. 납입일자 (1,5,10,15,20,25,말일)\n"
                   "4. 이메일\n5. 계좌번호",
         corpdoc="법인 지류약정",
@@ -251,6 +265,7 @@ COMPANIES = [
         succ={"pay": "1회", "left": "2개월", "resale": "불가", "fee": "330,000원",
               "note": "정산일 : 승계완료일 기준 / 이전서류 바로 발송가능 "
                       "(기간유지 없음)"},
+        form=ECONTRACT_FORM_URL,
         econtract="1. 등본\n2. 결제일자(1,5,10,15,20) 택 1\n"
                   "3. 자동이체 계좌번호\n4. 인도주소\n5. 썬팅농도\n6. 이메일주소",
         corpdoc="전자약정신청서 / 연대보증인 인감증명서",
@@ -287,6 +302,7 @@ COMPANIES = [
               "fee": "최소 300,000원",
               "note": "정산일 : 승계완료일 기준 / 승계 후 최소 1회 납부 후 "
                       "완납가능 / 승계 후 완납"},
+        form=ECONTRACT_FORM_URL,
         econtract="이메일 / 주소 / 계좌 / 결제일(1,5,17,23일)",
         corpdoc="법인 지류약정",
         driver="만 74세까지 계약가능",

@@ -382,6 +382,11 @@ QListWidget {{
     border: 1px solid {p['border']}; border-radius: 8px;
 }}
 QListWidget::item:selected {{ background: {p['select_bg']}; color: {p['select_text']}; }}
+/* 좌우로 나눈 화면의 손잡이 — 규칙이 없으면 시스템 기본이 검은 선으로 그려진다 */
+QSplitter {{ background: transparent; }}
+QSplitter::handle {{ background: transparent; border: none; image: none; }}
+QSplitter::handle:horizontal {{ width: 8px; }}
+QSplitter::handle:vertical {{ height: 8px; }}
 QDialog, QMessageBox {{ background: {p['window_bg']}; }}
 /* 스크롤 영역 — 규칙이 없으면 윈도우 시스템(다크) 테마가 배경으로 새어 나온다 */
 QScrollArea {{ background: {p['window_bg']}; border: none; }}

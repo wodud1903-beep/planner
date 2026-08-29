@@ -38,6 +38,16 @@ SAMPLE = DEFAULTS
 # ---------------------------------------------------------------------------
 # 읽기 / 쓰기
 # ---------------------------------------------------------------------------
+def norm_body(text: str) -> str:
+    """본문의 줄 끝 공백을 턴다.
+
+    편집창의 QTextEdit 는 빈 줄을 '공백 한 칸이 든 줄' 로 돌려준다. 그대로 두면
+    창을 열었다 저장하기만 해도 고객에게 보내는 글이 조용히 바뀌고, 기본자료와
+    같은 내용인데도 '다르다' 고 잡힌다. 들고 나는 길목에서 한 번에 턴다.
+    """
+    return "\n".join(line.rstrip() for line in str(text or "").split("\n"))
+
+
 def _clean(o) -> dict | None:
     """저장 형식으로 다듬는다. 제목이 없으면 버린다(검색이 안 되는 자료)."""
     if not isinstance(o, dict):
@@ -53,7 +63,7 @@ def _clean(o) -> dict | None:
         "finance": str(o.get("finance", "")).strip(),
         "title": title,
         "tags": str(o.get("tags", "")).strip(),
-        "body": str(o.get("body", "")),
+        "body": norm_body(o.get("body", "")),
         "checklist": [str(c).strip() for c in checks if str(c).strip()],
     }
 

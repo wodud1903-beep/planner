@@ -9,16 +9,28 @@
 
 from __future__ import annotations
 
+import re
+from html import escape as _esc
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextBrowser,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import config, kb, searchcombo, theme
 
 ALL_CATEGORY = "전체 분류"
+HEAD_MARK = "■"          # 본문에서 '한 덩어리' 의 머리글을 나타내는 표시
+
+# 덩어리 사이를 가르는 점선.
+# Qt 의 서식 있는 글은 <hr> 의 dashed 를 무시하고 실선으로 그려 버린다(확인함).
+# 그래서 글자로 점선을 만든다 — 어느 글꼴에서나 똑같이 보인다.
+_DOTS = "- " * 26
+
+# 주소 끝에 붙기 쉬운 문장부호는 뺀다 — 마침표·쉼표까지 링크에 들어가면 안 열린다
+_URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 
 def _badge(text: str, color: str, bg: str) -> str:
@@ -26,20 +38,80 @@ def _badge(text: str, color: str, bg: str) -> str:
             f"&nbsp;{text}&nbsp;</span>")
 
 
+def _same(a: dict, b: dict) -> bool:
+    """두 자료가 사실상 같은 내용인가 (출처 표시 등은 빼고 본다)."""
+    for k in ("category", "finance", "title", "tags"):
+        if (a.get(k) or "").strip() != (b.get(k) or "").strip():
+            return False
+    if kb.norm_body(a.get("body", "")).strip() != kb.norm_body(b.get("body", "")).strip():
+        return False
+    return [x.strip() for x in (a.get("checklist") or [])] == \
+           [x.strip() for x in (b.get("checklist") or [])]
+
+
+def _linkify(line: str) -> str:
+    """한 줄을 HTML 로. 주소만 링크로 만들고 나머지는 그대로 이스케이프한다.
+
+    통째로 이스케이프한 뒤 링크를 만들면 주소 안의 `&` 가 `&amp;` 로 바뀌어
+    href 가 깨진다. 그래서 주소와 그 밖을 갈라서 따로 처리한다.
+    """
+    out, pos = [], 0
+    for m in _URL_RE.finditer(line):
+        out.append(_esc(line[pos:m.start()]))
+        url = m.group(0).rstrip(".,);]")      # 문장 끝 부호는 링크에서 뺀다
+        tail = m.group(0)[len(url):]
+        href = _esc(url, quote=True)
+        out.append(f'<a href="{href}">{_esc(url)}</a>')
+        if tail:
+            out.append(_esc(tail))
+        pos = m.end()
+    out.append(_esc(line[pos:]))
+    return "".join(out)
+
+
+def body_to_html(text: str) -> str:
+    """본문 평문을 화면용 HTML 로.
+
+    저장은 평문 그대로 둔다(시트에 들어가고 복사도 깨끗하다). 보기 좋게 만드는
+    일은 그릴 때만 한다 — 그래야 사용자가 손으로 적은 자료에도 똑같이 걸린다.
+
+      · `■ 머리글` 은 굵은 강조색으로, 그 **앞에 점선**을 그어 덩어리를 나눈다.
+      · 주소는 눌러서 바로 열리는 링크로 바꾼다.
+      · 머리글이 없는 글(고객에게 보내는 안내문)에는 선을 긋지 않는다.
+    """
+    txt, sub = theme.c("text"), theme.c("subtext")
+    head = theme.strong("blue")
+    out = [f"<div style='font-family:Malgun Gothic;color:{txt};font-size:13px;'>"]
+    first_head = True
+    for line in (text or "").split("\n"):
+        if line.lstrip().startswith(HEAD_MARK):
+            if not first_head:
+                out.append(
+                    f"<p style='margin:9px 0 4px 0;color:{sub};'>{_DOTS}</p>")
+            first_head = False
+            out.append(
+                f"<p style='margin:6px 0 3px 0;font-size:14px;font-weight:bold;"
+                f"color:{head};'>{_linkify(line.strip())}</p>")
+        elif line.strip():
+            out.append(f"<p style='margin:1px 0 1px 4px;'>{_linkify(line)}</p>")
+        else:
+            out.append("<p style='margin:4px 0;'>&nbsp;</p>")
+    out.append("</div>")
+    return "".join(out)
+
+
 class _ResultList(QListWidget):
     """검색 결과 목록. 항목에 자료 dict 를 달아 둔다."""
 
     def fill(self, items: list) -> None:
+        # 제목만 보여 준다. 캐피탈 자료는 제목과 금융사가 같아서 꼬리표를 붙이면
+        # 'SK렌터카   [SK렌터카 · 캐피탈]' 처럼 같은 말이 세 번 나온다.
         self.clear()
         for it in items:
-            bits = [it.get("title", "")]
-            tail = " · ".join(x for x in (it.get("finance", ""),
-                                          it.get("category", "")) if x)
-            if tail:
-                bits.append(f"   [{tail}]")
+            text = it.get("title", "")
             if it.get("source") == kb.SRC_MINE:
-                bits.append("   (내 메모)")
-            li = QListWidgetItem("".join(bits))
+                text += "   (내 메모)"
+            li = QListWidgetItem(text)
             li.setData(Qt.UserRole, it)
             self.addItem(li)
 
@@ -88,8 +160,11 @@ class KbView(QWidget):
         self.lbl_title = QLabel("")
         self.lbl_title.setWordWrap(True)
         rv.addWidget(self.lbl_title)
-        self.txt_body = QTextEdit()
+        # QTextBrowser 라야 주소를 눌러 브라우저로 넘길 수 있다.
+        # QTextEdit 를 물려받았으므로 toPlainText()(본문 복사)는 그대로다.
+        self.txt_body = QTextBrowser()
         self.txt_body.setReadOnly(True)
+        self.txt_body.setOpenExternalLinks(True)
         rv.addWidget(self.txt_body, 3)
         self.lbl_check_cap = QLabel("체크리스트")
         rv.addWidget(self.lbl_check_cap)
@@ -156,8 +231,11 @@ class KbView(QWidget):
             self.btn_copy_body.setEnabled(False)
             self.btn_copy_check.setEnabled(False)
             return
-        tail = " · ".join(x for x in (it.get("finance", ""),
-                                      it.get("category", "")) if x)
+        # 금융사가 제목과 같으면(캐피탈 자료) 한 번만 보여 준다
+        fin = it.get("finance", "")
+        if fin.strip() == it.get("title", "").strip():
+            fin = ""
+        tail = " · ".join(x for x in (fin, it.get("category", "")) if x)
         src = kb.SRC_NAMES.get(it.get("source", ""), "")
         col = (theme.strong("violet") if it.get("source") == kb.SRC_MINE
                else theme.strong("blue"))
@@ -168,7 +246,7 @@ class KbView(QWidget):
             + (_badge(src, col, bg) if src else "")
             + (f"<br><span style='color:{theme.c('subtext')};'>{tail}</span>"
                if tail else ""))
-        self.txt_body.setPlainText(it.get("body", ""))
+        self.txt_body.setHtml(body_to_html(it.get("body", "")))
         checks = it.get("checklist") or []
         self.lst_check.clear()
         for c in checks:
@@ -469,7 +547,7 @@ class KbEditDialog(QDialog):
                 "finance": self.ed_fin.text().strip(),
                 "title": self.ed_title.text().strip(),
                 "tags": self.ed_tags.text().strip(),
-                "body": self.txt_body.toPlainText(),
+                "body": kb.norm_body(self.txt_body.toPlainText()),
                 "checklist": [c.strip() for c in
                               self.txt_check.toPlainText().splitlines() if c.strip()],
             }
@@ -484,6 +562,8 @@ class KbEditDialog(QDialog):
         self.ed_fin.setText(it.get("finance", ""))
         self.ed_title.setText(it.get("title", ""))
         self.ed_tags.setText(it.get("tags", ""))
+        # 편집창은 **평문 그대로** 보여 준다. 여기에 서식을 입히면
+        # toPlainText() 로 거둘 때 점선·머리글 장식까지 본문에 섞여 저장된다.
         self.txt_body.setPlainText(it.get("body", ""))
         self.txt_check.setPlainText("\n".join(it.get("checklist") or []))
         for w in (self.cmb_cat, self.ed_fin, self.ed_title, self.ed_tags,
@@ -509,26 +589,61 @@ class KbEditDialog(QDialog):
         self.ed_title.selectAll()
 
     def _add_seed(self) -> None:
-        """앱 기본 자료 중 **제목이 겹치지 않는 것만** 덧붙인다.
+        """앱 기본 자료를 목록에 반영한다.
 
-        덮어쓰지 않는 이유: 여기까지 고쳐 쓰신 내용을 기본값으로 되돌리면
-        그동안의 수정이 한 번에 사라진다. 없는 것만 채우는 게 안전하다.
+        없는 것은 덧붙이고, **제목은 같은데 내용이 다른 것은 덮어쓸지 물어본다.**
+        예전엔 겹치는 제목을 무조건 건너뛰었는데, 그러면 앱에 새로 넣은 문구가
+        이미 그 제목을 갖고 있는 PC 에는 영원히 도달하지 못했다(심사서류가
+        옛 내용 그대로 남아 있던 이유).
+
+        묻지 않고 덮어쓰지는 않는다 — 고쳐 쓰신 내용이 말없이 사라지면 안 된다.
         """
         lst = self._cur_list()
         self._stash()
-        have = {(it.get("title") or "").strip() for it in lst}
-        added = [dict(x) for x in kb.SAMPLE
-                 if (x.get("title") or "").strip() not in have]
-        if not added:
+        cur = {(it.get("title") or "").strip(): i for i, it in enumerate(lst)}
+        missing, differ = [], []
+        for x in kb.SAMPLE:
+            t = (x.get("title") or "").strip()
+            i = cur.get(t)
+            if i is None:
+                missing.append(dict(x))
+            elif not _same(lst[i], x):
+                differ.append((i, dict(x)))
+
+        if not missing and not differ:
             QMessageBox.information(self, config.APP_NAME,
-                                    "기본 자료가 이미 모두 들어 있습니다.")
+                                    "기본 자료가 이미 모두 최신입니다.")
             return
-        lst.extend(added)
+
+        overwrite = False
+        if differ:
+            ans = QMessageBox.question(
+                self, config.APP_NAME,
+                f"제목이 같은데 내용이 다른 자료가 {len(differ)}건 있습니다.\n"
+                f"({', '.join(x[1]['title'] for x in differ[:5])}"
+                + (" 외" if len(differ) > 5 else "") + ")\n\n"
+                "기본 내용으로 덮어쓸까요?\n"
+                "[아니오] 를 누르면 없는 자료만 덧붙입니다.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if ans == QMessageBox.Cancel:
+                return
+            overwrite = ans == QMessageBox.Yes
+
+        if overwrite:
+            for i, x in differ:
+                lst[i] = x
+        lst.extend(missing)
         self._cur = -1
         self._fill()
+
+        done = []
+        if missing:
+            done.append(f"{len(missing)}건 추가")
+        if overwrite and differ:
+            done.append(f"{len(differ)}건 덮어씀")
         QMessageBox.information(
             self, config.APP_NAME,
-            f"기본 자료 {len(added)}건을 덧붙였습니다.\n"
+            (" · ".join(done) if done else "바뀐 것이 없습니다") + "\n"
             "[저장] 을 눌러야 실제로 반영됩니다.")
 
     def _del(self) -> None:
