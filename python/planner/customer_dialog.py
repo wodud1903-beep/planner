@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, searchcombo, sheets
+from .incentive_box import IncentiveBox
 
 
 class MoneyEdit(QLineEdit):
@@ -231,6 +232,11 @@ class CustomerDialog(QDialog):
             elif kind == "money":
                 w = MoneyEdit(cur)
                 form.addRow(label, w)
+                if key == "incentive":
+                    # 수당계산기 탭으로 옮겨 다니지 않게, 바로 아래에 미니계산기를 둔다
+                    self.inc_box = IncentiveBox()
+                    self.inc_box.applied.connect(self._apply_incentive)
+                    form.addRow("", self.inc_box)
             elif kind == "text":
                 w = QTextEdit()
                 w.setMinimumHeight(64)
@@ -266,6 +272,18 @@ class CustomerDialog(QDialog):
         if fin_w is not None and hasattr(self, "cmb_terms"):
             fin_w.currentTextChanged.connect(self._reload_terms)
             self._reload_terms(fin_w.currentText())
+
+        # 미니계산기에 차량가격·차종을 물려 준다 (칸이 바뀌면 즉시 다시 계산)
+        if hasattr(self, "inc_box"):
+            price_w = self.widgets.get("price", (None, ""))[0]
+            model_w = self.widgets.get("model", (None, ""))[0]
+            if price_w is not None:
+                price_w.textChanged.connect(
+                    lambda _t, w=price_w: self.inc_box.set_price(w.value()))
+                self.inc_box.set_price(price_w.value())
+            if model_w is not None:
+                model_w.textChanged.connect(self.inc_box.suggest_model)
+                self.inc_box.suggest_model(model_w.text())
 
         # 고객안내멘트 복사 (시트 R열 — 자동 계산되는 값)
         mrow = QHBoxLayout()
@@ -312,6 +330,12 @@ class CustomerDialog(QDialog):
         w, _k = self.widgets["terms"]
         w.setPlainText(self.cmb_terms.itemText(idx))
         self.cmb_terms.setCurrentIndex(0)
+
+    def _apply_incentive(self, amount: str):
+        """미니계산기의 [적용] — 대리점 수당 칸에 넣는다."""
+        w, _kind = self.widgets.get("incentive", (None, ""))
+        if w is not None:
+            w.setText(sheets.fmt_money(amount))
 
     def _copy_ment(self):
         QGuiApplication.clipboard().setText(self._ment)

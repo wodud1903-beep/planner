@@ -26,14 +26,15 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, config, followup, google_client, hotkey, searchcombo, sheets,
-    sync, theme, updater,
+    alarm_window, backup_dialog, config, customer_docs, followup, google_client,
+    hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
 from .commission_tab import CommissionTab
 from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
+from .kb_tab import KbTab, QuickSearch
 from .doc_viewer import DocViewer
 from .edit_dialog import EditDialog
 from .icon import make_icon
@@ -135,6 +136,7 @@ class MainWindow(QMainWindow):
     sig_sheet_docs = Signal(object)                  # {행번호: S열 =IMAGE() 수식}
     sig_sheet_uids = Signal(object)                  # {행번호: U열 고객ID}
     sig_sheet_rates = Signal(object)                 # 공유 수당율 표
+    sig_sheet_kb = Signal(object)                    # 공유 업무자료 목록
     sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
     def __init__(self):
@@ -193,6 +195,8 @@ class MainWindow(QMainWindow):
         self._ment_copied: set = self._load_ment_log()
         # 고객ID → [{date, text}] — 이력 타임라인의 직접 메모
         self._notes: dict = self._load_notes()
+        # 고객ID → {template, items[]} — 심사서류 체크리스트
+        self._docs: dict = self._load_docs()
 
         # 저장된 테마 반영
         theme.set_theme(getattr(self.settings, 'theme', '')
@@ -216,6 +220,7 @@ class MainWindow(QMainWindow):
         self.sig_sheet_docs.connect(self._on_sheet_docs)
         self.sig_sheet_uids.connect(self._on_sheet_uids)
         self.sig_sheet_rates.connect(self._on_sheet_rates)
+        self.sig_sheet_kb.connect(self._on_sheet_kb)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
         # 동기화 푸시 디바운스 타이머
@@ -263,10 +268,12 @@ class MainWindow(QMainWindow):
 
         self.chk_startup.setChecked(_startup_set())
 
-        # 전역 단축키 (Windows)
+        # 전역 단축키 (Windows) — 창 열기 + 업무자료 빠른검색
         self.hotkeys = hotkey.HotkeyManager(
             QApplication.instance(), int(self.winId()), self._on_hotkey)
-        QTimer.singleShot(0, lambda: self.hotkeys.apply(self.settings))
+        self.hotkeys.set_callback(hotkey.ID_KB, self.open_kb_search)
+        self._kb_quick = None
+        QTimer.singleShot(0, self._apply_hotkeys)
 
         # 1초 타이머
         self.timer = QTimer(self)
@@ -291,6 +298,17 @@ class MainWindow(QMainWindow):
 
     def _on_hotkey(self):
         self.show_window()
+
+    def _apply_hotkeys(self):
+        """두 전역 단축키를 설정대로 등록한다(한쪽 실패가 다른 쪽을 막지 않는다)."""
+        try:
+            self.hotkeys.apply(self.settings)
+        except Exception:
+            pass
+        try:
+            self.hotkeys.apply_kb(self.settings)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 테마
     def _apply_topbar_theme(self):
@@ -321,6 +339,8 @@ class MainWindow(QMainWindow):
             self.tab_comm.apply_theme()
         if hasattr(self, "tab_greet"):
             self.tab_greet.apply_theme()
+        if hasattr(self, "tab_kb"):
+            self.tab_kb.apply_theme()
         # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
         if self._cal_win is not None:
             try:
@@ -356,6 +376,7 @@ class MainWindow(QMainWindow):
         # 이제야 이 계정의 시트 설정을 알 수 있다 → 바로 불러오기 시도
         self._auto_load_sheet()
         self.fetch_rates_async()      # 공유 수당율(전용 시트)도 함께 받아온다
+        self.fetch_kb_async()         # 공유 업무자료도 같은 시트에서 받아온다
         # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
         self._backup(manual=False)
 
@@ -391,17 +412,18 @@ class MainWindow(QMainWindow):
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
         self._ment_copied = self._load_ment_log()
         self._notes = self._load_notes()
+        self._docs = self._load_docs()
         if hasattr(self, "tab_greet"):
             self.tab_greet.reload()      # 계정이 바뀌면 그 계정의 문구로
+        if hasattr(self, "tab_kb"):
+            self.tab_kb.set_account(getattr(self, "account_email", ""))
+            self.tab_kb.reload()
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
         self.chk_autofetch.blockSignals(False)
         self.apply_theme()
-        try:
-            self.hotkeys.apply(self.settings)
-        except Exception:
-            pass
+        self._apply_hotkeys()
         self._last_seen_mtime = self._data_mtime()
 
     def _touch_sync(self):
@@ -581,6 +603,10 @@ class MainWindow(QMainWindow):
         self.tab_greet = GreetingTab()
         self.tab_greet.on_changed = self._touch_sync
         self.tabs.addTab(self.tab_greet, "멘트복사")
+        self.tab_kb = KbTab()
+        self.tab_kb.on_changed = self._touch_sync
+        self.tab_kb.on_push_shared = self._push_kb_shared
+        self.tabs.addTab(self.tab_kb, "자료검색")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
@@ -669,6 +695,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_cust_load)
         for text, slot in [("고객 추가", self.on_customer_add),
                            ("수정", self.on_customer_edit),
+                           ("서류", self.on_customer_docs),
                            ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -977,6 +1004,55 @@ class MainWindow(QMainWindow):
                     self.tab_comm.reload_rates()
         except Exception:
             pass
+
+    def fetch_kb_async(self):
+        """공유 업무자료를 전용 스프레드시트에서 받아온다(수당율과 같은 방식).
+
+        실패하면 조용히 넘어가고 이 PC 에 저장된 마지막 자료로 검색한다 —
+        인터넷이 끊겨도 자료검색은 되어야 한다.
+        """
+        if not self.gauth.is_connected():
+            return
+
+        def worker():
+            try:
+                items = sheets.read_kb(self.gauth, config.RATES_SHEET_ID)
+                if items:
+                    self.sig_sheet_kb.emit(items)
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_kb(self, items: list):
+        """공유 업무자료 도착 → 캐시에 저장하고 검색 화면을 갱신."""
+        try:
+            if items != kb.load_shared():
+                kb.save_shared(items)
+                if hasattr(self, "tab_kb"):
+                    self.tab_kb.reload()
+        except Exception:
+            pass
+
+    def _push_kb_shared(self, items: list):
+        """관리자가 고친 공통 자료를 시트로 올린다(백그라운드)."""
+        if not self.gauth.is_connected():
+            self.sig_toast.emit(config.APP_NAME,
+                                "구글에 연결되지 않아 이 PC 에만 저장했습니다.")
+            return
+
+        def worker():
+            try:
+                sheets.write_kb(self.gauth, config.RATES_SHEET_ID, items)
+                self.sig_toast.emit(config.APP_NAME, "공통 업무자료를 올렸습니다.")
+            except Exception as e:
+                self.sig_toast.emit(config.APP_NAME, "업무자료 올리기 실패: " + str(e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def open_kb_search(self):
+        """전역 단축키 → 빠른검색 창."""
+        if getattr(self, "_kb_quick", None) is None:
+            self._kb_quick = QuickSearch(self)
+        self._kb_quick.popup()
 
     def _on_sheet_docs(self, docs: dict):
         """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채우고 표를 다시 그린다.
@@ -1311,6 +1387,74 @@ class MainWindow(QMainWindow):
             return
         DocViewer.show_for(cr.get("customer"), url, self.gauth, self)
 
+    def _ensure_uid(self, cr) -> str:
+        """고객의 불변 ID. 없으면 그 고객에게만 발급하고 시트에도 적는다.
+
+        v1.1.25 이전에 등록된 고객은 ID 가 없다. 전체를 한꺼번에 채우면 수백 셀
+        쓰기가 되고 중간에 실패하면 절반만 적히므로, 실제로 필요할 때 한 명씩 준다.
+        """
+        uid = (cr.uid or "").strip()
+        if uid:
+            return uid
+        uid = sheets.new_uid()
+        cr.uid = uid
+        sid = self.settings.sheet_id.strip()
+        sname = self.settings.sheet_name.strip()
+        hdr = self._sheet_header_row
+
+        def worker():
+            try:
+                if hdr:
+                    sheets.ensure_uid_column(self.gauth, sid, sname, hdr)
+                sheets.write_uid(self.gauth, sid, sname, cr.row, uid)
+            except Exception as e:
+                # 조용히 넘기면 안 된다. ID 가 시트에 안 남으면 다음에 열 때
+                # 새 ID 가 발급돼 지금 적은 메모·서류가 안 보이게 된다.
+                self.sig_toast.emit(
+                    config.APP_NAME,
+                    "고객ID를 시트에 기록하지 못했습니다.\n"
+                    "지금 남긴 메모·서류가 다음에 안 보일 수 있습니다.\n"
+                    + str(e).splitlines()[0][:80])
+        threading.Thread(target=worker, daemon=True).start()
+        return uid
+
+    def on_customer_docs(self):
+        """선택한 고객의 심사서류 체크리스트."""
+        if not self._sheet_ready():
+            return
+        cr = self._sel_customer()
+        if cr is None:
+            QMessageBox.information(self, config.APP_NAME, "서류를 볼 고객을 선택하세요.")
+            return
+        if cr in self._sheet_pending:
+            self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 여세요.")
+            return
+        self._open_docs_for(cr, self)
+
+    def _open_docs_for(self, cr, parent):
+        """서류 창을 띄우고 바뀐 내용을 저장한다(고객관리·이력 창에서 함께 쓴다)."""
+        uid = self._ensure_uid(cr)
+        before = customer_docs.record(self._docs, uid)
+        after = customer_docs.CustomerDocsDialog.run(
+            cr, before, kb.doc_templates(kb.load_all()), parent)
+        if after != before:
+            if after.get("items"):
+                self._docs[uid] = after
+            else:
+                self._docs.pop(uid, None)
+            self._save_docs()
+            self.refresh_customers()      # 표의 서류 진행도 표시를 갱신
+
+    def _load_docs(self) -> dict:
+        return customer_docs.load()
+
+    def _save_docs(self):
+        try:
+            customer_docs.save(self._docs)
+        except Exception:
+            pass
+        self._touch_sync()
+
     def on_customer_history(self):
         """선택한 고객의 이력 타임라인."""
         if not self._sheet_ready():
@@ -1323,34 +1467,11 @@ class MainWindow(QMainWindow):
             self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 여세요.")
             return
 
-        uid = (cr.uid or "").strip()
-        if not uid:
-            # v1.1.25 이전에 등록된 고객은 ID 가 없다. 이력을 처음 열 때 그 고객에게만
-            # 발급한다(전체 일괄 쓰기는 수백 셀 쓰기가 되고 중간에 실패하면 절반만 적힌다).
-            uid = sheets.new_uid()
-            cr.uid = uid
-            sid = self.settings.sheet_id.strip()
-            sname = self.settings.sheet_name.strip()
-            hdr = self._sheet_header_row
-
-            def worker():
-                try:
-                    if hdr:
-                        sheets.ensure_uid_column(self.gauth, sid, sname, hdr)
-                    sheets.write_uid(self.gauth, sid, sname, cr.row, uid)
-                except Exception as e:
-                    # 조용히 넘기면 안 된다. ID 가 시트에 안 남으면 다음에 열 때
-                    # 새 ID 가 발급돼 지금 적은 메모를 찾지 못하게 된다.
-                    self.sig_toast.emit(
-                        config.APP_NAME,
-                        "고객ID를 시트에 기록하지 못했습니다.\n"
-                        "지금 남긴 메모가 다음에 안 보일 수 있습니다.\n"
-                        + str(e).splitlines()[0][:80])
-            threading.Thread(target=worker, daemon=True).start()
-
+        uid = self._ensure_uid(cr)
         notes = self._notes.get(uid, [])
         new_notes = CustomerHistoryDialog.run(
-            cr, notes, self._ment_key(cr) in self._ment_copied, self)
+            cr, notes, self._ment_key(cr) in self._ment_copied, self,
+            on_docs=lambda dlg: self._open_docs_for(cr, dlg))
         if new_notes != notes:
             if new_notes:
                 self._notes[uid] = new_notes
@@ -1503,11 +1624,12 @@ class MainWindow(QMainWindow):
                       or ("dark" if self.settings.dark_mode else "light"))
         prev_sheet = (self.settings.sheet_id.strip(), self.settings.sheet_name.strip())
         dlg = SettingsDialog(self.gauth, self.settings, self,
-                             account=getattr(self, 'account_email', ''))
+                             account=getattr(self, 'account_email', ''),
+                             on_backup=self.open_backup)
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
             self._save_settings()
-            self.hotkeys.apply(self.settings)
+            self._apply_hotkeys()
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
             now_theme = (getattr(self.settings, "theme", "")
                          or ("dark" if self.settings.dark_mode else "light"))
@@ -2373,6 +2495,28 @@ class MainWindow(QMainWindow):
         out.sort(key=lambda x: x[1])
         return out
 
+    def _docs_missing_customers(self):
+        """아직 안 받은 심사서류가 남아 있는 고객.
+
+        반환: [(행, 미제출 서류 이름들, 전체 개수)] — 많이 남은 순.
+
+        진행 중인 계약(계약·발주 등)만 본다. 출고까지 끝났거나 취소된 건은
+        이제 받을 서류가 없으므로 띄우면 소음이 된다.
+        """
+        out = []
+        for cr in getattr(self, "sheet_rows", []) or []:
+            uid = (getattr(cr, "uid", "") or "").strip()
+            if not uid:
+                continue                      # 서류를 한 번도 안 연 고객
+            if not customer_docs.is_open_status(cr.get("status")):
+                continue
+            rec = customer_docs.record(self._docs, uid)
+            left = customer_docs.missing(rec)
+            if left:
+                out.append((cr, left, len(rec.get("items") or [])))
+        out.sort(key=lambda x: len(x[1]), reverse=True)
+        return out
+
     def _expiring_customers(self, today):
         """만기가 다가온(또는 막 지난) 재계약 대상.
 
@@ -2448,11 +2592,27 @@ class MainWindow(QMainWindow):
                 items.append({"lead": tag, "text": cr.get("customer"),
                               "sub": f"{d:%Y-%m-%d}"})
             more = len(exp) - 12
-            secs.append({"icon": "🔔", "title": "만기 재계약", "color": "orange",
+            secs.append({"icon": "🔔", "title": "만기 재계약", "color": "violet",
                          "items": items, "count": len(exp),
                          "more": more if more > 0 else 0,
                          "hint": "[고객관리] 탭에서 [이력] 로 상담 내역을 확인하고 "
                                  "재계약을 준비하세요."})
+
+        # ---- 서류 미비 (진행 중인 계약에 아직 안 받은 서류가 있음) ----
+        short = self._docs_missing_customers()
+        if short:
+            items = []
+            for cr, left, total in short[:12]:
+                items.append({"lead": f"{total - len(left)}/{total}",
+                              "text": cr.get("customer"),
+                              "sub": " · ".join(left[:3])
+                                     + (f" 외 {len(left) - 3}" if len(left) > 3 else "")})
+            more = len(short) - 12
+            secs.append({"icon": "📄", "title": "서류 미비", "color": "orange",
+                         "items": items, "count": len(short),
+                         "more": more if more > 0 else 0,
+                         "hint": "[고객관리] 탭에서 [서류] 를 눌러 미제출 목록을 "
+                                 "복사해 고객에게 보내세요."})
 
         # ---- 이번주 요약 (오늘~+7일) ----
         week_end = today + timedelta(days=7)
@@ -2474,7 +2634,7 @@ class MainWindow(QMainWindow):
         for d, tm, title in wk_todo[:12]:
             items.append({"lead": self._d_label(d), "text": title,
                           "sub": tm, "kind": "할일"})
-        secs.append({"icon": "🗓", "title": "이번주 요약", "color": "violet",
+        secs.append({"icon": "🗓", "title": "이번주 요약", "color": "gray",
                      "items": items, "count": len(wk_cal) + len(wk_todo),
                      "note": f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건",
                      "more": max(0, len(wk_cal) - 12) + max(0, len(wk_todo) - 12),
@@ -2581,15 +2741,11 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, config.APP_NAME, "백업 실패:\n" + str(e))
 
     def _do_backup(self, manual: bool):
-        bk_dir = config.data_dir() / "backup"
-        bk_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        for f in (self.todo_file, self.alarm_file, self.taskalarm_file):
-            if f.exists():
-                try:
-                    (bk_dir / f"{stamp}_{f.name}").write_bytes(f.read_bytes())
-                except Exception:
-                    pass
+        # 담는 파일은 동기화 대상(sync._FILES)과 같은 목록을 쓴다.
+        # 예전엔 할일·알람 3개만 담아서, 설정·고객메모·멘트문구는 백업에 없었다.
+        # 되돌릴 수 없는 데이터가 생기지 않도록 한 목록만 본다.
+        bk_dir = backup_dialog.backup_dir()
+        backup_dialog.make_backup()
         # 30일 지난 백업 정리
         cutoff = datetime.now() - timedelta(days=30)
         for old in bk_dir.glob("*.json"):
@@ -2601,6 +2757,16 @@ class MainWindow(QMainWindow):
         self.last_backup = date.today()
         if manual:
             self.sig_toast.emit(config.APP_NAME, f"백업 완료: {bk_dir}")
+
+    def open_backup(self):
+        """백업/복원 창. 되돌린 뒤에는 화면과 동기화를 함께 맞춘다."""
+        def after_restore():
+            self.reload_data()          # 파일 → 모델 → 화면
+            self.refresh_calendar()
+            self.refresh_todo()
+            self.refresh_alarm()
+            self._touch_sync()          # 되돌린 상태를 다른 PC 에도 전파
+        backup_dialog.BackupDialog(self, on_restored=after_restore).exec()
 
     # ------------------------------------------------------------ 트레이/종료
     def _toast(self, title: str, text: str):

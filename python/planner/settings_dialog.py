@@ -28,6 +28,14 @@ from .models import AppSettings
 TERMS_FILE = "terms_presets.json"
 
 
+def _hline() -> QFrame:
+    """설정 묶음 안을 가르는 얇은 선."""
+    f = QFrame()
+    f.setFrameShape(QFrame.HLine)
+    f.setFrameShadow(QFrame.Sunken)
+    return f
+
+
 def load_terms_presets() -> dict:
     """직접 적어 둔 금융사별 계약조건."""
     try:
@@ -52,12 +60,15 @@ def save_terms_presets(presets: dict) -> None:
 class SettingsDialog(QDialog):
     _sig_login = Signal(bool, str)
 
-    def __init__(self, gauth, settings: AppSettings, parent=None, account: str = ""):
+    def __init__(self, gauth, settings: AppSettings, parent=None, account: str = "",
+                 on_backup=None):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
         self.setMinimumWidth(560)
         self.gauth = gauth
         self.settings = settings
+        # 백업/복원은 파일을 되돌린 뒤 화면까지 다시 그려야 해서 메인 창이 맡는다
+        self._on_backup = on_backup
         self.account = (account or "").strip().lower()
         self.tasks_changed = False  # 로그인/로그아웃 발생 여부
 
@@ -221,7 +232,41 @@ class SettingsDialog(QDialog):
         krow.addWidget(self.cmb_key)
         krow.addStretch()
         hl.addLayout(krow)
+
+        # 업무자료 빠른검색 — 다른 프로그램을 쓰는 중에도 검색창을 띄운다
+        hl.addWidget(_hline())
+        self.chk_kbhot = QCheckBox("업무자료 빠른검색 단축키 사용")
+        hl.addWidget(self.chk_kbhot)
+        krow2 = QHBoxLayout()
+        self.chk_kb_ctrl = QCheckBox("Ctrl")
+        self.chk_kb_alt = QCheckBox("Alt")
+        self.chk_kb_shift = QCheckBox("Shift")
+        self.cmb_kb_key = QComboBox()
+        searchcombo.install(self.cmb_kb_key)
+        self.cmb_kb_key.addItems([chr(c) for c in range(ord("A"), ord("Z") + 1)]
+                                 + [f"F{i}" for i in range(1, 13)])
+        krow2.addWidget(self.chk_kb_ctrl)
+        krow2.addWidget(self.chk_kb_alt)
+        krow2.addWidget(self.chk_kb_shift)
+        krow2.addWidget(QLabel("+"))
+        krow2.addWidget(self.cmb_kb_key)
+        krow2.addStretch()
+        hl.addLayout(krow2)
+        hl.addWidget(QLabel(
+            "상담 통화 중에도 이 키를 누르면 전자약정·심사서류 검색창이 바로 뜹니다.\n"
+            "다른 프로그램이 같은 조합을 이미 쓰고 있으면 등록되지 않습니다 — 그때는 키를 바꿔 보세요."))
         root.addWidget(gb_h)
+
+        # ---- 백업 / 복원 ----
+        gb_b = QGroupBox("백업 / 복원")
+        bl = QVBoxLayout(gb_b)
+        btn_backup = QPushButton("백업 / 복원 창 열기…")
+        btn_backup.clicked.connect(self._open_backup)
+        bl.addWidget(btn_backup)
+        bl.addWidget(QLabel(
+            "할일·알람·설정·고객메모·멘트문구를 하루 한 번 자동으로 백업합니다.\n"
+            "잘못 지웠거나 덮어썼을 때 시점을 골라 되돌릴 수 있습니다."))
+        root.addWidget(gb_b)
 
         root.addStretch()
 
@@ -268,6 +313,20 @@ class SettingsDialog(QDialog):
         self.chk_shift.setChecked(s.hot_shift)
         idx = self.cmb_key.findText((s.hot_key or "A").upper())
         self.cmb_key.setCurrentIndex(idx if idx >= 0 else 0)
+        self.chk_kbhot.setChecked(getattr(s, "kb_hot_on", True))
+        self.chk_kb_ctrl.setChecked(getattr(s, "kb_hot_ctrl", True))
+        self.chk_kb_alt.setChecked(getattr(s, "kb_hot_alt", True))
+        self.chk_kb_shift.setChecked(getattr(s, "kb_hot_shift", False))
+        idx = self.cmb_kb_key.findText((getattr(s, "kb_hot_key", "F") or "F").upper())
+        self.cmb_kb_key.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _open_backup(self):
+        if callable(self._on_backup):
+            self._on_backup()
+            return
+        # 메인 창 없이 띄운 경우(테스트 등) — 되돌린 뒤 화면 갱신은 없다
+        from .backup_dialog import BackupDialog
+        BackupDialog(self).exec()
 
     def _open_rates(self):
         from .rate_dialog import RateDialog
@@ -308,6 +367,11 @@ class SettingsDialog(QDialog):
         s.hot_alt = self.chk_alt.isChecked()
         s.hot_shift = self.chk_shift.isChecked()
         s.hot_key = self.cmb_key.currentText()
+        s.kb_hot_on = self.chk_kbhot.isChecked()
+        s.kb_hot_ctrl = self.chk_kb_ctrl.isChecked()
+        s.kb_hot_alt = self.chk_kb_alt.isChecked()
+        s.kb_hot_shift = self.chk_kb_shift.isChecked()
+        s.kb_hot_key = self.cmb_kb_key.currentText()
         self.accept()
 
     # ---- 구글 로그인 ----

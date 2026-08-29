@@ -250,6 +250,12 @@ class AppSettings:
     hot_alt: bool = True
     hot_shift: bool = False
     hot_key: str = "A"
+    # 업무자료 빠른검색 단축키 — 다른 프로그램을 쓰는 중에도 검색창을 띄운다
+    kb_hot_on: bool = True
+    kb_hot_ctrl: bool = True
+    kb_hot_alt: bool = True
+    kb_hot_shift: bool = False
+    kb_hot_key: str = "F"
     # 화면 테마
     dark_mode: bool = False
     theme: str = ""          # 빈 값이면 dark_mode 로 정한다(구버전 호환)
@@ -280,6 +286,11 @@ class AppSettings:
             "hotAlt": self.hot_alt,
             "hotShift": self.hot_shift,
             "hotKey": self.hot_key,
+            "kbHotOn": self.kb_hot_on,
+            "kbHotCtrl": self.kb_hot_ctrl,
+            "kbHotAlt": self.kb_hot_alt,
+            "kbHotShift": self.kb_hot_shift,
+            "kbHotKey": self.kb_hot_key,
             "darkMode": self.dark_mode,
             "theme": self.theme,
             "closeToTray": self.close_to_tray,
@@ -315,6 +326,13 @@ class AppSettings:
         s.hot_alt = bool(o.get("hotAlt", True))
         s.hot_shift = bool(o.get("hotShift", False))
         s.hot_key = o.get("hotKey", "A")
+        # 구버전 설정 파일에는 kbHot* 키가 없다 → 기본값(Ctrl+Alt+F, 켜짐).
+        # 이 파일은 Drive 로 다른 PC 에도 전파되므로 없는 키에 터지면 안 된다.
+        s.kb_hot_on = bool(o.get("kbHotOn", True))
+        s.kb_hot_ctrl = bool(o.get("kbHotCtrl", True))
+        s.kb_hot_alt = bool(o.get("kbHotAlt", True))
+        s.kb_hot_shift = bool(o.get("kbHotShift", False))
+        s.kb_hot_key = o.get("kbHotKey", "F") or "F"
         s.dark_mode = bool(o.get("darkMode", False))
         # 구버전 설정 파일엔 theme 키가 없다 → 기존 다크 여부로 정한다
         s.theme = str(o.get("theme", "") or "").strip().lower()

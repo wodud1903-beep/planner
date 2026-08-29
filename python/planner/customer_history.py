@@ -59,13 +59,15 @@ class CustomerHistoryDialog(QDialog):
         "만기": "#E08A1E", "메모": None,       # 메모는 기본색
     }
 
-    def __init__(self, cr, notes: list, ment_sent: bool, parent=None):
+    def __init__(self, cr, notes: list, ment_sent: bool, parent=None,
+                 on_docs=None):
         super().__init__(parent)
         self.setWindowTitle(f"고객 이력 · {cr.get('customer')}")
         self.resize(560, 620)
         self._cr = cr
         self._notes = list(notes or [])
         self._ment_sent = ment_sent
+        self._on_docs = on_docs
 
         root = QVBoxLayout(self)
 
@@ -94,9 +96,14 @@ class CustomerHistoryDialog(QDialog):
         row2 = QHBoxLayout()
         btn_del = QPushButton("선택한 메모 삭제")
         btn_del.clicked.connect(self._del)
+        row2.addWidget(btn_del)
+        if callable(self._on_docs):
+            # 상담 내역을 보다가 곧바로 서류 진행을 확인하는 흐름이 잦다
+            btn_docs = QPushButton("심사서류")
+            btn_docs.clicked.connect(lambda: self._on_docs(self))
+            row2.addWidget(btn_docs)
         btn_close = QPushButton("닫기")
         btn_close.clicked.connect(self.accept)
-        row2.addWidget(btn_del)
         row2.addStretch()
         row2.addWidget(btn_close)
         root.addLayout(row2)
@@ -160,8 +167,8 @@ class CustomerHistoryDialog(QDialog):
         return list(self._notes)
 
     @classmethod
-    def run(cls, cr, notes: list, ment_sent: bool, parent=None):
+    def run(cls, cr, notes: list, ment_sent: bool, parent=None, on_docs=None):
         """반환: 바뀐 메모 목록 (창을 닫으면 항상 반영)."""
-        d = cls(cr, notes, ment_sent, parent)
+        d = cls(cr, notes, ment_sent, parent, on_docs)
         d.exec()
         return d.notes()

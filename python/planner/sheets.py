@@ -1006,3 +1006,83 @@ def write_rates(auth: GoogleAuth, sheet_id: str, rates: dict,
                      params={"valueInputOption": "RAW"},
                      json={"values": values})
     _check(r)
+
+
+# ---------------------------------------------------------------------------
+# 업무자료 공유 — 수당율과 같은 전용 스프레드시트의 '업무자료' 탭
+#
+# 전자약정 절차·심사서류 목록은 회사가 한 곳에서 관리하는 지식이다.
+# 수당율과 똑같이 전용 스프레드시트 한 곳만 바라보게 해서, 어느 계정으로
+# 로그인하든 같은 최신본을 본다. (편집은 관리자 계정에서만)
+# ---------------------------------------------------------------------------
+KB_TAB = "업무자료"
+_KB_HEADER = ["카테고리", "금융사", "제목", "태그", "본문", "체크리스트(줄바꿈)"]
+KB_COLS = "A1:F"
+
+
+def read_kb(auth: GoogleAuth, sheet_id: str, tab: str = KB_TAB):
+    """공유 업무자료를 읽는다. 탭이 없거나 비었으면 None.
+
+    반환: [{"category","finance","title","tags","body","checklist":[...]}]
+    """
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(tab, KB_COLS))
+    r = requests.get(url, headers=_headers(auth), timeout=20)
+    if r.status_code != 200:
+        return None
+    rows = (r.json() or {}).get("values", [])
+    out = []
+    for row in rows:
+        vals = [str(x).strip() for x in row] + [""] * 6
+        category, finance, title, tags, body, checks = vals[:6]
+        if not title or title == "제목":       # 빈 줄·머리글
+            continue
+        out.append({
+            "category": category,
+            "finance": finance,
+            "title": title,
+            "tags": tags,
+            "body": body,
+            "checklist": [c.strip() for c in checks.splitlines() if c.strip()],
+        })
+    return out or None
+
+
+def write_kb(auth: GoogleAuth, sheet_id: str, items: list,
+             tab: str = KB_TAB) -> None:
+    """공유 업무자료를 덮어쓴다. 탭이 없으면 만든다."""
+    meta = requests.get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
+                        headers=_headers(auth), timeout=30,
+                        params={"fields": "sheets(properties(sheetId,title))"})
+    _check(meta)
+    titles = [(sh.get("properties", {}) or {}).get("title")
+              for sh in (meta.json() or {}).get("sheets", [])]
+    if tab not in titles:
+        r = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+                          headers=_headers(auth), timeout=30,
+                          json={"requests": [{"addSheet": {
+                              "properties": {"title": tab}}}]})
+        _check(r)
+
+    # 지운 자료까지 반영되도록 비우고 새로 쓴다
+    rc = requests.post(
+        config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
+        + "/values/" + _rng(tab, "A1:F10000") + ":clear",
+        headers=_headers(auth), timeout=30, json={})
+    _check(rc)
+
+    values = [list(_KB_HEADER)]
+    for it in (items or []):
+        if not (it.get("title") or "").strip():
+            continue
+        values.append([
+            it.get("category", ""), it.get("finance", ""), it.get("title", ""),
+            it.get("tags", ""), it.get("body", ""),
+            "\n".join(it.get("checklist") or []),
+        ])
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(tab, f"A1:F{len(values)}"))
+    r = requests.put(url, headers=_headers(auth), timeout=30,
+                     params={"valueInputOption": "RAW"},
+                     json={"values": values})
+    _check(r)
