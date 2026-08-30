@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import config, searchcombo, sheets, theme
+from . import config, searchcombo, sheets, theme, weekly
 from .models import AppSettings
 
 
@@ -157,6 +157,21 @@ class SettingsDialog(QDialog):
         sl.addRow(QLabel(
             "계약조건의 '60개월' 같은 표기로 만기일을 계산해\n"
             "시작 브리핑에 재계약 대상 고객을 알려줍니다."))
+
+        wrow = QHBoxLayout()
+        self.chk_weekly = QCheckBox("사용")
+        self.cmb_weekly_day = QComboBox()
+        searchcombo.install(self.cmb_weekly_day)
+        for i, name in enumerate(weekly.WEEKDAY_KO):
+            self.cmb_weekly_day.addItem(f"{name}요일", i)
+        wrow.addWidget(self.chk_weekly)
+        wrow.addWidget(self.cmb_weekly_day)
+        wrow.addWidget(QLabel("부터 앱을 켤 때 한 번"))
+        wrow.addStretch()
+        sl.addRow("주간 요약 자동 표시", wrow)
+        sl.addRow(QLabel(
+            "그 주의 계약·출고·수수료와 다음 주 예정을 한 장으로 보여 줍니다.\n"
+            "[고객관리] 탭의 [주간 요약] 버튼으로 언제든 다시 볼 수 있습니다."))
 
         # 수당율은 회사 공통 기준값이라 관리자 계정에서만 고칠 수 있다.
         btn_rates = QPushButton("차종별 수당율 관리…")
@@ -311,6 +326,9 @@ class SettingsDialog(QDialog):
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
         self.sp_expiry.setValue(s.expiry_months)
+        self.chk_weekly.setChecked(s.weekly_on)
+        i = self.cmb_weekly_day.findData(int(s.weekly_day or 0))
+        self.cmb_weekly_day.setCurrentIndex(i if i >= 0 else 4)
         self.txt_terms.setPlainText(sheets.format_terms_presets(load_terms_presets()))
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
@@ -373,6 +391,9 @@ class SettingsDialog(QDialog):
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.expiry_months = self.sp_expiry.value()
+        s.weekly_on = self.chk_weekly.isChecked()
+        day = self.cmb_weekly_day.currentData()
+        s.weekly_day = int(day) if day is not None else 4
         save_terms_presets(sheets.parse_terms_presets(self.txt_terms.toPlainText()))
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)

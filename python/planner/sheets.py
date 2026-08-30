@@ -62,6 +62,8 @@ CHOICE_FIELDS = ["finance", "channel", "status", "kind"]
 # 날짜 열 (시트 서식: 2026. 8. 14)
 DATE_FIELDS = ["contract_date", "deliver_date"]
 
+COL_CENTER = 15      # P 고객센터 번호 (읽기 전용, 시트가 금융사로 계산)
+COL_ACCIDENT = 16    # Q 사고접수 연락처 (읽기 전용)
 COL_MENT = 17        # R 고객안내멘트 (읽기 전용, 복사용)
 COL_DOC = 18         # S 견적서/계약서 (이미지)
 
@@ -194,6 +196,9 @@ class CustomerRow:
     seq: str = ""            # 순번 (자동)
     total: str = ""          # 합계 (자동)
     ment: str = ""           # R 고객안내멘트 (자동, 복사용)
+    # P·Q 는 시트가 금융사에 맞춰 계산해 두는 연락처다. 읽기만 한다.
+    center: str = ""         # P 고객센터 번호
+    accident: str = ""       # Q 사고접수 연락처
     uid: str = ""            # U 고객ID (앱 전용 숨김 열 — 메모/이력을 붙들어 두는 키)
     values: dict = field(default_factory=dict)   # 직접기재 필드키 → 값
 
@@ -329,8 +334,11 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
             continue
         def cell(idx: int) -> str:
             return (row[idx] if len(row) > idx else "") or ""
+        # P·Q 는 이미 받아 온 A~Q 안에 들어 있다 — 요청을 더 보내지 않는다
         cr = CustomerRow(row=i + 1, seq=cell(0).strip(), total=cell(7).strip(),
-                         ment=cell(COL_MENT).rstrip())
+                         ment=cell(COL_MENT).rstrip(),
+                         center=cell(COL_CENTER).strip(),
+                         accident=cell(COL_ACCIDENT).strip())
         for ci, key, _label in FIELDS:
             cr.values[key] = cell(ci).strip()
         if not cr.get("customer"):

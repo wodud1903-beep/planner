@@ -266,6 +266,10 @@ class AppSettings:
     cal_reminder_min: int = 30
     # 만기 재계약 알림: 만기 몇 개월 전부터 브리핑에 띄울지 (0 = 끔)
     expiry_months: int = 3
+    # 주간 요약: 정한 요일에 앱을 켜면 한 번 띄운다 (0=월 … 6=일)
+    weekly_on: bool = True
+    weekly_day: int = 4                  # 금요일
+    weekly_shown: str = ""               # 마지막으로 띄운 주(월요일 날짜) — 중복 방지
     # 구글 시트 고객관리 연동
     sheet_on: bool = False
     sheet_id: str = config.DEF_SHEET_ID
@@ -297,6 +301,9 @@ class AppSettings:
             "calReminderOn": self.cal_reminder_on,
             "calReminderMin": self.cal_reminder_min,
             "expiryMonths": self.expiry_months,
+            "weeklyOn": self.weekly_on,
+            "weeklyDay": self.weekly_day,
+            "weeklyShown": self.weekly_shown,
             "sheetOn": self.sheet_on,
             "sheetId": self.sheet_id,
             "sheetName": self.sheet_name,
@@ -350,6 +357,13 @@ class AppSettings:
             s.expiry_months = max(0, min(24, int(o.get("expiryMonths", 3))))
         except Exception:
             s.expiry_months = 3
+        # 주간 요약도 구버전 파일엔 없는 키다 → 기본 금요일, 켜짐
+        s.weekly_on = bool(o.get("weeklyOn", True))
+        try:
+            s.weekly_day = max(0, min(6, int(o.get("weeklyDay", 4))))
+        except Exception:
+            s.weekly_day = 4
+        s.weekly_shown = str(o.get("weeklyShown", "") or "")
         s.sheet_on = bool(o.get("sheetOn", False))
         s.sheet_id = o.get("sheetId", config.DEF_SHEET_ID) or config.DEF_SHEET_ID
         s.sheet_name = o.get("sheetName", config.DEF_SHEET_NAME) or config.DEF_SHEET_NAME

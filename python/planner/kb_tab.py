@@ -293,6 +293,16 @@ class KbView(QWidget):
         self.ed_find.setFocus()
         self.ed_find.selectAll()
 
+    def search_for(self, query: str) -> None:
+        """다른 화면에서 넘어올 때 — 그 말로 찾아 첫 건을 펼친다.
+
+        분류 거르개는 '전체' 로 되돌린다. 남아 있으면 찾는 자료가 그 분류가
+        아닐 때 '0건' 만 뜨고 왜 그런지 알 수 없다.
+        """
+        self.cmb_cat.setCurrentIndex(0)
+        self.ed_find.setText(str(query or "").strip())
+        self.focus_search()
+
     # ------------------------------------------------------------ 테마
     def apply_theme(self) -> None:
         self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
@@ -338,6 +348,9 @@ class KbTab(QWidget):
 
     def focus_search(self) -> None:
         self.view.focus_search()
+
+    def search_for(self, query: str) -> None:
+        self.view.search_for(query)
 
     def _edit(self) -> None:
         admin = config.is_rates_admin(self.account)

@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, backup_dialog, config, customer_docs, followup, google_client,
-    hotkey, kb, searchcombo, sheets, sync, theme, updater,
+    alarm_window, backup_dialog, config, contacts, customer_docs, followup,
+    google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater, weekly,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -303,6 +303,44 @@ class MainWindow(QMainWindow):
             return
         self._startup_brief_pending = False
         self.show_briefing(manual=False)
+        # 브리핑을 닫은 뒤에 주간 요약 차례 — 두 창이 겹쳐 뜨지 않게 한 박자 뒤로
+        QTimer.singleShot(400, self._maybe_weekly)
+
+    # ------------------------------------------------------------ 주간 요약
+    def _maybe_weekly(self):
+        """정한 요일에 딱 한 번 주간 요약을 띄운다.
+
+        '이번 주에 이미 띄웠는가' 는 주(월요일 날짜)로 기억한다. 날짜로 기억하면
+        같은 금요일에 앱을 두 번 켤 때 두 번 뜨고, 금요일에 쉬면 그 주는 영영
+        건너뛴다. 그래서 **정한 요일 이후**면 그 주 것을 한 번 보여 준다.
+        """
+        s = self.settings
+        if not s.weekly_on or not s.sheet_on:
+            return
+        today = date.today()
+        if today.weekday() < int(s.weekly_day or 0):
+            return                      # 아직 그 요일 전이다
+        key = weekly.week_key(today)
+        if s.weekly_shown == key:
+            return                      # 이번 주 것은 이미 봤다
+        if not self.sheet_rows:
+            return                      # 시트가 아직 안 왔다 — 다음 기회에
+        s.weekly_shown = key
+        s.save(self.cfg_file)
+        self.show_weekly()
+
+    def show_weekly(self):
+        """주간 요약 창을 연다 (트레이 메뉴·버튼에서도 부른다)."""
+        if not self.sheet_rows:
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "주간 요약은 고객관리 시트를 읽어 만듭니다.\n"
+                "[고객관리] 탭에서 [불러오기] 를 먼저 눌러 주세요.")
+            return
+        from .weekly_dialog import WeeklyDialog
+        WeeklyDialog.show_for(self.sheet_rows, date.today(),
+                              int(getattr(self.settings, "expiry_months", 3) or 0),
+                              self)
 
     def _on_hotkey(self):
         self.show_window()
@@ -755,6 +793,10 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
+        self.btn_weekly = QPushButton("주간 요약")
+        self.btn_weekly.setToolTip("이번 주 계약·출고·수수료와 다음 주 예정을 한 장으로")
+        self.btn_weekly.clicked.connect(self.show_weekly)
+        row.addWidget(self.btn_weekly)
         row.addStretch()
         row.addWidget(QLabel("검색:"))
         self.ed_cust_find = QLineEdit()
@@ -784,6 +826,8 @@ class MainWindow(QMainWindow):
             [44, 196, 96, 148, 92, 92, 70, 104, 76, 78],
             stretch_last=False)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
+        self.tbl_cust.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tbl_cust.customContextMenuRequested.connect(self._cust_context_menu)
         # 표가 실제 크기를 갖는 시점은 탭을 처음 열 때다. 그 전에 계산한 폭은
         # 화면과 안 맞아 오른쪽에 흰 칸이 남는다 → 크기가 바뀔 때마다 다시 맞춘다.
         self.tbl_cust.viewport().installEventFilter(self)
@@ -900,6 +944,73 @@ class MainWindow(QMainWindow):
         if index.column() in (self.COL_MENT_BTN, self.COL_DOC_BTN):
             return
         self.on_customer_edit()
+
+    # ---- 우클릭 메뉴 (연락처 · 자료 · 편집) ----
+    def _cust_context_menu(self, pos):
+        idx = self.tbl_cust.indexAt(pos)
+        if idx.isValid():
+            self.tbl_cust.selectRow(idx.row())
+        cr = self._sel_customer()
+        menu = QMenu(self)
+
+        if cr is not None:
+            fin = cr.get("finance").strip()
+            nums, cands = contacts.for_customer(kb.load_all(), cr)
+            if nums:
+                head = menu.addAction(f"📞 {fin or '금융사'} 연락처")
+                head.setEnabled(False)
+                for label, value in nums:
+                    a = menu.addAction(f"     {label}   {value}")
+                    a.triggered.connect(
+                        lambda _c=False, lb=label, v=value: self._copy_phone(lb, v))
+            elif cands:
+                # 어느 금융사인지 확실하지 않다 — 고르게 한다.
+                # 임의로 하나를 고르면 다른 캐피탈로 전화를 걸게 된다.
+                sub = menu.addMenu(f"📞 연락처 — '{fin}' 후보 {len(cands)}곳")
+                for it in cands[:8]:
+                    name = it.get("finance") or it.get("title")
+                    m2 = sub.addMenu(name)
+                    for label, value in contacts.phones_of(it):
+                        a = m2.addAction(f"{label}   {value}")
+                        a.triggered.connect(
+                            lambda _c=False, lb=f"{name} {label}", v=value:
+                            self._copy_phone(lb, v))
+            else:
+                a = menu.addAction("📞 연락처 없음 (자료검색에 금융사 자료를 넣어 두세요)")
+                a.setEnabled(False)
+            menu.addSeparator()
+            if fin:
+                a = menu.addAction(f"🔎 자료검색에서 '{fin}' 열기")
+                a.triggered.connect(lambda _c=False, f=fin: self.open_kb_for(f))
+            a = menu.addAction("🚑 보험사 사고접수 연락처")
+            a.triggered.connect(lambda: self.open_kb_for("보험사 사고접수"))
+            menu.addSeparator()
+
+        for text, slot in [("수정", self.on_customer_edit),
+                           ("이력", self.on_customer_history),
+                           ("서류", self.on_customer_docs),
+                           ("삭제", self.on_customer_del)]:
+            menu.addAction(text).triggered.connect(slot)
+        menu.exec(self.tbl_cust.viewport().mapToGlobal(pos))
+
+    def _copy_phone(self, label: str, value: str) -> None:
+        QGuiApplication.clipboard().setText(value)
+        self.sig_toast.emit(config.APP_NAME, f"{label} {value} 복사됨")
+
+    def open_kb_for(self, query: str) -> None:
+        """자료검색 **탭** 을 그 말로 열어 준다 (탭이 없으면 조용히 넘어간다).
+
+        이름을 open_kb_search 로 짓지 않는다 — 그건 전역 단축키가 부르는
+        빠른검색 창이고, 인자도 없다. 같은 이름을 두면 나중 정의가 앞의 것을
+        조용히 덮어써 단축키가 죽는다(v1.2.5 에서 겪었다).
+        """
+        tab = getattr(self, "tab_kb", None)
+        if tab is None:
+            return
+        i = self.tabs.indexOf(tab)
+        if i >= 0:
+            self.tabs.setCurrentIndex(i)
+        tab.search_for(query)
 
     def _sheet_ready(self, quiet: bool = False) -> bool:
         if not self.settings.sheet_on:
@@ -1640,6 +1751,7 @@ class MainWindow(QMainWindow):
             ("창 열기", self.show_window),
             ("캘린더 열기", self.open_calendar),
             ("오늘 브리핑", lambda: self.show_briefing(manual=True)),
+            ("주간 요약", self.show_weekly),
             ("지금 백업", lambda: self._backup(manual=True)),
             ("업데이트 확인", lambda: self.check_update(manual=True)),
             (None, None),
