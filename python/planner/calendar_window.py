@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import threading
+import webbrowser
 from datetime import date, datetime, time, timedelta
 
 from PySide6.QtCore import QDate, QRect, Qt, QTime, QTimer, Signal
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSizePolicy, QTimeEdit, QVBoxLayout, QWidget,
 )
 
-from . import browser, config, google_client, holiday, searchcombo, theme
+from . import config, google_client, holiday, searchcombo, theme
 
 
 class EventCalendar(QCalendarWidget):
@@ -250,8 +251,7 @@ class CalendarWindow(QWidget):
         self.btn_refresh.setMinimumWidth(110)
         self.btn_refresh.clicked.connect(self.reload)
         self.btn_web = QPushButton("브라우저에서 열기")
-        self.btn_web.clicked.connect(
-            lambda: browser.open_url("https://calendar.google.com/"))
+        self.btn_web.clicked.connect(lambda: webbrowser.open("https://calendar.google.com/"))
         self.btn_close = QPushButton("닫기")
         self.btn_close.clicked.connect(self.close)
         top.addWidget(self.btn_add)
