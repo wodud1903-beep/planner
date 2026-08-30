@@ -743,8 +743,10 @@ class MainWindow(QMainWindow):
         self.btn_cust_load = QPushButton("불러오기")
         self.btn_cust_load.clicked.connect(lambda: self.load_sheet_async(manual=True))
         row.addWidget(self.btn_cust_load)
+        # 표를 더블클릭하면 [수정] 이 열린다. 수정이 이력보다 훨씬 잦아서
+        # 버튼 자리는 [이력] 에 내주고, 수정은 더블클릭으로 바로 간다.
         for text, slot in [("고객 추가", self.on_customer_add),
-                           ("수정", self.on_customer_edit),
+                           ("이력", self.on_customer_history),
                            ("서류", self.on_customer_docs),
                            ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
@@ -897,7 +899,7 @@ class MainWindow(QMainWindow):
         # 버튼이 놓인 열(안내멘트·견적서)에서는 창을 열지 않는다
         if index.column() in (self.COL_MENT_BTN, self.COL_DOC_BTN):
             return
-        self.on_customer_history()
+        self.on_customer_edit()
 
     def _sheet_ready(self, quiet: bool = False) -> bool:
         if not self.settings.sheet_on:

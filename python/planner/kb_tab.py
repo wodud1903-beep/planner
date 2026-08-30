@@ -138,14 +138,16 @@ class KbView(QWidget):
         top = QHBoxLayout()
         self.ed_find = QLineEdit()
         self.ed_find.setPlaceholderText(
-            "찾을 내용을 치세요  —  예: 신한 전자약정 · 개인 심사서류 · ㅅㅅㅅㄹ")
+            "찾을 내용을 치세요  —  예: 신한 전자약정 · 개인 심사서류")
         self.ed_find.setClearButtonEnabled(True)
         self.ed_find.textChanged.connect(self._refilter)
         top.addWidget(self.ed_find, 1)
         self.cmb_cat = QComboBox()
         searchcombo.install(self.cmb_cat)
         self.cmb_cat.currentIndexChanged.connect(self._refilter)
-        top.addWidget(self.cmb_cat)
+        # 검색형 콤보는 안에 입력칸이 들어가 있어서 Qt 가 재는 기본 폭이 글씨보다
+        # 좁다 → '전체 분류' 가 잘렸다. 항목이 바뀔 때마다 직접 재서 넓혀 준다.
+        top.addWidget(self.cmb_cat, 0)
         v.addLayout(top)
 
         self.lst = _ResultList()
@@ -207,7 +209,19 @@ class KbView(QWidget):
         i = self.cmb_cat.findText(keep[1])
         self.cmb_cat.setCurrentIndex(i if i >= 0 else 0)
         self.cmb_cat.blockSignals(False)
+        self._fit_cat_width()
         self._refilter()
+
+    def _fit_cat_width(self) -> None:
+        """분류 콤보를 가장 긴 항목에 맞춘다(글씨가 잘리지 않게).
+
+        입력칸·화살표·테두리가 먹는 여백(48px)을 더하고, 너무 커지지 않게
+        상한을 둔다. 검색칸은 남는 폭을 가져가므로 그만큼 줄어든다.
+        """
+        fm = self.cmb_cat.fontMetrics()
+        wide = max([fm.horizontalAdvance(self.cmb_cat.itemText(i))
+                    for i in range(self.cmb_cat.count())] or [0])
+        self.cmb_cat.setFixedWidth(max(150, min(280, wide + 48)))
 
     def _refilter(self) -> None:
         cat = self.cmb_cat.currentData() or ""
