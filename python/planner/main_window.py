@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import uuid
@@ -140,18 +141,40 @@ class MainWindow(QMainWindow):
     sig_sync_done = Signal(bool, str, bool)          # (바뀜, 오류, 수동여부)
     sig_sheet_deleted_fail = Signal(object, str)     # (되살릴 행, 오류)
 
+    # 창을 이보다 좁히지는 못하게 한다. 고객관리 표의 열 폭 합(약 996)보다는
+    # 좁아도 되지만(가로 스크롤이 생길 뿐), 여기서 더 줄이면 어느 탭이든
+    # 버튼 줄이 서로 겹쳐 못 쓰게 된다.
+    MIN_WIDTH = 860
+    # 창 폭 기억 — 이 PC 에만 둔다. plan_cfg.json 은 다른 PC 로 동기화되는데,
+    # 모니터가 작은 PC 가 화면에 맞춰 줄인 폭이 큰 모니터 PC 로 넘어가면
+    # 켤 때마다 서로 창을 좁히게 된다.
+    WIN_FILE = "window.json"
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(config.APP_NAME)
-        # 최대화 버튼 제거 + 크기 고정. 세로를 늘려 '내 할일'을 더 많이 보이게.
-        # 단, 작은 화면에서도 잘리지 않도록 화면 크기에 맞춰 고정값을 정한다.
+        # 세로만 고정하고 가로는 끌어서 늘릴 수 있게 둔다.
+        #
+        # 세로를 풀면 위아래로 늘렸을 때 '이번주 일정' 과 '내 할일' 사이 비율이
+        # 틀어지고 브리핑 칸이 허옇게 남는다. 반면 가로는 고객관리 표가 넓을수록
+        # 좋아서(고객명·차종이 안 잘린다) 넓히고 싶은 쪽은 늘 가로였다.
+        # 최대화 버튼은 계속 감춘다 — 최대화는 세로까지 바꾸려 든다.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
         _avail = QGuiApplication.primaryScreen().availableGeometry()
         # 고객관리 표(수수료·견적서 포함)가 가로 스크롤 없이 들어가는 폭
         _w = min(1120, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
-        self.setFixedSize(_w, _h)
+        self.setFixedHeight(_h)
+        _lo, _hi = self._width_bounds(_avail)
+        self.setMinimumWidth(_lo)
+        self.setMaximumWidth(_hi)
         self._centered_once = False
+        # 폭을 끄는 동안 계속 저장하지 않도록, 멈춘 뒤 한 번만 쓴다
+        self._width_timer = QTimer(self)
+        self._width_timer.setSingleShot(True)
+        self._width_timer.timeout.connect(self._remember_width)
+        # 지난번에 맞춰 둔 폭이 있으면 그대로 연다(매번 다시 끌지 않도록)
+        self.resize(self._saved_width(_w, _avail), _h)
         self._center_on_screen()
 
         # 데이터
@@ -2958,6 +2981,50 @@ class MainWindow(QMainWindow):
             self.move(fg.topLeft())
         except Exception:
             pass
+
+    # ---- 창 폭 기억 (세로는 고정이라 가로만 남긴다) ----
+    def _width_bounds(self, avail):
+        """이 화면에서 허용되는 (최소, 최대) 폭."""
+        lo = min(self.MIN_WIDTH, avail.width() - 20)
+        return lo, max(lo, avail.width() - 20)
+
+    def _win_path(self):
+        """폭을 적어 두는 파일.
+
+        계정 폴더(config.data_file)가 아니라 **공용 폴더**에 둔다. 계정 폴더는
+        로그인해야 정해지는데 창은 그 전에 이미 떠 있고, 그 폴더는 다른 PC 로
+        동기화까지 된다. 창 폭은 이 PC 의 모니터에 달린 값이라 둘 다 곤란하다.
+        """
+        return config.base_dir() / self.WIN_FILE
+
+    def _saved_width(self, default: int, avail) -> int:
+        """지난번에 맞춰 둔 폭. 없거나 이 화면에 안 맞으면 기본값."""
+        lo, hi = self._width_bounds(avail)
+        want = default
+        try:
+            p = self._win_path()
+            if p.exists():
+                got = int((json.loads(p.read_text(encoding="utf-8")) or {})
+                          .get("width", 0))
+                if got > 0:
+                    want = got
+        except Exception:
+            pass                        # 파일이 깨졌으면 조용히 기본값
+        return max(lo, min(hi, want))
+
+    def _remember_width(self) -> None:
+        try:
+            config.atomic_write(self._win_path(),
+                                json.dumps({"width": self.width()}))
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # 뜨기 전(_saved_width 로 맞추는 중)에는 저장하지 않는다 — 그러면 화면에
+        # 맞춰 줄인 값이 그대로 굳어 다음에 켤 때 더는 못 넓힌다.
+        if getattr(self, "_centered_once", False):
+            self._width_timer.start(600)     # 끄는 중에는 계속 불린다 → 멈추면 저장
 
     def showEvent(self, event):
         # 창틀 크기는 화면에 뜬 뒤에야 정확히 알 수 있다 → 첫 표시 때 한 번 더 맞춘다.
