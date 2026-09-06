@@ -1,7 +1,8 @@
 """주간 요약 — 한 주를 한 장으로.
 
-금요일마다 손으로 세시던 것(이번 주 계약 몇 건, 출고 몇 건, 수수료 얼마,
-다음 주에 뭐가 오는지)을 시트에서 그대로 뽑는다. 새로 입력하실 것은 없다.
+손으로 세시던 것(이번 주 계약 몇 건, 출고 몇 건, 수수료 얼마, 아직 안 나온 건이
+뭔지, 만기가 다가오는 고객이 누군지)을 시트에서 그대로 뽑는다.
+새로 입력하실 것은 없다.
 
 브리핑과 같은 방식으로 **내용을 먼저 만들고**(`sections`) 평문과 HTML 두 가지로
 그린다. 두 벌을 따로 쓰면 반드시 어긋난다 — 브리핑에서 이미 겪었다.
@@ -16,12 +17,17 @@ from datetime import date, timedelta
 from html import escape as _esc
 
 from . import sheets, theme
+from .followup import add_months          # 말일 보정이 이미 검증돼 있어 재사용
 
 WEEKDAY_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
 # 진행현황이 이 말로 시작하면 '끝난 계약' 으로 본다
 DONE_WORDS = ("출고", "완료")
+# 이 말로 시작하면 '내가 재촉할 건이 아니다' — 진행 중 목록에서 뺀다
+HOLD_WORDS = ("진행보류", "보류", "홀딩")
 CANCEL_WORD = "취소"
+# 만기 예정을 몇 달 앞까지 볼지 (설정값이 없을 때)
+EXPIRY_MONTHS = 6
 
 
 def week_range(today: date, offset: int = 0) -> tuple[date, date]:
@@ -55,10 +61,15 @@ def _in(d, lo: date, hi: date) -> bool:
     return d is not None and lo <= d <= hi
 
 
-def sections(rows: list, today: date, expiry_months: int = 3) -> list[dict]:
-    """주간 요약의 내용. 브리핑 섹션과 같은 모양이라 그리는 코드를 나눠 쓴다."""
+def sections(rows: list, today: date,
+             expiry_months: int = EXPIRY_MONTHS) -> list[dict]:
+    """주간 요약의 내용. 브리핑 섹션과 같은 모양이라 그리는 코드를 나눠 쓴다.
+
+    `expiry_months` 는 브리핑의 만기 알림 설정과 **따로 둔다**. 브리핑은 코앞의
+    건만 짚어 주면 되지만(기본 3개월), 주간 요약은 미리 연락해 둘 명단이라
+    더 멀리 본다(기본 6개월).
+    """
     mon, sun = week_range(today)
-    nmon, nsun = week_range(today, 1)
     rows = [r for r in (rows or []) if _live(r)]
 
     secs = []
@@ -97,42 +108,14 @@ def sections(rows: list, today: date, expiry_months: int = 3) -> list[dict]:
         "empty": "이번 주 신규 계약이 없습니다",
     })
 
-    # ---- 금융사별 (이번 주 출고 기준) ----
-    by_fin: dict[str, list] = {}
-    for _d, cr in out:
-        by_fin.setdefault(cr.get("finance").strip() or "기타", []).append(cr)
-    if by_fin:
-        order = sorted(by_fin.items(), key=lambda kv: (-len(kv[1]), kv[0]))
-        secs.append({
-            "icon": "🏦", "title": "금융사별", "color": "gray",
-            "items": [{"lead": f"{len(v)}건", "text": k,
-                       "sub": _money(sum(_fee(c) for c in v))}
-                      for k, v in order],
-            "count": len(order),
-        })
-
-    # ---- 다음 주 출고 예정 ----
-    plan = []
-    for cr in rows:
-        d = sheets.parse_date(cr.get("deliver_date"))
-        if _in(d, nmon, nsun):
-            plan.append((d, cr))
-    plan.sort(key=lambda x: x[0])
-    secs.append({
-        "icon": "📦", "title": "다음 주 출고 예정", "color": "orange",
-        "items": [{"lead": _label(d), "text": cr.get("customer"),
-                   "sub": " · ".join(x for x in (cr.get("finance"),
-                                                 cr.get("model")) if x)}
-                  for d, cr in plan],
-        "empty": "다음 주 출고 예정이 없습니다",
-    })
-
     # ---- 진행 중 (발주했는데 아직 출고 안 됨) ----
     open_rows = []
     for cr in rows:
         st = cr.get("status").strip()
         if any(st.startswith(w) for w in DONE_WORDS):
             continue
+        if any(st.startswith(w) for w in HOLD_WORDS):
+            continue          # 보류는 내가 재촉할 건이 아니라 기다리는 건이다
         cd = sheets.parse_date(cr.get("contract_date"))
         if cd is None or cd > today:
             continue
@@ -151,22 +134,28 @@ def sections(rows: list, today: date, expiry_months: int = 3) -> list[dict]:
             "hint": "오래 묵은 건부터 캐피탈에 진행 상황을 확인해 보세요.",
         })
 
-    # ---- 다음 주 만기 (재계약) ----
-    if int(expiry_months or 0) > 0:
-        exp = []
-        for cr in rows:
-            d = sheets.expiry_date(cr)
-            if _in(d, nmon, nsun):
-                exp.append((d, cr))
-        exp.sort(key=lambda x: x[0])
-        if exp:
-            secs.append({
-                "icon": "🔔", "title": "다음 주 만기", "color": "violet",
-                "items": [{"lead": _label(d), "text": cr.get("customer"),
-                           "sub": cr.get("model")} for d, cr in exp],
-                "count": len(exp),
-                "hint": "[고객관리] 탭에서 [이력] 로 상담 내역을 보고 재계약을 준비하세요.",
-            })
+    # ---- 만기 예정 (재계약 준비) ----
+    # 한 주씩 끊어 보면 '다음 주에 만기인 한 건' 만 나와 미리 연락해 둘 여유가
+    # 없다. 몇 달 앞까지 한 번에 펼쳐 놓고 급한 순으로 세운다.
+    months = max(1, int(expiry_months or 0) or EXPIRY_MONTHS)
+    limit = add_months(today, months)
+    exp = []
+    for cr in rows:
+        d = sheets.expiry_date(cr)
+        if _in(d, today, limit):
+            exp.append((d, cr))
+    exp.sort(key=lambda x: x[0])
+    secs.append({
+        "icon": "🔔", "title": f"{months}개월 이내 만기 예정", "color": "violet",
+        "items": [{"lead": f"D-{(d - today).days}", "text": cr.get("customer"),
+                   "sub": " · ".join(x for x in (f"{d:%Y-%m-%d}", cr.get("model"))
+                                     if x)}
+                  for d, cr in exp[:20]],
+        "count": len(exp),
+        "more": max(0, len(exp) - 20),
+        "empty": f"{months}개월 안에 만기가 오는 고객이 없습니다",
+        "hint": "[고객관리] 탭에서 [이력] 로 상담 내역을 보고 재계약을 준비하세요.",
+    })
 
     return secs
 
@@ -176,7 +165,8 @@ def title_line(today: date) -> str:
     return f"{mon:%Y년 %m월 %d일} ~ {sun:%m월 %d일} 주간 요약"
 
 
-def to_text(rows: list, today: date, expiry_months: int = 3) -> str:
+def to_text(rows: list, today: date,
+            expiry_months: int = EXPIRY_MONTHS) -> str:
     """복사·파일 저장용 평문."""
     secs = sections(rows, today, expiry_months)
     lines = [title_line(today), ""]
@@ -200,7 +190,8 @@ def to_text(rows: list, today: date, expiry_months: int = 3) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def to_html(rows: list, today: date, expiry_months: int = 3) -> str:
+def to_html(rows: list, today: date,
+            expiry_months: int = EXPIRY_MONTHS) -> str:
     """화면용 — 브리핑과 같은 색·크기 규칙."""
     secs = sections(rows, today, expiry_months)
     txt, sub_c, line_c = theme.c("text"), theme.c("subtext"), theme.c("border")

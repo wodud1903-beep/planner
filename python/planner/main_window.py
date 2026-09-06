@@ -212,7 +212,7 @@ class MainWindow(QMainWindow):
         self._sheet_header_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
         self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
-        self._terms_map: dict = {}       # 금융사 → 자주 쓴 계약조건
+        self._terms_list: list = []      # 미리 적어 둔 계약조건(전부)
         self._sheet_loaded = False       # 첫 시트 로딩 완료 여부(브리핑 대기용)
         self._fired_cal_alarms: set = set()   # (일정, 분) — 중복 알람 방지
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
@@ -325,32 +325,23 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(2000, self._do_startup_brief)
             return
         self._startup_brief_pending = False
-        self.show_briefing(manual=False)
-        # 브리핑을 닫은 뒤에 주간 요약 차례 — 두 창이 겹쳐 뜨지 않게 한 박자 뒤로
-        QTimer.singleShot(400, self._maybe_weekly)
+        self.show_startup_screen()
 
-    # ------------------------------------------------------------ 주간 요약
-    def _maybe_weekly(self):
-        """정한 요일에 딱 한 번 주간 요약을 띄운다.
+    # ------------------------------------------------------------ 시작 화면
+    def show_startup_screen(self):
+        """오늘 브리핑 + 주간 요약을 한 창에 띄운다.
 
-        '이번 주에 이미 띄웠는가' 는 주(월요일 날짜)로 기억한다. 날짜로 기억하면
-        같은 금요일에 앱을 두 번 켤 때 두 번 뜨고, 금요일에 쉬면 그 주는 영영
-        건너뛴다. 그래서 **정한 요일 이후**면 그 주 것을 한 번 보여 준다.
+        예전에는 브리핑(항상 위로 뜨는 알람 팝업)과 주간 요약(모달 창)을 잇달아
+        띄웠다. 모달이 입력을 전부 가로채서, **위에 보이는 브리핑의 [확인] 은
+        안 눌리고 뒤에 깔린 주간 요약만 눌렸다.** 창을 하나로 합쳐 없앤다.
+
+        주간 요약은 설정에서 끌 수 있고(weekly_on), 시트를 아직 못 읽었으면
+        그 자리에 이유를 적는다.
         """
-        s = self.settings
-        if not s.weekly_on or not s.sheet_on:
-            return
-        today = date.today()
-        if today.weekday() < int(s.weekly_day or 0):
-            return                      # 아직 그 요일 전이다
-        key = weekly.week_key(today)
-        if s.weekly_shown == key:
-            return                      # 이번 주 것은 이미 봤다
-        if not self.sheet_rows:
-            return                      # 시트가 아직 안 왔다 — 다음 기회에
-        s.weekly_shown = key
-        s.save(self.cfg_file)
-        self.show_weekly()
+        from .startup_dialog import StartupDialog
+        rows = self.sheet_rows if self.settings.weekly_on else []
+        StartupDialog.show_for(self.build_briefing_html(), self.build_briefing(),
+                               rows, date.today(), self)
 
     def show_weekly(self):
         """주간 요약 창을 연다 (트레이 메뉴·버튼에서도 부른다)."""
@@ -361,9 +352,9 @@ class MainWindow(QMainWindow):
                 "[고객관리] 탭에서 [불러오기] 를 먼저 눌러 주세요.")
             return
         from .weekly_dialog import WeeklyDialog
+        # 만기 예정은 브리핑 설정(코앞의 건만)과 달리 몇 달 앞까지 본다
         WeeklyDialog.show_for(self.sheet_rows, date.today(),
-                              int(getattr(self.settings, "expiry_months", 3) or 0),
-                              self)
+                              weekly.EXPIRY_MONTHS, self)
 
     def _on_hotkey(self):
         self.show_window()
@@ -1144,7 +1135,7 @@ class MainWindow(QMainWindow):
         self._sheet_header_row = 0
         self._sheet_loaded = False
         self.sheet_choices = {}
-        self._terms_map = {}
+        self._terms_list = []
         self.lbl_cust_summary.hide()
         self._summary_data = []
         self.refresh_customers()
@@ -1266,7 +1257,7 @@ class MainWindow(QMainWindow):
         self._sheet_last_row = last_row
         self._sheet_header_row = hdr
         self.sheet_choices = sheets.choices(rows)
-        self._terms_map = sheets.merge_terms(
+        self._terms_list = sheets.all_terms(
             load_terms_presets(), sheets.terms_by_finance(rows))
         self._sheet_pending = []
         self._sheet_loaded = True
@@ -1452,7 +1443,7 @@ class MainWindow(QMainWindow):
                                     "먼저 [불러오기]로 시트를 읽어주세요.")
             return
         res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self,
-                                 terms_map=self._terms_map)
+                                 terms_list=self._terms_list)
         if res is None:
             return
         vals, img, _cleared = res
@@ -1526,7 +1517,7 @@ class MainWindow(QMainWindow):
             return
         res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
                                  cr.values, self.sheet_choices, cr.ment, self,
-                                 terms_map=self._terms_map)
+                                 terms_list=self._terms_list)
         if res is None:
             return
         vals, img, doc_cleared = res
@@ -1827,7 +1818,7 @@ class MainWindow(QMainWindow):
                 self.tab_comm.reload_rates()   # 수당율을 고쳤을 수 있다
             self.fetch_rates_async()
             # 계약조건 목록을 고쳤을 수 있으니 다시 합쳐 둔다
-            self._terms_map = sheets.merge_terms(
+            self._terms_list = sheets.all_terms(
                 load_terms_presets(), sheets.terms_by_finance(self.sheet_rows))
             now_sheet = (self.settings.sheet_id.strip(),
                          self.settings.sheet_name.strip())

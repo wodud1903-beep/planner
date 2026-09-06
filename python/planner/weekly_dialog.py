@@ -19,7 +19,8 @@ from . import config, theme, weekly
 
 
 class WeeklyDialog(QDialog):
-    def __init__(self, rows: list, today: date, expiry_months: int = 3, parent=None):
+    def __init__(self, rows: list, today: date,
+                 expiry_months: int = weekly.EXPIRY_MONTHS, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{config.APP_NAME} · 주간 요약")
         self.resize(720, 760)
@@ -106,7 +107,8 @@ class WeeklyDialog(QDialog):
         self.lbl_status.setText(f"저장됨 ✓  {path}")
 
     @classmethod
-    def show_for(cls, rows: list, today: date, expiry_months: int = 3, parent=None):
+    def show_for(cls, rows: list, today: date,
+                 expiry_months: int = weekly.EXPIRY_MONTHS, parent=None):
         d = cls(rows, today, expiry_months, parent)
         d.exec()
         return d

@@ -167,14 +167,31 @@ class CustomerDialog(QDialog):
         ("doc", "견적서/계약서", "image"),
     ]
 
+    # 시트에 아직 그 값이 안 쓰였어도 항상 고를 수 있어야 하는 항목.
+    # 시트에서 뽑은 값(choices)보다 **앞에** 놓아, 새 시트로 시작해도
+    # 매번 손으로 치지 않게 한다.
+    FIXED_CHOICES = {
+        "channel": ["특판", "대리점"],
+        "status": ["출고", "취소", "발주", "진행보류"],
+    }
+
+    # 새 고객을 등록할 때 날짜칸의 '미정' 기본값.
+    # 계약일은 오늘 적는 것이 보통이고(체크 해제 = 오늘 날짜),
+    # 출고일은 아직 안 잡힌 것이 보통이다(체크 = 미정).
+    # ⚠️ 기존 고객을 수정할 때는 쓰지 않는다 — 비어 있던 계약일이 창을 열었다
+    #    저장하기만 해도 오늘 날짜로 채워진다.
+    NEW_DATE_UNSET = {"contract_date": False, "deliver_date": True}
+
     def __init__(self, caption: str, values: dict, choices: dict,
-                 ment: str = "", parent=None, terms_map: dict | None = None):
+                 ment: str = "", parent=None, terms_list: list | None = None):
         super().__init__(parent)
         self.setWindowTitle(caption)
         self.resize(600, 760)
         self.widgets: dict = {}
         self._ment = ment or ""
-        self._terms_map = terms_map or {}     # 금융사 → 자주 쓴 계약조건
+        self._terms_list = list(terms_list or [])   # 미리 적어 둔 계약조건(전부)
+        # 값이 하나도 안 넘어오면 '고객 등록' 이다
+        self._is_new = not (values or {})
 
         root = QVBoxLayout(self)
 
@@ -191,8 +208,12 @@ class CustomerDialog(QDialog):
             if kind == "combo":
                 w = QComboBox()
                 w.addItem("")
-                for it in (choices or {}).get(key, []):
+                fixed = self.FIXED_CHOICES.get(key, [])
+                for it in fixed:
                     w.addItem(it)
+                for it in (choices or {}).get(key, []):
+                    if it not in fixed:
+                        w.addItem(it)
                 # 초성/낱말 검색 — 목록에 없는 값(새 금융사 등)도 그대로 쓸 수 있게
                 searchcombo.install(w, allow_free=True)
                 w.setCurrentText(cur)
@@ -208,7 +229,11 @@ class CustomerDialog(QDialog):
                 d = sheets.parse_date(cur)
                 de.setDate(QDate(d.year, d.month, d.day) if d else QDate.currentDate())
                 chk = QCheckBox("미정")
-                chk.setChecked(d is None)      # 값이 없거나 못 읽으면 '미정'
+                if self._is_new:
+                    # 등록 창은 칸마다 기본값이 다르다 (계약일=오늘 / 출고일=미정)
+                    chk.setChecked(self.NEW_DATE_UNSET.get(key, True))
+                else:
+                    chk.setChecked(d is None)  # 값이 없거나 못 읽으면 '미정'
                 chk.toggled.connect(lambda on, e=de: e.setEnabled(not on))
                 de.setEnabled(not chk.isChecked())
                 # 앱이 못 읽는 형식(예: '8/14 예정')이 들어있으면, 사용자가 날짜를
@@ -244,13 +269,17 @@ class CustomerDialog(QDialog):
                 # Tab 으로 다음 입력창으로 넘어가게 (기본은 Tab 문자가 입력됨)
                 w.setTabChangesFocus(True)
                 if key == "terms":
-                    # 금융사별로 자주 쓴 계약조건을 골라 넣을 수 있게
+                    # 미리 적어 둔 계약조건을 골라 넣을 수 있게.
+                    # 금융사별로 나누지 않는다 — 금융사를 고르기 전에는 목록이
+                    # 비어 있었고, 같은 조건을 여러 금융사에 쓰는데도 그 금융사
+                    # 이름으로 또 적어 둬야 보였다.
                     holder = QWidget()
                     vl = QVBoxLayout(holder)
                     vl.setContentsMargins(0, 0, 0, 0)
                     vl.setSpacing(3)
                     self.cmb_terms = QComboBox()
-                    self.cmb_terms.setToolTip("이 금융사로 자주 쓴 계약조건")
+                    self.cmb_terms.setToolTip(
+                        "설정에 적어 둔 계약조건 — 골라서 아래 칸에 넣습니다")
                     searchcombo.install(self.cmb_terms)
                     self.cmb_terms.activated.connect(self._pick_terms)
                     vl.addWidget(self.cmb_terms)
@@ -267,11 +296,9 @@ class CustomerDialog(QDialog):
         scroll.setWidget(inner)
         root.addWidget(scroll, 1)
 
-        # 금융사가 바뀌면 계약조건 후보를 그 금융사 것으로 교체
-        fin_w = self.widgets.get("finance", (None, ""))[0]
-        if fin_w is not None and hasattr(self, "cmb_terms"):
-            fin_w.currentTextChanged.connect(self._reload_terms)
-            self._reload_terms(fin_w.currentText())
+        # 계약조건 후보는 금융사와 무관하게 처음부터 전부 올려 둔다
+        if hasattr(self, "cmb_terms"):
+            self._fill_terms()
 
         # 미니계산기에 차량가격·차종을 물려 준다 (칸이 바뀌면 즉시 다시 계산)
         if hasattr(self, "inc_box"):
@@ -308,18 +335,18 @@ class CustomerDialog(QDialog):
         row.addWidget(cancel)
         root.addLayout(row)
 
-    def _reload_terms(self, finance: str):
-        """선택한 금융사로 자주 쓴 계약조건을 목록에 채운다."""
-        items = self._terms_map.get((finance or "").strip(), [])
+    def _fill_terms(self):
+        """미리 적어 둔 계약조건을 전부 목록에 올린다(금융사와 무관하게)."""
+        items = self._terms_list
         self.cmb_terms.blockSignals(True)
         self.cmb_terms.clear()
         if items:
-            self.cmb_terms.addItem(f"↓ 자주 쓴 계약조건 {len(items)}개 — 골라서 넣기")
-            for t in items[:12]:
+            self.cmb_terms.addItem(f"↓ 계약조건 {len(items)}개 — 골라서 넣기")
+            for t in items:
                 self.cmb_terms.addItem(t)
             self.cmb_terms.setEnabled(True)
         else:
-            self.cmb_terms.addItem("(이 금융사로 저장된 계약조건이 아직 없습니다)")
+            self.cmb_terms.addItem("(설정 → '자주 쓴 계약조건' 에 미리 적어 두세요)")
             self.cmb_terms.setEnabled(False)
         self.cmb_terms.setCurrentIndex(0)
         self.cmb_terms.blockSignals(False)
@@ -382,9 +409,9 @@ class CustomerDialog(QDialog):
 
     @classmethod
     def run(cls, caption: str, values: dict, choices: dict, ment: str = "",
-            parent=None, terms_map: dict | None = None):
+            parent=None, terms_list: list | None = None):
         """반환: (값 dict, 새 이미지 bytes, 기존 이미지 지움 여부) 또는 None(취소)."""
-        d = cls(caption, values, choices, ment, parent, terms_map)
+        d = cls(caption, values, choices, ment, parent, terms_list)
         if d.exec() != QDialog.Accepted:
             return None
         return d.values(), d.new_image(), d.doc_cleared()

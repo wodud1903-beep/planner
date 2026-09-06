@@ -616,6 +616,33 @@ def merge_terms(presets: dict, from_sheet: dict) -> dict:
     return out
 
 
+def all_terms(presets: dict, from_sheet: dict | None = None) -> list:
+    """계약조건을 금융사 구분 없이 **한 줄로** 모은다.
+
+    고객 등록 창이 쓰는 목록이다. 금융사별로 갈라 두면 금융사를 고르기 전에는
+    목록이 비어 있고, 같은 조건을 여러 금융사에 쓰는데도 금융사마다 또 적어
+    둬야 보였다.
+
+    차례: 설정에 직접 적은 것(공통 ``*`` 먼저) → 시트에서 실제로 써 온 것.
+    """
+    seen, out = set(), []
+
+    def take(items):
+        for t in items or []:
+            t = str(t or "").strip()
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+
+    presets = presets or {}
+    take(presets.get("*", []))
+    for fin in sorted(k for k in presets if k != "*"):
+        take(presets[fin])
+    for fin in sorted(from_sheet or {}):
+        take((from_sheet or {})[fin])
+    return out
+
+
 def terms_by_finance(rows: list[CustomerRow]) -> dict:
     """금융사 → 그 금융사로 쓴 계약조건 목록(자주 쓴 순).
 

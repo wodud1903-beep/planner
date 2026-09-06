@@ -158,20 +158,14 @@ class SettingsDialog(QDialog):
             "계약조건의 '60개월' 같은 표기로 만기일을 계산해\n"
             "시작 브리핑에 재계약 대상 고객을 알려줍니다."))
 
-        wrow = QHBoxLayout()
-        self.chk_weekly = QCheckBox("사용")
-        self.cmb_weekly_day = QComboBox()
-        searchcombo.install(self.cmb_weekly_day)
-        for i, name in enumerate(weekly.WEEKDAY_KO):
-            self.cmb_weekly_day.addItem(f"{name}요일", i)
-        wrow.addWidget(self.chk_weekly)
-        wrow.addWidget(self.cmb_weekly_day)
-        wrow.addWidget(QLabel("부터 앱을 켤 때 한 번"))
-        wrow.addStretch()
-        sl.addRow("주간 요약 자동 표시", wrow)
+        self.chk_weekly = QCheckBox("시작 화면에 주간 요약도 함께 보기")
+        sl.addRow("주간 요약", self.chk_weekly)
         sl.addRow(QLabel(
-            "그 주의 계약·출고·수수료와 다음 주 예정을 한 장으로 보여 줍니다.\n"
-            "[고객관리] 탭의 [주간 요약] 버튼으로 언제든 다시 볼 수 있습니다."))
+            "프로그램을 켜면 오늘 브리핑과 주간 요약이 한 화면에 같이 나옵니다.\n"
+            f"이번 주 출고·계약, 아직 안 나온 건, {weekly.EXPIRY_MONTHS}개월 이내 "
+            "만기 예정 고객을 한 장으로 보여 줍니다.\n"
+            "체크를 풀면 브리핑만 나오고, [고객관리] 탭의 [주간 요약] 버튼으로\n"
+            "언제든 따로 볼 수 있습니다."))
 
         # 수당율은 회사 공통 기준값이라 관리자 계정에서만 고칠 수 있다.
         btn_rates = QPushButton("차종별 수당율 관리…")
@@ -189,13 +183,15 @@ class SettingsDialog(QDialog):
         self.txt_terms = QTextEdit()
         self.txt_terms.setMinimumHeight(130)
         self.txt_terms.setPlaceholderText(
-            "KB캐피탈 | 60개월 / 2만km / 무보증\n"
-            "하나캐피탈 | 48개월 / 연2만km / 보증금 2000만원\n"
-            "선수금 30% 별도협의        ← 금융사를 안 적으면 모든 금융사에 표시")
+            "60개월 / 2만km / 무보증\n"
+            "48개월 / 연2만km / 보증금 2000만원\n"
+            "KB캐피탈 | 선수금 30% 별도협의     ← '금융사 |' 는 적어 두어도 됩니다")
         sl.addRow("자주 쓴 계약조건", self.txt_terms)
         sl.addRow(QLabel(
-            "한 줄에 하나씩 '금융사 | 계약조건' 으로 적으면 고객 등록·수정 창의\n"
-            "계약조건 목록에 먼저 나옵니다. 시트에서 실제로 써 온 조건도 함께 표시됩니다."))
+            "한 줄에 하나씩 적어 두면 고객 등록·수정 창의 계약조건 목록에\n"
+            "금융사와 상관없이 **전부** 먼저 나옵니다.\n"
+            "'금융사 |' 를 앞에 붙여 정리해 두어도 되고, 안 붙여도 됩니다.\n"
+            "시트에서 실제로 써 온 조건도 그 뒤에 이어서 표시됩니다."))
         sl.addRow(QLabel(
             "함수 칸(순번·합계·고객센터번호·사고접수연락처·고객안내멘트)은\n"
             "프로그램이 건드리지 않고 시트 수식 그대로 둡니다.\n"
@@ -327,8 +323,6 @@ class SettingsDialog(QDialog):
         self.ed_sheet_name.setText(s.sheet_name)
         self.sp_expiry.setValue(s.expiry_months)
         self.chk_weekly.setChecked(s.weekly_on)
-        i = self.cmb_weekly_day.findData(int(s.weekly_day or 0))
-        self.cmb_weekly_day.setCurrentIndex(i if i >= 0 else 4)
         self.txt_terms.setPlainText(sheets.format_terms_presets(load_terms_presets()))
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
@@ -392,8 +386,6 @@ class SettingsDialog(QDialog):
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.expiry_months = self.sp_expiry.value()
         s.weekly_on = self.chk_weekly.isChecked()
-        day = self.cmb_weekly_day.currentData()
-        s.weekly_day = int(day) if day is not None else 4
         save_terms_presets(sheets.parse_terms_presets(self.txt_terms.toPlainText()))
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
