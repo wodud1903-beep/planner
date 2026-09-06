@@ -20,16 +20,49 @@ _COMPANY_MARKS = ("(주)", "주)", "㈜", "(유)", "주식회사", "(사)")
 # 며칠 앞까지 미리 올려 둘지
 AHEAD_DAYS = 14
 
-# "[팔로업] 홍길동 (출고 1개월)" 에서 이름만 도로 꺼낸다.
-# 이름을 따로 저장하지 않는 이유: 예전 버전이 만들어 둔 할일에는 그 칸이 없고,
-# 그 할일들도 중복 판정에 넣어야 한다.
-_FOLLOW_RE = re.compile(r"^\s*\[팔로업\]\s*(.+?)\s*(?:\(|$)")
+# 제목에서 이름을 도로 꺼낸다. 이름을 따로 저장하지 않는 이유: 예전 버전이
+# 만들어 둔 할일에는 그 칸이 없고, 그 할일들도 중복 판정에 넣어야 한다.
+#
+# 지금 쓰는 모양 : "[출고 1개월] 홍길동"
+# 예전에 쓰던 모양: "[팔로업] 홍길동 (출고 1개월)"
+# 캘린더에 이미 올라간 옛 제목도 읽어야 해서 둘 다 본다.
+_NEW_RE = re.compile(r"^\s*\[[^\[\]]*\d+\s*개월\]\s*(.+?)\s*$")
+_OLD_RE = re.compile(r"^\s*\[팔로업\]\s*(.+?)\s*(?:\(|$)")
+
+
+def make_title(name: str, keyword: str, months: int) -> str:
+    """팔로업 할일·캘린더 일정 제목. 이 한 곳에서만 만든다."""
+    return f"[{(keyword or '출고').strip()} {int(months)}개월] {str(name).strip()}"
 
 
 def followup_name(title: str) -> str:
-    """팔로업 할일 제목에서 고객명. 팔로업이 아니면 ''."""
-    m = _FOLLOW_RE.match(str(title or ""))
+    """팔로업 제목에서 고객명. 팔로업이 아니면 ''."""
+    t = str(title or "")
+    m = _NEW_RE.match(t) or _OLD_RE.match(t)
     return m.group(1).strip() if m else ""
+
+
+def is_old_title(title: str) -> bool:
+    """예전 '[팔로업] …' 모양인가 (바꿔 줘야 하는 제목인가)."""
+    return bool(_OLD_RE.match(str(title or "")))
+
+
+def rename_old(title: str, keyword: str, months: int) -> str:
+    """예전 모양이면 새 모양으로. 아니면 그대로 돌려준다.
+
+    개월 수는 **제목에 적힌 값**을 먼저 쓴다. 설정을 나중에 1→3개월로 바꿨다면
+    예전에 만든 '1개월' 건까지 3개월로 둔갑시키면 안 된다.
+    """
+    t = str(title or "")
+    if not is_old_title(t):
+        return t
+    name = followup_name(t)
+    if not name:
+        return t
+    m = re.search(r"\(\s*(.*?)\s*(\d+)\s*개월\s*\)", t)
+    if m:
+        return make_title(name, m.group(1) or keyword, int(m.group(2)))
+    return make_title(name, keyword, months)
 
 
 def _looks_like_company(s: str) -> bool:
@@ -165,7 +198,7 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
             ment = ment.replace("%s", name)
 
         it = TodoItem(
-            title=f"[팔로업] {name} ({keyword} {settings.follow_months}개월)",
+            title=make_title(name, keyword, settings.follow_months),
             run_date=target,
             run_time=settings.follow_time,
             has_time=True,
@@ -179,3 +212,33 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
         added.append(it)
 
     return added
+
+
+# ---------------------------------------------------------------------------
+# 옛 제목 바꾸기 ("[팔로업] 홍길동 (출고 1개월)" → "[출고 1개월] 홍길동")
+# ---------------------------------------------------------------------------
+def rename_old_todos(todos, keyword: str, months: int) -> int:
+    """내 할일에 남은 옛 제목을 새 모양으로. 바꾼 개수를 돌려준다."""
+    n = 0
+    for it in todos or []:
+        new = rename_old(it.title, keyword, months)
+        if new != it.title:
+            it.title = new
+            n += 1
+    return n
+
+
+def old_title_events(cal_events, keyword: str, months: int) -> list:
+    """캘린더에서 옛 제목인 일정 → [(일정, 새 제목)].
+
+    고칠 수 있는 것만 고른다 — cal_id/event_id 가 없으면 수정 API 를 못 부른다
+    (읽기 전용으로 구독한 캘린더 등).
+    """
+    out = []
+    for ev in cal_events or []:
+        if not getattr(ev, "event_id", "") or not getattr(ev, "cal_id", ""):
+            continue
+        new = rename_old(ev.summary, keyword, months)
+        if new != ev.summary:
+            out.append((ev, new))
+    return out

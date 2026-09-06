@@ -1946,8 +1946,53 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText("구글: " + msg)
         self.lbl_status.setStyleSheet("color:#c00;")
 
+    def _rename_old_followups(self):
+        """예전 '[팔로업] …' 제목을 '[출고 1개월] 홍길동' 으로 바꾼다.
+
+        할일과 구글 캘린더 양쪽을 고친다. 옛 제목이 하나도 없으면 아무 일도
+        일어나지 않으므로, 한 번 정리된 뒤에는 그냥 지나간다.
+        """
+        kw = (self.settings.follow_keyword or "출고").strip() or "출고"
+        mo = int(self.settings.follow_months or 1)
+
+        n = followup.rename_old_todos(self.todos, kw, mo)
+        if n:
+            self._save_todos()
+            self._touch_sync()
+            self.refresh_todo()
+
+        if not self.gauth.is_connected():
+            return
+        jobs = followup.old_title_events(self.cal_events, kw, mo)
+        if not jobs:
+            if n:
+                self.sig_toast.emit(config.APP_NAME, f"팔로업 제목 {n}건을 정리했습니다.")
+            return
+        # 화면에 먼저 반영해 두면, 캘린더 응답을 기다리는 동안에도 새 제목이 보인다
+        for ev, new in jobs:
+            ev.summary = new
+        self.refresh_calendar()
+        items = [(ev.cal_id, ev.event_id, new, ev.start.date(), ev.has_time,
+                  ev.start.time() if ev.has_time else None) for ev, new in jobs]
+
+        def worker():
+            done = 0
+            for cal_id, event_id, title, day, has_time, tm in items:
+                try:
+                    google_client.update_event(
+                        self.gauth, cal_id, event_id, title, day,
+                        start_time=tm, all_day=not has_time)
+                    done += 1
+                except Exception:
+                    pass          # 못 고친 건은 다음 새로고침 때 다시 시도된다
+            if done:
+                self.sig_toast.emit(config.APP_NAME,
+                                    f"팔로업 제목 {done + n}건을 정리했습니다.")
+        threading.Thread(target=worker, daemon=True).start()
+
     def _run_followups(self):
         """캘린더에서 팔로업 대상을 찾아 내 할일로 자동 등록."""
+        self._rename_old_followups()
         added = followup.check_followups(
             self.settings, self.cal_events, self.todos, self.followup_tracker)
         if added:

@@ -64,7 +64,8 @@ class SettingsDialog(QDialog):
                  on_backup=None, on_sync=None):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
-        self.setMinimumWidth(560)
+        # 안내문이 여러 줄이라 좁으면 줄이 자꾸 접힌다 → 예전(560/620)보다 30% 넓게
+        self.setMinimumWidth(728)
         self.gauth = gauth
         self.settings = settings
         # 백업/복원·동기화는 파일을 되돌린 뒤 화면까지 다시 그려야 해서 메인 창이 맡는다
@@ -93,7 +94,8 @@ class SettingsDialog(QDialog):
         if parent is not None:
             _h = max(_h, parent.height())
             _h = min(_h, _avail.height() - 40)
-        self.resize(620, _h)
+        # 화면이 좁으면 창이 화면 밖으로 나가지 않게 거기서 멈춘다
+        self.resize(min(806, _avail.width() - 40), _h)
 
         # ---- 구글 연동 ----
         gb_g = QGroupBox("구글 연동")
