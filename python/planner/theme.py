@@ -41,39 +41,45 @@ LIGHT = {
     "chip4": "#DCD3F0",
 }
 
-# 다크: 남색빛을 빼고 더 어두운 차콜 계열로
+# 다크: 금융앱 톤 — 아주 어두운 청회색 바탕에 밝은 파랑으로 포인트를 주고
+# 글자는 흰색에 가깝게 올려 시인성을 확보한다.
+#
+# 예전 다크는 본문 글자가 #D4DAE1(패널 대비 10:1)이라 오래 보면 흐릿했다.
+# 지금은 #F2F4F6(15:1)까지 올리고, 대신 바탕을 더 내려(#0E1013) 눈부시지 않게 한다.
+# 색은 눈으로 고르지 않고 대비를 재서 맞췄다 — 본문 7:1, 나머지 글자 4.5:1,
+# 배경끼리도 1.12 이상 차이를 둬서 패널·입력칸·표머리가 서로 구분된다.
 DARK = {
-    "topbar": "#191C21",
-    "topbar_text": "#E4E9EF",
-    "window_bg": "#121417",     # 전체 배경(더 어둡게)
-    "panel_bg": "#1B1E23",      # 패널
-    "text": "#D4DAE1",
-    "subtext": "#8E98A3",
-    "accent": "#6FA8DC",
-    "border": "#2B2F36",
-    "header_bg": "#20242A",
-    "select_bg": "#2C3742",
-    "select_text": "#EAF1F8",
-    "btn_bg": "#23272D",
-    "btn_hover": "#2C3138",
-    "btn_pressed": "#363C44",
-    "input_bg": "#16181C",
-    "grid": "#282C32",
-    "tab_bg": "#1B1E23",
-    "today": "#9C5F22",       # 어두운 배경에서도 보이는 주황
-    "tomorrow": "#6E6224",    # 어두운 노랑
-    "row_text": "#F0F3F7",
-    "brief_bg": "#1B1E23",
-    "brief_text": "#D4DAE1",
-    "status_ok": "#7FD18B",
-    "status_bad": "#E88",
-    "scroll": "#333941",
-    "scroll_hover": "#434A54",
-    "chip_text": "#EAF1F8",
-    "chip1": "#31465C",
-    "chip2": "#33513A",
-    "chip3": "#5A4630",
-    "chip4": "#443A5E",
+    "topbar": "#1B1E24",
+    "topbar_text": "#F2F4F6",
+    "window_bg": "#0E1013",     # 가장 아래 바탕 (거의 검정)
+    "panel_bg": "#1B1E24",      # 그 위에 뜨는 패널·카드
+    "text": "#F2F4F6",          # 본문 (패널 대비 15:1)
+    "subtext": "#8B95A1",
+    "accent": "#4593FC",        # 포인트 파랑 — 포커스 테두리·선택·링크
+    "border": "#2C313A",
+    "header_bg": "#282D37",
+    "select_bg": "#1E3A5F",     # 선택은 회색이 아니라 파란 기가 돌게
+    "select_text": "#DCEBFF",
+    "btn_bg": "#242932",
+    "btn_hover": "#2E3540",
+    "btn_pressed": "#39414E",
+    "input_bg": "#101216",      # 입력칸은 패널보다 가라앉게
+    "grid": "#272C34",
+    "tab_bg": "#1B1E24",
+    "today": "#A05716",       # 흰 글자가 읽히는 선까지 낮춘 주황
+    "tomorrow": "#7A6A1E",    # 어두운 노랑
+    "row_text": "#FFFFFF",
+    "brief_bg": "#1B1E24",
+    "brief_text": "#F2F4F6",
+    "status_ok": "#2BC47D",
+    "status_bad": "#FF5A66",
+    "scroll": "#333A45",
+    "scroll_hover": "#454E5C",
+    "chip_text": "#F2F4F6",
+    "chip1": "#1E3A5F",
+    "chip2": "#1A4038",
+    "chip3": "#4A3620",
+    "chip4": "#332C50",
 }
 
 # 따뜻한 크림톤 — 가계부 앱 같은 부드러운 느낌 (오래 봐도 눈이 편하다)
@@ -373,14 +379,15 @@ def chip_colors() -> list:
 _STRONG = {
     False: {"blue": "#2C6FB5", "green": "#2E7D32", "red": "#C0392B",
             "orange": "#B4690E", "violet": "#6247D6", "gray": "#5A6B7C"},
-    True: {"blue": "#7FB3E8", "green": "#7FD18B", "red": "#FF8A9B",
-           "orange": "#E8A34A", "violet": "#9B8CFF", "gray": "#9AA7B4"},
+    # 다크는 어두운 바탕에 얹히므로 밝은 쪽으로 올린다(패널 대비 6:1 이상).
+    True: {"blue": "#5AA0FF", "green": "#3FD69A", "red": "#FF6B78",
+           "orange": "#FFB55C", "violet": "#A78BFA", "gray": "#A5AEBA"},
 }
 _STRONG_BG = {
     False: {"blue": "#DCEAF8", "green": "#DDF0DE", "red": "#FBE0DC",
             "orange": "#FAE8CE", "violet": "#E6E1FB", "gray": "#E4E9EF"},
-    True: {"blue": "#22384D", "green": "#20402A", "red": "#4A2830",
-           "orange": "#4A3620", "violet": "#332C50", "gray": "#2A2F36"},
+    True: {"blue": "#16324F", "green": "#123A2C", "red": "#40202A",
+           "orange": "#402C15", "violet": "#2C2545", "gray": "#262B33"},
 }
 
 
@@ -462,7 +469,10 @@ QPushButton {{
 }}
 QPushButton:hover {{ background: {p['btn_hover']}; }}
 QPushButton:pressed {{ background: {p['btn_pressed']}; }}
-QPushButton:default {{ border: 1px solid {p['accent']}; }}
+/* 기본 동작(저장·확인) 단추는 포인트색 테두리를 두껍게 — 어두운 화면에서
+   1px 은 거의 안 보였다. 안을 채우지 않는 이유: 밝은 파랑 위의 흰 글자는
+   대비가 3:1대로 떨어져 되레 읽기 나빠진다. */
+QPushButton:default {{ border: 2px solid {p['accent']}; padding: 4px 13px; }}
 QPushButton:disabled {{ color: {p['subtext']}; background: {p['panel_bg']}; }}
 QLineEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit, QTextEdit {{
     border: 1px solid {p['border']};
@@ -505,7 +515,14 @@ QTabBar::tab {{
     border-top-left-radius: 9px; border-top-right-radius: 9px;
     padding: 7px 18px; margin-right: 3px; color: {p['subtext']};
 }}
-QTabBar::tab:selected {{ background: {p['panel_bg']}; color: {p['text']}; border-bottom-color: {p['panel_bg']}; }}
+/* 고른 탭에 포인트색 띠를 얹는다 — 어느 탭에 있는지 글자색만으로는 약하다.
+   테마마다 자기 accent 를 쓰므로 밝은 테마에서도 어색하지 않다.
+   위쪽을 2px 로 키운 만큼 padding-top 을 1 줄여 글자가 안 밀리게 한다. */
+QTabBar::tab:selected {{
+    background: {p['panel_bg']}; color: {p['text']};
+    border-bottom-color: {p['panel_bg']};
+    border-top: 2px solid {p['accent']}; padding-top: 6px;
+}}
 QTableWidget {{
     border: 1px solid {p['border']};
     border-radius: 9px;

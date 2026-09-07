@@ -854,8 +854,16 @@ class MainWindow(QMainWindow):
             self._fit_cust_columns()
         return super().eventFilter(obj, ev)
 
-    # 진행현황 색상 (글자만 — 배경은 건드리지 않는다)
-    STATUS_COLORS = {"출고": "#2F6FD0", "발주": "#4FA45C", "취소": "#D23B3B"}
+    # 진행현황 색상 (글자만 — 배경은 건드리지 않는다).
+    # 색을 여기에 박아 두면 다크 화면에서 대비가 3.4:1 까지 떨어져 안 읽혔다.
+    # 테마가 들고 있는 강조색을 쓰면 밝은 화면·어두운 화면 각각에 맞는 밝기로 나온다.
+    STATUS_TONES = {"출고": "blue", "발주": "green", "취소": "red",
+                    "진행보류": "gray"}
+
+    def status_color(self, status: str) -> str:
+        """진행현황 글자색. 아는 상태가 아니면 빈 값(기본 글자색을 쓴다)."""
+        tone = self.STATUS_TONES.get((status or "").strip())
+        return theme.strong(tone) if tone else ""
 
     # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
     COL_STATUS = 6
@@ -1356,8 +1364,8 @@ class MainWindow(QMainWindow):
                 elif c in self.CENTER_COLS:
                     item.setTextAlignment(Qt.AlignCenter)
                 self.tbl_cust.setItem(r, c, item)
-            # 진행현황: 출고=파랑 / 발주=연초록 / 취소=빨강, 굵게 (글자만)
-            col = self.STATUS_COLORS.get(status.strip())
+            # 진행현황: 출고=파랑 / 발주=초록 / 취소=빨강 / 진행보류=회색, 굵게 (글자만)
+            col = self.status_color(status)
             if col:
                 cell = self.tbl_cust.item(r, self.COL_STATUS)
                 cell.setForeground(QColor(col))
