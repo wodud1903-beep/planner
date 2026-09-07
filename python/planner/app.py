@@ -33,79 +33,9 @@ def _activate_existing() -> bool:
         return True
     return False
 
-# 전역 스타일시트 — 델파이 스킨 'Tablet Light' 톤 (밝은 청회색 + 은은한 라운드)
-GLOBAL_QSS = """
-QWidget { font-family: 'Malgun Gothic'; color: #2C3E50; }
-QMainWindow, QWidget#central { background: #F5F7FA; }
-QPushButton {
-    background: #EAF1F8;
-    border: 1px solid #B4C6D8;
-    border-radius: 7px;
-    padding: 5px 14px;
-    color: #2C3E50;
-}
-QPushButton:hover { background: #DCE8F4; }
-QPushButton:pressed { background: #CCDDEE; }
-QPushButton:default { border: 1px solid #5B8FBF; }
-QPushButton:disabled { color: #9AA7B4; background: #EEF1F5; border-color: #D2DBE4; }
-QLineEdit, QComboBox, QSpinBox, QDateEdit, QTimeEdit, QTextEdit {
-    border: 1px solid #B4C6D8;
-    border-radius: 7px;
-    padding: 4px 8px;
-    background: #FFFFFF;
-    selection-background-color: #5B8FBF;
-    selection-color: #FFFFFF;
-}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
-QDateEdit:focus, QTimeEdit:focus, QTextEdit:focus { border: 1px solid #5B8FBF; }
-QGroupBox {
-    border: 1px solid #C6D3E0;
-    border-radius: 10px;
-    margin-top: 10px;
-    padding: 10px;
-    background: #FBFCFE;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 5px;
-    color: #46596B;
-    font-weight: bold;
-}
-QTabWidget::pane { border: 1px solid #C6D3E0; border-radius: 9px; top: -1px; background: #FFFFFF; }
-QTabBar::tab {
-    background: #DCE6F0;
-    border: 1px solid #C6D3E0;
-    border-top-left-radius: 9px;
-    border-top-right-radius: 9px;
-    padding: 7px 18px;
-    margin-right: 3px;
-    color: #46596B;
-}
-QTabBar::tab:selected { background: #FFFFFF; color: #2C3E50; border-bottom-color: #FFFFFF; }
-QTableWidget {
-    border: 1px solid #C6D3E0;
-    border-radius: 9px;
-    background: #FFFFFF;
-    gridline-color: #E3EAF1;
-    selection-background-color: #CFE0F4;
-    selection-color: #1A2A38;
-}
-QHeaderView::section {
-    background: #E4ECF4;
-    color: #46596B;
-    border: none;
-    border-right: 1px solid #D2DDE8;
-    border-bottom: 1px solid #C6D3E0;
-    padding: 6px;
-}
-QCheckBox { spacing: 6px; }
-QDialog, QMessageBox { background: #F5F7FA; }
-QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: #B8C9DA; border-radius: 5px; min-height: 24px; }
-QScrollBar::handle:vertical:hover { background: #9FB4C8; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-"""
+# 화면 색은 theme.py 한 곳에서만 만든다(theme.apply_to_app).
+# 예전에는 여기에도 스타일시트가 한 벌 있었는데, 쓰이지 않으면서 옛 색만
+# 남아 있어 고칠 때 헷갈렸다. 지웠다.
 
 
 class _NoWheelOnCombo(QObject):

@@ -409,11 +409,11 @@ class SettingsDialog(QDialog):
     def _update_gstatus(self):
         if self.gauth.is_connected():
             self.lbl_gstatus.setText("구글: 연결됨")
-            self.lbl_gstatus.setStyleSheet("color:green;")
+            self.lbl_gstatus.setStyleSheet(f"color:{theme.c('status_ok')};")
             self.btn_login.setText("Google 로그아웃")
         else:
             self.lbl_gstatus.setText("구글: 로그인 필요")
-            self.lbl_gstatus.setStyleSheet("color:#c00;")
+            self.lbl_gstatus.setStyleSheet(f"color:{theme.c('status_bad')};")
             self.btn_login.setText("Google 로그인")
 
     def _on_login_click(self):

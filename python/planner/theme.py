@@ -377,15 +377,17 @@ def chip_colors() -> list:
 # 브리핑처럼 '한눈에 들어와야 하는' 화면에서 쓰는 진한 강조색.
 # 팔레트마다 따로 두면 5벌을 관리해야 해서, 밝은/어두운 두 벌만 둔다.
 _STRONG = {
+    # 밝은 테마: 주황만 한 단계 낮췄다 — 배지 위에서 3.5:1 밖에 안 나왔다
     False: {"blue": "#2C6FB5", "green": "#2E7D32", "red": "#C0392B",
-            "orange": "#B4690E", "violet": "#6247D6", "gray": "#5A6B7C"},
+            "orange": "#A35F0D", "violet": "#6247D6", "gray": "#5A6B7C"},
     # 다크는 어두운 바탕에 얹히므로 밝은 쪽으로 올린다(패널 대비 6:1 이상).
     True: {"blue": "#5AA0FF", "green": "#3FD69A", "red": "#FF6B78",
            "orange": "#FFB55C", "violet": "#A78BFA", "gray": "#A5AEBA"},
 }
 _STRONG_BG = {
-    False: {"blue": "#DCEAF8", "green": "#DDF0DE", "red": "#FBE0DC",
-            "orange": "#FAE8CE", "violet": "#E6E1FB", "gray": "#E4E9EF"},
+    # 배지를 조금 밝혀 그 위의 글자가 4.5:1 을 넘게 했다(예전엔 3.5~4.5)
+    False: {"blue": "#EBF3FB", "green": "#EBF6EC", "red": "#FCE8E5",
+            "orange": "#FDF5EA", "violet": "#E6E1FB", "gray": "#E7ECF1"},
     True: {"blue": "#16324F", "green": "#123A2C", "red": "#40202A",
            "orange": "#402C15", "violet": "#2C2545", "gray": "#262B33"},
 }
@@ -399,6 +401,28 @@ def strong(name: str) -> str:
 def strong_bg(name: str) -> str:
     """강조색과 짝이 되는 옅은 배경색 (건수 배지 등)."""
     return _STRONG_BG[_is_dark].get(name, c("panel_bg"))
+
+
+# 색을 가득 채운 단추(멘트복사의 [상담후]·[부재중] 등)에 쓰는 바탕색.
+#
+# strong() 을 그대로 못 쓴다 — strong() 은 '패널 위에 얹는 글자색' 이라 밝은데,
+# 그 위에 흰 글자를 올리면 3:1 대로 떨어져 안 읽힌다. 채움색은 반대로 **충분히
+# 진해야** 한다. 그래서 테마별로 나누지 않고 한 벌만 둔다 — 9가지 테마 모두에서
+# 흰 글자 4.5:1 이상, 패널과도 3:1 이상 떨어지는 값으로 골랐다.
+# 빨강·보라는 넣지 않았다. 두 조건(흰 글자 4.5 / 어두운 패널과 3.0)을 같이
+# 만족하는 폭이 4.50 언저리로 아주 좁아, 조금만 손봐도 깨진다. 지금 쓰는 곳도
+# 없다. 필요해지면 그때 그 화면의 바탕에 맞춰 고르는 편이 안전하다.
+_FILL = {"blue": "#2563EB", "teal": "#0F766E", "green": "#15803D"}
+_FILL_HOVER = {"blue": "#1D4ED8", "teal": "#0B6E66", "green": "#146B33"}
+
+
+def fill(name: str) -> str:
+    """색을 채운 단추의 바탕색 (그 위에는 흰 글자를 올린다)."""
+    return _FILL.get(name, c("accent"))
+
+
+def fill_hover(name: str) -> str:
+    return _FILL_HOVER.get(name, c("btn_hover"))
 
 
 def c(key: str) -> str:

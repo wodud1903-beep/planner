@@ -1272,12 +1272,13 @@ class MainWindow(QMainWindow):
         self._show_summary(summary)
         self.refresh_customers()
 
-    # 상단 현황 항목별 강조색 (없는 항목은 기본 강조색)
-    SUMMARY_COLORS = {
-        "발주": "#E08A1E",        # 주황 — 진행 중
-        "가망고객": "#7B58C4",     # 보라 — 잠재
-        "지난달출고": "#4A7FB5",   # 파랑 — 지난 실적
-        "이번달출고": "#2E9E5B",   # 초록 — 이번 실적
+    # 상단 현황 항목별 강조색. 색을 여기 박아 두면 테마를 못 따라가 밝은 화면에서
+    # 2.5:1(발주·만기)까지 떨어졌다. 브리핑과 같은 색 이름을 쓴다.
+    SUMMARY_TONES = {
+        "발주": "orange",        # 진행 중
+        "가망고객": "violet",     # 잠재
+        "지난달출고": "blue",     # 지난 실적
+        "이번달출고": "green",    # 이번 실적
     }
 
     def _show_summary(self, summary):
@@ -1289,7 +1290,8 @@ class MainWindow(QMainWindow):
         self._summary_data = list(summary or [])
         parts = []
         for label, value in (summary or []):
-            col = self.SUMMARY_COLORS.get(label.strip(), theme.c("accent"))
+            tone = self.SUMMARY_TONES.get(label.strip())
+            col = theme.strong(tone) if tone else theme.c("accent")
             parts.append(
                 f"<span style='color:{theme.c('subtext')};'>{label}</span>"
                 f"&nbsp;<span style='color:{col};font-size:15px;"
@@ -1795,10 +1797,10 @@ class MainWindow(QMainWindow):
     def update_google_status(self):
         if self.gauth.is_connected():
             self.lbl_status.setText("구글: 연결됨  (설정에서 로그인/로그아웃)")
-            self.lbl_status.setStyleSheet("color:green;")
+            self.lbl_status.setStyleSheet(f"color:{theme.c('status_ok')};")
         else:
             self.lbl_status.setText("구글: 로그인 필요  ([설정] → Google 로그인)")
-            self.lbl_status.setStyleSheet("color:#c00;")
+            self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
 
     def _on_autofetch_toggled(self, on: bool):
         self.settings.auto_fetch = on
@@ -1952,7 +1954,7 @@ class MainWindow(QMainWindow):
         if not self.gauth.is_connected():
             msg = "연결이 끊겼습니다 — [설정] → Google 로그인"
         self.lbl_status.setText("구글: " + msg)
-        self.lbl_status.setStyleSheet("color:#c00;")
+        self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
 
     def _rename_old_followups(self):
         """예전 '[팔로업] …' 제목을 '[출고 1개월] 홍길동' 으로 바꾼다.

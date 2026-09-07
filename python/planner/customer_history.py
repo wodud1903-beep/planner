@@ -54,9 +54,11 @@ def _auto_events(cr, ment_sent: bool) -> list[tuple]:
 class CustomerHistoryDialog(QDialog):
     """고객 한 명의 이력 + 메모."""
 
-    CAT_COLORS = {
-        "계약": "#7B58C4", "출고": "#2E9E5B", "안내": "#4A7FB5",
-        "만기": "#E08A1E", "메모": None,       # 메모는 기본색
+    # 이력 종류별 색. 브리핑·상단 현황과 같은 색 이름을 써서 테마를 따라간다.
+    # (색을 박아 두면 밝은 화면에서 '만기' 가 2.5:1 까지 떨어져 안 읽혔다)
+    CAT_TONES = {
+        "계약": "violet", "출고": "green", "안내": "blue",
+        "만기": "orange", "메모": None,       # 메모는 기본색
     }
 
     def __init__(self, cr, notes: list, ment_sent: bool, parent=None,
@@ -134,10 +136,10 @@ class CustomerHistoryDialog(QDialog):
             d, cat, text = it[0], it[1], it[2]
             when = d.strftime("%Y-%m-%d") if d else "날짜 미상"
             li = QListWidgetItem(f"{when}   [{cat}]  {text}")
-            col = self.CAT_COLORS.get(cat)
-            if col:
+            tone = self.CAT_TONES.get(cat)
+            if tone:
                 from PySide6.QtGui import QColor
-                li.setForeground(QColor(col))
+                li.setForeground(QColor(theme.strong(tone)))
             # 메모만 삭제 대상 — 자동 이력은 지울 수 없다
             li.setData(Qt.UserRole, it[3] if cat == "메모" else None)
             self.lst.addItem(li)

@@ -17,37 +17,44 @@ from PySide6.QtWidgets import (
 
 from . import config, greetings, theme
 
-# 원본 도구와 같은 색 — 파랑 = 상담후, 청록 = 부재중, 초록 = 복사됨
-COL_AFTER = "#2563EB"
-COL_AFTER_H = "#1D4ED8"
-COL_MISS = "#0D9488"
-COL_MISS_H = "#0F766E"
-COL_OK = "#16A34A"
+# 파랑 = 상담후, 청록 = 부재중, 초록 = 복사됨.
+# 색을 여기 박아 두면 흰 글자가 안 읽힌다 — 예전 값은 부재중 3.74:1,
+# 복사됨 3.30:1 로 아홉 테마 **전부에서** 기준(4.5:1) 미달이었다.
+# theme.fill() 은 그 조건을 만족하도록 고른 값이다.
+TONE_AFTER = "blue"
+TONE_MISS = "teal"
+TONE_OK = "green"
 
 COLS = 2                  # 한 줄에 카드 몇 개
 _FLASH_MS = 1200
 
 
-def _btn_css(base: str, hover: str) -> str:
-    return (f"QPushButton{{background:{base};color:#FFFFFF;border:none;"
+def _btn_css(tone: str) -> str:
+    return (f"QPushButton{{background:{theme.fill(tone)};color:#FFFFFF;border:none;"
             f"border-radius:10px;padding:10px 8px;font-size:14px;font-weight:bold;}}"
-            f"QPushButton:hover{{background:{hover};}}")
+            f"QPushButton:hover{{background:{theme.fill_hover(tone)};}}"
+            f"QPushButton:disabled{{background:{theme.c('btn_bg')};"
+            f"color:{theme.c('subtext')};}}")
 
 
 class _CopyButton(QPushButton):
     """누르면 문구를 복사하고 잠깐 '복사됨' 으로 바뀌는 버튼."""
 
-    def __init__(self, label: str, base: str, hover: str, parent=None):
+    def __init__(self, label: str, tone: str, parent=None):
         super().__init__(label, parent)
         self._label = label
-        self._base, self._hover = base, hover
+        self._tone = tone
         self._text = ""
         self.setMinimumHeight(46)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet(_btn_css(base, hover))
+        self.setStyleSheet(_btn_css(tone))
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._restore)
+
+    def apply_theme(self) -> None:
+        """테마를 바꾸면 단추 색도 따라간다."""
+        self.setStyleSheet(_btn_css(self._tone))
 
     def set_message(self, text: str) -> None:
         self._text = text or ""
@@ -56,12 +63,12 @@ class _CopyButton(QPushButton):
 
     def flash(self) -> None:
         self.setText("복사됨 ✓")
-        self.setStyleSheet(_btn_css(COL_OK, COL_OK))
+        self.setStyleSheet(_btn_css(TONE_OK))
         self._timer.start(_FLASH_MS)
 
     def _restore(self) -> None:
         self.setText(self._label)
-        self.setStyleSheet(_btn_css(self._base, self._hover))
+        self.setStyleSheet(_btn_css(self._tone))
 
     @property
     def message(self) -> str:
@@ -83,8 +90,8 @@ class _ChannelCard(QFrame):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.btn_after = _CopyButton("상담후", COL_AFTER, COL_AFTER_H)
-        self.btn_miss = _CopyButton("부재중", COL_MISS, COL_MISS_H)
+        self.btn_after = _CopyButton("상담후", TONE_AFTER)
+        self.btn_miss = _CopyButton("부재중", TONE_MISS)
         for b, state in ((self.btn_after, "상담후"), (self.btn_miss, "부재중")):
             b.clicked.connect(lambda _c=False, bb=b, st=state: on_copy(self, bb, st))
             row.addWidget(b, 1)
@@ -105,6 +112,9 @@ class _ChannelCard(QFrame):
         self.lbl.setStyleSheet(
             f"color:{theme.c('text')};font-size:15px;font-weight:bold;"
             "background:transparent;border:none;")
+        # 단추 색도 함께 — 카드만 바꾸면 안 눌린 단추가 예전 색으로 남는다
+        self.btn_after.apply_theme()
+        self.btn_miss.apply_theme()
 
 
 class GreetingEditDialog(QDialog):

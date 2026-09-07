@@ -68,10 +68,11 @@ class EventCalendar(QCalendarWidget):
 
         # 날짜 숫자 (일요일·공휴일(대체공휴일 포함)=빨강, 토=파랑)
         dow = qd.dayOfWeek()  # 1=월 .. 7=일
+        # 색을 박아 두면 테마를 못 따라간다 — 다크에서 3.6:1 까지 떨어졌었다
         if dow == 7 or holiday.is_holiday(d):
-            numcol = QColor("#D24B4B")
+            numcol = QColor(theme.strong("red"))
         elif dow == 6:
-            numcol = QColor("#3D74C7")
+            numcol = QColor(theme.strong("blue"))
         else:
             numcol = QColor(theme.c("text"))
         if not in_month:
