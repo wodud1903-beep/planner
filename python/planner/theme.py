@@ -44,37 +44,40 @@ LIGHT = {
 # 다크: 금융앱 톤 — 아주 어두운 청회색 바탕에 밝은 파랑으로 포인트를 주고
 # 글자는 흰색에 가깝게 올려 시인성을 확보한다.
 #
-# 예전 다크는 본문 글자가 #D4DAE1(패널 대비 10:1)이라 오래 보면 흐릿했다.
-# 지금은 #F2F4F6(15:1)까지 올리고, 대신 바탕을 더 내려(#0E1013) 눈부시지 않게 한다.
-# 색은 눈으로 고르지 않고 대비를 재서 맞췄다 — 본문 7:1, 나머지 글자 4.5:1,
-# 배경끼리도 1.12 이상 차이를 둬서 패널·입력칸·표머리가 서로 구분된다.
+# 어둡기 기준은 **브리핑 팝업의 글 영역**(#101216)이다. 그 칸이 가장 편하다는
+# 말씀에 맞춰 앱 전체 패널을 같은 값으로 내렸다.
+#
+# 이 정도로 어두워지면 배경끼리의 밝기 차가 물리적으로 압축된다(#101216 과
+# 1.12 차이를 내려면 바탕이 순검정이어야 한다). 그래서 면 구분은 밝기 대신
+# **테두리**가 맡는다 — border 를 패널 대비 1.33 으로 올려 두었다.
+# 글자 대비는 그대로 본문 7:1, 나머지 4.5:1 을 지킨다.
 DARK = {
-    "topbar": "#1B1E24",
+    "topbar": "#101216",
     "topbar_text": "#F2F4F6",
-    "window_bg": "#0E1013",     # 가장 아래 바탕 (거의 검정)
-    "panel_bg": "#1B1E24",      # 그 위에 뜨는 패널·카드
-    "text": "#F2F4F6",          # 본문 (패널 대비 15:1)
+    "window_bg": "#050608",     # 가장 아래 바탕 (거의 검정)
+    "panel_bg": "#101216",      # 브리핑 글 영역과 같은 어둡기
+    "text": "#F2F4F6",          # 본문 (패널 대비 17:1)
     "subtext": "#8B95A1",
     "accent": "#4593FC",        # 포인트 파랑 — 포커스 테두리·선택·링크
-    "border": "#2C313A",
-    "header_bg": "#282D37",
+    "border": "#262C35",        # 면을 가르는 몫이 커져 한 단계 밝게
+    "header_bg": "#1C2129",
     "select_bg": "#1E3A5F",     # 선택은 회색이 아니라 파란 기가 돌게
     "select_text": "#DCEBFF",
-    "btn_bg": "#242932",
-    "btn_hover": "#2E3540",
-    "btn_pressed": "#39414E",
-    "input_bg": "#101216",      # 입력칸은 패널보다 가라앉게
-    "grid": "#272C34",
-    "tab_bg": "#1B1E24",
+    "btn_bg": "#1C2028",
+    "btn_hover": "#262C35",
+    "btn_pressed": "#313842",
+    "input_bg": "#050608",      # 입력칸은 패널보다 더 가라앉게
+    "grid": "#1D2128",
+    "tab_bg": "#101216",
     "today": "#A05716",       # 흰 글자가 읽히는 선까지 낮춘 주황
     "tomorrow": "#7A6A1E",    # 어두운 노랑
     "row_text": "#FFFFFF",
-    "brief_bg": "#1B1E24",
+    "brief_bg": "#101216",
     "brief_text": "#F2F4F6",
     "status_ok": "#2BC47D",
     "status_bad": "#FF5A66",
-    "scroll": "#333A45",
-    "scroll_hover": "#454E5C",
+    "scroll": "#2A3038",
+    "scroll_hover": "#3A424D",
     "chip_text": "#F2F4F6",
     "chip1": "#1E3A5F",
     "chip2": "#1A4038",
@@ -482,7 +485,9 @@ def apply_to_app(app) -> None:
 def qss() -> str:
     p = _current
     return f"""
-QWidget {{ font-family: 'Malgun Gothic'; color: {p['text']}; }}
+/* 기본 글자를 굵게 — 맑은 고딕은 Regular 와 Bold 두 벌뿐이라 600 이상이어야
+   실제로 Bold 로 그려진다. 어두운 화면에서 가는 획이 번져 보이던 것이 걷힌다. */
+QWidget {{ font-family: 'Malgun Gothic'; font-weight: 600; color: {p['text']}; }}
 QMainWindow, QWidget#central {{ background: {p['window_bg']}; }}
 QPushButton {{
     background: {p['btn_bg']};

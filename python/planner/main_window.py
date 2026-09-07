@@ -343,19 +343,6 @@ class MainWindow(QMainWindow):
         StartupDialog.show_for(self.build_briefing_html(), self.build_briefing(),
                                rows, date.today(), self)
 
-    def show_weekly(self):
-        """주간 요약 창을 연다 (트레이 메뉴·버튼에서도 부른다)."""
-        if not self.sheet_rows:
-            QMessageBox.information(
-                self, config.APP_NAME,
-                "주간 요약은 고객관리 시트를 읽어 만듭니다.\n"
-                "[고객관리] 탭에서 [불러오기] 를 먼저 눌러 주세요.")
-            return
-        from .weekly_dialog import WeeklyDialog
-        # 만기 예정은 브리핑 설정(코앞의 건만)과 달리 몇 달 앞까지 본다
-        WeeklyDialog.show_for(self.sheet_rows, date.today(),
-                              weekly.EXPIRY_MONTHS, self)
-
     def _on_hotkey(self):
         self.show_window()
 
@@ -728,6 +715,14 @@ class MainWindow(QMainWindow):
         self.btn_fetch = QPushButton("새로고침")
         self.btn_fetch.clicked.connect(self.fetch_all_async)
         row.addWidget(self.btn_fetch)
+        # 켤 때 뜨는 그 화면(오늘 브리핑 + 주간 요약)을 언제든 다시 연다.
+        # 예전엔 브리핑은 트레이에, 주간 요약은 고객관리 탭에 따로 있어서
+        # 같은 내용을 두 군데서 찾아야 했다.
+        self.btn_weekly = QPushButton("주간 요약")
+        self.btn_weekly.setToolTip(
+            "오늘 브리핑과 이번 주 요약을 한 화면으로 — 켤 때 나오는 그 화면입니다")
+        self.btn_weekly.clicked.connect(self.show_startup_screen)
+        row.addWidget(self.btn_weekly)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         row.addStretch()
@@ -807,10 +802,8 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
-        self.btn_weekly = QPushButton("주간 요약")
-        self.btn_weekly.setToolTip("이번 주 계약·출고·수수료와 다음 주 예정을 한 장으로")
-        self.btn_weekly.clicked.connect(self.show_weekly)
-        row.addWidget(self.btn_weekly)
+        # [주간 요약] 은 [일정 / 할일] 탭의 [새로고침] 옆으로 옮겼다.
+        # 브리핑과 한 화면이 되었으니 하루를 여는 자리에 있는 편이 맞다.
         row.addStretch()
         row.addWidget(QLabel("검색:"))
         self.ed_cust_find = QLineEdit()
@@ -1774,8 +1767,8 @@ class MainWindow(QMainWindow):
         acts = [
             ("창 열기", self.show_window),
             ("캘린더 열기", self.open_calendar),
-            ("오늘 브리핑", lambda: self.show_briefing(manual=True)),
-            ("주간 요약", self.show_weekly),
+            # 브리핑과 주간 요약이 한 화면이 되어 메뉴도 한 줄로 합쳤다
+            ("주간 요약", self.show_startup_screen),
             ("지금 백업", lambda: self._backup(manual=True)),
             ("업데이트 확인", lambda: self.check_update(manual=True)),
             (None, None),
@@ -2960,9 +2953,9 @@ class MainWindow(QMainWindow):
         out.append("</div>")
         return "".join(out)
 
-    def show_briefing(self, manual: bool):
-        alarm_window.popup("오늘 브리핑", self.build_briefing(), 0, siren=False,
-                           html=self.build_briefing_html())
+    # 브리핑만 따로 띄우던 알람 팝업(show_briefing)은 없앴다.
+    # 주간 요약과 한 화면(show_startup_screen)이 되어 부르는 곳이 없어졌다.
+    # 만드는 쪽(build_briefing / build_briefing_html)은 그 화면이 그대로 쓴다.
 
     # ------------------------------------------------------------ 백업
     def _backup(self, manual: bool):

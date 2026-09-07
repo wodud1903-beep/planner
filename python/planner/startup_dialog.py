@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
@@ -49,18 +49,23 @@ class StartupDialog(QDialog):
         root.addWidget(self.split, 1)
 
         self.txt_brief = self._pane("오늘 브리핑", brief_html)
-        if self._show_weekly:
-            self.txt_weekly = self._pane(
-                "주간 요약", weekly.to_html(self._rows, today))
-            self.split.setSizes([520, 520] if wide else [420, 420])
-        else:
-            # 시트를 아직 못 읽었다 — 주간 요약은 만들 수 없으니 이유를 적어 둔다
-            self.txt_weekly = self._pane(
-                "주간 요약",
-                f"<p style='color:{theme.c('subtext')};'>"
-                "고객관리 시트를 읽은 뒤에 만들어집니다.<br>"
-                "[고객관리] 탭에서 [불러오기] 를 누른 다음 "
-                "[주간 요약] 버튼으로 보실 수 있습니다.</p>")
+        # 주간 요약 쪽에는 주를 오갈 수 있는 줄을 얹는다
+        self._offset = 0                  # 0=이번 주, -1=지난 주 …
+        nav = QHBoxLayout()
+        nav.setContentsMargins(0, 0, 0, 0)
+        self.btn_prev = QPushButton("← 지난 주")
+        self.btn_prev.clicked.connect(lambda: self._move(-1))
+        self.btn_next = QPushButton("다음 주 →")
+        self.btn_next.clicked.connect(lambda: self._move(+1))
+        self.lbl_week = QLabel("")
+        self.lbl_week.setStyleSheet(f"color:{theme.c('subtext')};font-weight:bold;")
+        nav.addWidget(self.btn_prev)
+        nav.addWidget(self.lbl_week, 1)
+        nav.addWidget(self.btn_next)
+        self.txt_weekly = self._pane("주간 요약", "", extra=nav)
+        for b in (self.btn_prev, self.btn_next):
+            b.setEnabled(self._show_weekly)
+        self.split.setSizes([520, 520] if wide else [420, 420])
 
         row = QHBoxLayout()
         self.btn_copy_brief = QPushButton("브리핑 복사")
@@ -83,9 +88,11 @@ class StartupDialog(QDialog):
         row.addWidget(btn_ok)
         root.addLayout(row)
 
+        # 내용 채우기는 맨 마지막에 — _render_weekly 가 lbl_status 를 건드린다
+        self._render_weekly()
         self.resize(1180 if wide else 700, 820)
 
-    def _pane(self, title: str, html: str) -> QTextBrowser:
+    def _pane(self, title: str, html: str, extra=None) -> QTextBrowser:
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 0, 0, 0)
@@ -94,6 +101,8 @@ class StartupDialog(QDialog):
         cap.setStyleSheet(
             f"color:{theme.c('subtext')};font-weight:bold;padding:2px 4px;")
         v.addWidget(cap)
+        if extra is not None:
+            v.addLayout(extra)
         txt = QTextBrowser()
         txt.setOpenExternalLinks(True)
         txt.setHtml(html)
@@ -101,9 +110,36 @@ class StartupDialog(QDialog):
         self.split.addWidget(box)
         return txt
 
+    # ---- 주 이동 ----
+    def _base(self) -> date:
+        """지금 보고 있는 주 안의 아무 날."""
+        return self._today + timedelta(days=7 * self._offset)
+
+    def _move(self, step: int) -> None:
+        # 앞으로는 다음 주까지만. 그 뒤는 아직 아무 일도 안 일어나 빈 화면이다.
+        self._offset = max(-52, min(1, self._offset + step))
+        self._render_weekly()
+
+    def _render_weekly(self) -> None:
+        if not self._show_weekly:
+            # 시트를 아직 못 읽었다 — 주간 요약은 만들 수 없으니 이유를 적어 둔다
+            self.txt_weekly.setHtml(
+                f"<p style='color:{theme.c('subtext')};'>"
+                "고객관리 시트를 읽은 뒤에 만들어집니다.<br>"
+                "[고객관리] 탭에서 [불러오기] 를 눌러 주세요.</p>")
+            self.lbl_week.setText("")
+            return
+        base = self._base()
+        self.txt_weekly.setHtml(weekly.to_html(self._rows, base))
+        mon, sun = weekly.week_range(base)
+        tag = {0: " (이번 주)", -1: " (지난 주)", 1: " (다음 주)"}.get(self._offset, "")
+        self.lbl_week.setText(f"{mon:%Y-%m-%d} ~ {sun:%m-%d}{tag}")
+        self.btn_next.setEnabled(self._offset < 1)
+        self.lbl_status.setText("")
+
     # ---- 내보내기 ----
     def _weekly_text(self) -> str:
-        return weekly.to_text(self._rows, self._today)
+        return weekly.to_text(self._rows, self._base())
 
     def _copy_brief(self):
         QGuiApplication.clipboard().setText(self._brief_text)
@@ -115,7 +151,7 @@ class StartupDialog(QDialog):
 
     def _save_weekly(self):
         path, _f = QFileDialog.getSaveFileName(
-            self, "주간 요약 저장", weekly.file_name(self._today),
+            self, "주간 요약 저장", weekly.file_name(self._base()),
             "텍스트 파일 (*.txt)")
         if not path:
             return

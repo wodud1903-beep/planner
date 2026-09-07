@@ -79,8 +79,12 @@ def main() -> int:
     # 트레이로 최소화해도 프로세스가 살아있게
     app.setQuitOnLastWindowClosed(False)
 
-    # 한글 친화 폰트 (없으면 시스템 기본)
-    app.setFont(QFont("Malgun Gothic", 10))
+    # 한글 친화 폰트 (없으면 시스템 기본).
+    # 굵게 — 스타일시트가 닿지 않는 곳(기본 대화상자·툴팁·표 안 글자 등)도
+    # 같은 두께로 나오게 여기서도 함께 지정한다.
+    _font = QFont("Malgun Gothic", 10)
+    _font.setWeight(QFont.DemiBold)
+    app.setFont(_font)
     # 드롭다운은 휠로 바뀌지 않게 (앱 전체에 적용)
     _nowheel = _NoWheelOnCombo(app)
     app.installEventFilter(_nowheel)
