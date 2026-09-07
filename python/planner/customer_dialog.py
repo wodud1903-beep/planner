@@ -182,14 +182,21 @@ class CustomerDialog(QDialog):
     #    저장하기만 해도 오늘 날짜로 채워진다.
     NEW_DATE_UNSET = {"contract_date": False, "deliver_date": True}
 
+    # 이 창은 하루에도 여러 번 채워 넣는 화면이라 글자를 앱 기본(10pt)보다 키운다
+    FONT_PT = 12
+
     def __init__(self, caption: str, values: dict, choices: dict,
-                 ment: str = "", parent=None, terms_list: list | None = None):
+                 ment: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle(caption)
-        self.resize(600, 760)
+        self.resize(680, 820)
+        # 라벨·입력칸·드롭다운을 한꺼번에 키운다(창 전체에 걸어 두면 스크롤 안쪽
+        # 위젯까지 따라온다). 단추는 기본 크기를 그대로 둔다.
+        self.setStyleSheet(
+            f"QLabel, QLineEdit, QComboBox, QTextEdit, QDateEdit, QCheckBox,"
+            f" QSpinBox {{ font-size: {self.FONT_PT}pt; }}")
         self.widgets: dict = {}
         self._ment = ment or ""
-        self._terms_list = list(terms_list or [])   # 미리 적어 둔 계약조건(전부)
         # 값이 하나도 안 넘어오면 '고객 등록' 이다
         self._is_new = not (values or {})
 
@@ -268,25 +275,8 @@ class CustomerDialog(QDialog):
                 w.setPlainText(cur)
                 # Tab 으로 다음 입력창으로 넘어가게 (기본은 Tab 문자가 입력됨)
                 w.setTabChangesFocus(True)
-                if key == "terms":
-                    # 미리 적어 둔 계약조건을 골라 넣을 수 있게.
-                    # 금융사별로 나누지 않는다 — 금융사를 고르기 전에는 목록이
-                    # 비어 있었고, 같은 조건을 여러 금융사에 쓰는데도 그 금융사
-                    # 이름으로 또 적어 둬야 보였다.
-                    holder = QWidget()
-                    vl = QVBoxLayout(holder)
-                    vl.setContentsMargins(0, 0, 0, 0)
-                    vl.setSpacing(3)
-                    self.cmb_terms = QComboBox()
-                    self.cmb_terms.setToolTip(
-                        "설정에 적어 둔 계약조건 — 골라서 아래 칸에 넣습니다")
-                    searchcombo.install(self.cmb_terms)
-                    self.cmb_terms.activated.connect(self._pick_terms)
-                    vl.addWidget(self.cmb_terms)
-                    vl.addWidget(w)
-                    form.addRow(label, holder)
-                else:
-                    form.addRow(label, w)
+                # 계약조건도 그냥 손으로 적는다 — '골라서 넣기' 드롭다운은 뺐다
+                form.addRow(label, w)
             else:
                 w = QLineEdit()
                 w.setText(cur)
@@ -295,10 +285,6 @@ class CustomerDialog(QDialog):
 
         scroll.setWidget(inner)
         root.addWidget(scroll, 1)
-
-        # 계약조건 후보는 금융사와 무관하게 처음부터 전부 올려 둔다
-        if hasattr(self, "cmb_terms"):
-            self._fill_terms()
 
         # 미니계산기에 차량가격·차종을 물려 준다 (칸이 바뀌면 즉시 다시 계산)
         if hasattr(self, "inc_box"):
@@ -335,28 +321,6 @@ class CustomerDialog(QDialog):
         row.addWidget(cancel)
         root.addLayout(row)
 
-    def _fill_terms(self):
-        """미리 적어 둔 계약조건을 전부 목록에 올린다(금융사와 무관하게)."""
-        items = self._terms_list
-        self.cmb_terms.blockSignals(True)
-        self.cmb_terms.clear()
-        if items:
-            self.cmb_terms.addItem(f"↓ 계약조건 {len(items)}개 — 골라서 넣기")
-            for t in items:
-                self.cmb_terms.addItem(t)
-            self.cmb_terms.setEnabled(True)
-        else:
-            self.cmb_terms.addItem("(설정 → '자주 쓴 계약조건' 에 미리 적어 두세요)")
-            self.cmb_terms.setEnabled(False)
-        self.cmb_terms.setCurrentIndex(0)
-        self.cmb_terms.blockSignals(False)
-
-    def _pick_terms(self, idx: int):
-        if idx <= 0:
-            return
-        w, _k = self.widgets["terms"]
-        w.setPlainText(self.cmb_terms.itemText(idx))
-        self.cmb_terms.setCurrentIndex(0)
 
     def _apply_incentive(self, amount: str):
         """미니계산기의 [적용] — 대리점 수당 칸에 넣는다."""
@@ -409,9 +373,9 @@ class CustomerDialog(QDialog):
 
     @classmethod
     def run(cls, caption: str, values: dict, choices: dict, ment: str = "",
-            parent=None, terms_list: list | None = None):
+            parent=None):
         """반환: (값 dict, 새 이미지 bytes, 기존 이미지 지움 여부) 또는 None(취소)."""
-        d = cls(caption, values, choices, ment, parent, terms_list)
+        d = cls(caption, values, choices, ment, parent)
         if d.exec() != QDialog.Accepted:
             return None
         return d.values(), d.new_image(), d.doc_cleared()

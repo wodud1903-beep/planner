@@ -42,7 +42,7 @@ from .icon import make_icon
 from .models import (
     AppSettings, PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
 )
-from .settings_dialog import SettingsDialog, load_terms_presets
+from .settings_dialog import SettingsDialog
 
 # ---------------------------------------------------------------------------
 # 낙관적 UI (즉시 반영)
@@ -144,7 +144,7 @@ class MainWindow(QMainWindow):
     # 창을 이보다 좁히지는 못하게 한다. 고객관리 표의 열 폭 합(약 996)보다는
     # 좁아도 되지만(가로 스크롤이 생길 뿐), 여기서 더 줄이면 어느 탭이든
     # 버튼 줄이 서로 겹쳐 못 쓰게 된다.
-    MIN_WIDTH = 860
+    MIN_WIDTH = 960
     # 창 폭 기억 — 이 PC 에만 둔다. plan_cfg.json 은 다른 PC 로 동기화되는데,
     # 모니터가 작은 PC 가 화면에 맞춰 줄인 폭이 큰 모니터 PC 로 넘어가면
     # 켤 때마다 서로 창을 좁히게 된다.
@@ -161,8 +161,11 @@ class MainWindow(QMainWindow):
         # 최대화 버튼은 계속 감춘다 — 최대화는 세로까지 바꾸려 든다.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
         _avail = QGuiApplication.primaryScreen().availableGeometry()
-        # 고객관리 표(수수료·견적서 포함)가 가로 스크롤 없이 들어가는 폭
-        _w = min(1120, _avail.width() - 20)
+        # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭.
+        # 열을 두 개 늘리고 글씨를 키웠으므로 1280 으로는 '내용' 에 80px 밖에
+        # 안 남는다. 1400 이면 내용이 200px 쯤 되어 첫 줄이 읽힌다. 화면이
+        # 좁으면 어차피 아래 min 이 화면 폭으로 깎으므로 작은 노트북도 안전하다.
+        _w = min(1400, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
         self.setFixedHeight(_h)
         _lo, _hi = self._width_bounds(_avail)
@@ -212,7 +215,6 @@ class MainWindow(QMainWindow):
         self._sheet_header_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
         self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
-        self._terms_list: list = []      # 미리 적어 둔 계약조건(전부)
         self._sheet_loaded = False       # 첫 시트 로딩 완료 여부(브리핑 대기용)
         self._fired_cal_alarms: set = set()   # (일정, 분) — 중복 알람 방지
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
@@ -790,11 +792,11 @@ class MainWindow(QMainWindow):
         self.btn_cust_load = QPushButton("불러오기")
         self.btn_cust_load.clicked.connect(lambda: self.load_sheet_async(manual=True))
         row.addWidget(self.btn_cust_load)
-        # 표를 더블클릭하면 [수정] 이 열린다. 수정이 이력보다 훨씬 잦아서
-        # 버튼 자리는 [이력] 에 내주고, 수정은 더블클릭으로 바로 간다.
+        # 표를 더블클릭하면 [수정] 이 열린다.
+        # [서류]·[이력] 은 버튼 줄에서 뺐다(내용 칸에 적으신다고 하셔서).
+        # 다만 지워 버리지는 않고 **우클릭 메뉴에 남겨** 둔다 — 이력에는 그동안
+        # 적어 두신 상담 메모가 들어 있어, 길이 아예 없으면 그 기록에 닿을 수 없다.
         for text, slot in [("고객 추가", self.on_customer_add),
-                           ("이력", self.on_customer_history),
-                           ("서류", self.on_customer_docs),
                            ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -813,7 +815,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.ed_cust_find)
         v.addLayout(row)
 
-        # 상단 발주 현황 (시트 N1:O4)
+        # 상단 발주 현황 (시트 N1:O4) — 켜자마자 제일 먼저 눈에 들어와야 하는 줄이라
+        # 글자를 키우고 패널 배경을 깔아 한 덩어리로 보이게 한다(_show_summary).
         self.lbl_cust_summary = QLabel("")
         self.lbl_cust_summary.setTextFormat(Qt.RichText)
         self.lbl_cust_summary.hide()
@@ -822,16 +825,24 @@ class MainWindow(QMainWindow):
         self.lbl_cust = QLabel("고객관리 시트를 불러오려면 [불러오기]를 누르세요.")
         v.addWidget(self.lbl_cust)
 
-        # 안내멘트는 [복사] 버튼만 들어가므로 버튼 폭이면 충분하다(96→62).
-        # 거기서 아낀 폭을 고객명·금융사·차종·날짜에 나눠 줬다.
-        # 전체 폭은 그대로라 가로 스크롤이 더 늘지 않는다.
-        # 수수료(합계)와 견적서 보기를 함께 보여준다.
-        # 가로 스크롤이 생기지 않도록 폭 합계를 창 너비 안에 맞춘다(_fit_cust_columns).
+        # 안내멘트·견적서는 버튼만 들어가므로 버튼 폭이면 충분하다.
+        # '내용' 은 길어서 다 못 보여 준다 — 남는 폭을 이 열이 받고, 좁아지면
+        # 이 열부터 줄어든다(_fit_cust_columns). 잘린 부분은 툴팁으로 본다.
+        #
+        # 아래 폭은 눈대중이 아니라 11pt 로 실제 그려 보고 sizeHintForColumn 으로
+        # 잰 값이다. 기준으로 삼은 '가장 긴 현실적인 값' —
+        #   고객명 '주식회사 대한모빌리티' · 금융사 '우리금융캐피탈'
+        #   차종 '카니발 9인승 하이리무진' · 금액 '₩145,800,000' · 날짜 '2026. 12. 31'
+        # 글씨를 10pt→11pt 로 키운 뒤에도 예전 폭을 그대로 뒀더니 여섯 열이
+        # 잘렸다. 내용 말고는 잘리면 안 되므로 잰 값에 맞춰 다시 잡는다.
         self.tbl_cust = self._make_table(
-            ["순번", "고객명 / 사업자", "금융사", "차종", "계약일", "출고일",
-             "진행현황", "수수료", "안내멘트", "견적서"],
-            [44, 196, 96, 148, 92, 92, 70, 104, 76, 78],
+            ["순번", "고객명 / 사업자", "금융사", "차종", "차량가격",
+             "계약일", "출고일", "진행현황", "수수료", "내용", "안내멘트", "견적서"],
+            [46, 170, 116, 180, 134, 116, 116, 78, 124, 200, 68, 58],
             stretch_last=False)
+        # 글씨가 작아 안 읽힌다는 말씀에 맞춰 한 단계 키운다(기본 10pt → 11pt)
+        self.tbl_cust.setStyleSheet("QTableWidget { font-size: 11pt; }")
+        self.tbl_cust.verticalHeader().setDefaultSectionSize(34)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         self.tbl_cust.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl_cust.customContextMenuRequested.connect(self._cust_context_menu)
@@ -859,12 +870,15 @@ class MainWindow(QMainWindow):
         return theme.strong(tone) if tone else ""
 
     # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
-    COL_STATUS = 6
-    COL_FEE = 7
+    COL_STATUS = 7
+    COL_FEE = 8
+    COL_NOTE = 9
+    # 금액 열은 오른쪽 정렬 (차량가격·수수료)
+    MONEY_COLS = (4, 8)
     # 짧은 값이라 가운데로 모아야 읽기 좋은 열 (순번·계약일·출고일·진행현황)
-    CENTER_COLS = (0, 4, 5, 6)
-    COL_MENT_BTN = 8
-    COL_DOC_BTN = 9
+    CENTER_COLS = (0, 5, 6, 7)
+    COL_MENT_BTN = 10
+    COL_DOC_BTN = 11
 
     def _ment_key(self, cr) -> str:
         """안내멘트 복사 이력 키.
@@ -1070,6 +1084,15 @@ class MainWindow(QMainWindow):
         """
         if getattr(self, "_auto_load_started", False) or self._sheet_loaded:
             return
+        # ⚠️ 계정이 확인되기 **전**에는 공용 폴더의 설정을 들고 있다. 거기엔
+        # 시트 이름이 기본값('미출고차량')으로 남아 있어서, 여기서 먼저 불러오면
+        # 설정에 적어 둔 이름('고객관리')이 아니라 기본값으로 조회해 오류창이 떴다.
+        # 게다가 _auto_load_started 가 켜져 버려, 계정이 확인된 뒤 다시 불러오지도
+        # 못했다. 구글에 연결돼 있으면 계정 확인을 기다린다.
+        if self.gauth.is_connected() and not getattr(self, "account_email", ""):
+            if tries < 12:
+                QTimer.singleShot(1500, lambda: self._auto_load_sheet(tries + 1))
+            return
         if self._sheet_ready(quiet=True):
             self._auto_load_started = True
             self.load_sheet_async(manual=False)
@@ -1136,7 +1159,6 @@ class MainWindow(QMainWindow):
         self._sheet_header_row = 0
         self._sheet_loaded = False
         self.sheet_choices = {}
-        self._terms_list = []
         self.lbl_cust_summary.hide()
         self._summary_data = []
         self.refresh_customers()
@@ -1258,8 +1280,6 @@ class MainWindow(QMainWindow):
         self._sheet_last_row = last_row
         self._sheet_header_row = hdr
         self.sheet_choices = sheets.choices(rows)
-        self._terms_list = sheets.all_terms(
-            load_terms_presets(), sheets.terms_by_finance(rows))
         self._sheet_pending = []
         self._sheet_loaded = True
         self._show_summary(summary)
@@ -1286,20 +1306,21 @@ class MainWindow(QMainWindow):
             tone = self.SUMMARY_TONES.get(label.strip())
             col = theme.strong(tone) if tone else theme.c("accent")
             parts.append(
-                f"<span style='color:{theme.c('subtext')};'>{label}</span>"
-                f"&nbsp;<span style='color:{col};font-size:15px;"
+                f"<span style='color:{theme.c('subtext')};font-size:13px;'>{label}</span>"
+                f"&nbsp;<span style='color:{col};font-size:23px;"
                 f"font-weight:bold;'>{value}</span>")
-        line1 = "&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(parts)
+        line1 = "&nbsp;&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;&nbsp;".join(parts)
 
         # 이번달 실적 (출고일 기준) — 지난달 대비 증감과 금융사 분포
         st = sheets.month_stats(self.sheet_rows, date.today())
         sub = theme.c("subtext")
         acc = theme.c("accent")
         fee = f"₩{st['cur_fee']:,}" if st["cur_fee"] else "₩0"
+        big = "font-size:16px;font-weight:bold;"
         bits = [f"<span style='color:{sub};'>이번달 출고</span>&nbsp;"
-                f"<span style='color:{acc};font-weight:bold;'>{st['cur_cnt']}건</span>",
+                f"<span style='color:{acc};{big}'>{st['cur_cnt']}건</span>",
                 f"<span style='color:{sub};'>수수료</span>&nbsp;"
-                f"<span style='color:{acc};font-weight:bold;'>{fee}</span>"]
+                f"<span style='color:{acc};{big}'>{fee}</span>"]
         if st["prev_cnt"] or st["prev_fee"]:
             diff = st["cur_fee"] - st["prev_fee"]
             pct = (diff / st["prev_fee"] * 100) if st["prev_fee"] else 0
@@ -1316,6 +1337,10 @@ class MainWindow(QMainWindow):
         line2 = "&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;".join(bits)
 
         self.lbl_cust_summary.setText((line1 + "<br>" + line2) if line1 else line2)
+        # 한 덩어리로 보이게 패널을 깔고 여백을 준다 — 켜자마자 제일 먼저 읽히는 줄
+        self.lbl_cust_summary.setStyleSheet(
+            f"background:{theme.c('panel_bg')};border:1px solid {theme.c('border')};"
+            f"border-radius:10px;padding:10px 14px;")
         self.lbl_cust_summary.show()
 
     def _visible_sheet_rows(self) -> list:
@@ -1346,18 +1371,24 @@ class MainWindow(QMainWindow):
             pend = cr in self._sheet_pending
             status = cr.get("status")
             fee = sheets.fmt_money(cr.total)
+            price = sheets.fmt_money(cr.get("price"))
+            # 내용은 여러 줄일 수 있다 — 표에서는 한 줄로 이어 붙인다
+            note = " ".join((cr.get("note") or "").split())
             vals = [cr.seq if not pend else "…",
                     ("[등록중] " if pend else "") + cr.get("customer"),
                     cr.get("finance"), cr.get("model"),
+                    (f"₩{price}" if price else ""),
                     cr.get("contract_date"), cr.get("deliver_date"), status,
-                    (f"₩{fee}" if fee else "")]
+                    (f"₩{fee}" if fee else ""), note]
             for c, val in enumerate(vals):
                 item = QTableWidgetItem(val)
                 item.setData(Qt.UserRole, cr.row)
-                if c == self.COL_FEE:
+                if c in self.MONEY_COLS:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 elif c in self.CENTER_COLS:
                     item.setTextAlignment(Qt.AlignCenter)
+                if c == self.COL_NOTE and note:
+                    item.setToolTip(cr.get("note"))   # 잘린 부분은 툴팁으로
                 self.tbl_cust.setItem(r, c, item)
             # 진행현황: 출고=파랑 / 발주=초록 / 취소=빨강 / 진행보류=회색, 굵게 (글자만)
             col = self.status_color(status)
@@ -1401,25 +1432,26 @@ class MainWindow(QMainWindow):
             f"고객 {total}건" + (f" · 검색 {shown}건" if q else "")
             + f"   (시트: {self.settings.sheet_name})")
 
-    def _fit_cust_columns(self):
-        """표 오른쪽에 남는 흰 여백을 고객명 열이 흡수하게 한다.
+    # '내용' 열은 창 폭에 따라 늘었다 줄었다 한다. 이보다 좁아지면 아무 글자도
+    # 안 보여 차라리 가로 스크롤이 낫다.
+    NOTE_MIN_W = 70
 
-        폭을 고정하면 창보다 좁을 때 오른쪽이 허옇게 비고, 열을 늘리는 방식
-        (Stretch)으로 두면 창보다 넓을 때 그 열이 되레 찌그러진다.
-        그래서 '남을 때만' 더해 준다.
+    def _fit_cust_columns(self):
+        """남거나 모자라는 폭을 '내용' 열이 받아 낸다.
+
+        다른 열은 전부 글자가 다 보여야 하는 값(고객명·금융사·차종·금액·날짜)이라
+        건드리지 않는다. 내용만 길어서 어차피 다 못 보여 주므로, 늘어날 때도
+        줄어들 때도 이 열이 맡는다. 잘린 부분은 툴팁으로 본다.
         """
         if getattr(self, "_fitting_cols", False):
             return          # 폭을 바꾸면 스크롤바가 생겼다 사라지며 다시 불린다
         self._fitting_cols = True
         try:
+            col = self.COL_NOTE
             vp = self.tbl_cust.viewport().width()
-            used = sum(self.tbl_cust.columnWidth(i)
-                       for i in range(self.tbl_cust.columnCount()))
-            base = getattr(self, "_cust_name_w", None)
-            if base is None:
-                base = self._cust_name_w = self.tbl_cust.columnWidth(1)
-            spare = vp - (used - self.tbl_cust.columnWidth(1) + base)
-            self.tbl_cust.setColumnWidth(1, base + max(0, spare))
+            others = sum(self.tbl_cust.columnWidth(i)
+                         for i in range(self.tbl_cust.columnCount()) if i != col)
+            self.tbl_cust.setColumnWidth(col, max(self.NOTE_MIN_W, vp - others))
         except Exception:
             pass
         finally:
@@ -1445,8 +1477,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME,
                                     "먼저 [불러오기]로 시트를 읽어주세요.")
             return
-        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self,
-                                 terms_list=self._terms_list)
+        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self)
         if res is None:
             return
         vals, img, _cleared = res
@@ -1519,8 +1550,7 @@ class MainWindow(QMainWindow):
             self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 수정하세요.")
             return
         res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
-                                 cr.values, self.sheet_choices, cr.ment, self,
-                                 terms_list=self._terms_list)
+                                 cr.values, self.sheet_choices, cr.ment, self)
         if res is None:
             return
         vals, img, doc_cleared = res
@@ -1820,9 +1850,6 @@ class MainWindow(QMainWindow):
             if hasattr(self, "tab_comm"):
                 self.tab_comm.reload_rates()   # 수당율을 고쳤을 수 있다
             self.fetch_rates_async()
-            # 계약조건 목록을 고쳤을 수 있으니 다시 합쳐 둔다
-            self._terms_list = sheets.all_terms(
-                load_terms_presets(), sheets.terms_by_finance(self.sheet_rows))
             now_sheet = (self.settings.sheet_id.strip(),
                          self.settings.sheet_name.strip())
             if now_sheet != prev_sheet:

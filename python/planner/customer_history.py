@@ -82,6 +82,10 @@ class CustomerHistoryDialog(QDialog):
 
         self.lst = QListWidget()
         self.lst.setAlternatingRowColors(True)
+        # 한 줄이 너무 촘촘해 잘 안 읽힌다는 말씀에 맞춰 글자와 줄 높이를 키운다
+        self.lst.setStyleSheet(
+            "QListWidget { font-size: 12pt; }"
+            "QListWidget::item { padding: 7px 4px; }")
         root.addWidget(self.lst, 1)
 
         # ---- 메모 추가 ----

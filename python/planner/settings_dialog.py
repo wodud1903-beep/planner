@@ -166,8 +166,8 @@ class SettingsDialog(QDialog):
             "프로그램을 켜면 오늘 브리핑과 주간 요약이 한 화면에 같이 나옵니다.\n"
             f"이번 주 출고·계약, 아직 안 나온 건, {weekly.EXPIRY_MONTHS}개월 이내 "
             "만기 예정 고객을 한 장으로 보여 줍니다.\n"
-            "체크를 풀면 브리핑만 나오고, [고객관리] 탭의 [주간 요약] 버튼으로\n"
-            "언제든 따로 볼 수 있습니다."))
+            "체크를 풀면 브리핑만 나옵니다. [일정 / 할일] 탭의 [주간 요약]\n"
+            "버튼으로 언제든 다시 볼 수 있습니다."))
 
         # 수당율은 회사 공통 기준값이라 관리자 계정에서만 고칠 수 있다.
         btn_rates = QPushButton("차종별 수당율 관리…")
@@ -182,18 +182,9 @@ class SettingsDialog(QDialog):
                 "수당율은 관리자 계정에서만 수정할 수 있습니다.\n"
                 "이 PC 는 관리자가 저장한 값을 받아서 계산에 씁니다."))
 
-        self.txt_terms = QTextEdit()
-        self.txt_terms.setMinimumHeight(130)
-        self.txt_terms.setPlaceholderText(
-            "60개월 / 2만km / 무보증\n"
-            "48개월 / 연2만km / 보증금 2000만원\n"
-            "KB캐피탈 | 선수금 30% 별도협의     ← '금융사 |' 는 적어 두어도 됩니다")
-        sl.addRow("자주 쓴 계약조건", self.txt_terms)
-        sl.addRow(QLabel(
-            "한 줄에 하나씩 적어 두면 고객 등록·수정 창의 계약조건 목록에\n"
-            "금융사와 상관없이 **전부** 먼저 나옵니다.\n"
-            "'금융사 |' 를 앞에 붙여 정리해 두어도 되고, 안 붙여도 됩니다.\n"
-            "시트에서 실제로 써 온 조건도 그 뒤에 이어서 표시됩니다."))
+        # '자주 쓴 계약조건' 은 없앴다. 계약조건을 손으로만 적기로 하면서
+        # 그 값을 쓰던 '골라서 넣기' 드롭다운이 사라져, 남겨 두면 아무 일도
+        # 하지 않는 입력칸이 된다. (적어 두신 내용은 파일에 그대로 있다)
         sl.addRow(QLabel(
             "함수 칸(순번·합계·고객센터번호·사고접수연락처·고객안내멘트)은\n"
             "프로그램이 건드리지 않고 시트 수식 그대로 둡니다.\n"
@@ -325,7 +316,6 @@ class SettingsDialog(QDialog):
         self.ed_sheet_name.setText(s.sheet_name)
         self.sp_expiry.setValue(s.expiry_months)
         self.chk_weekly.setChecked(s.weekly_on)
-        self.txt_terms.setPlainText(sheets.format_terms_presets(load_terms_presets()))
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
         self.cmb_theme.setCurrentIndex(i if i >= 0 else 0)
@@ -388,7 +378,6 @@ class SettingsDialog(QDialog):
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.expiry_months = self.sp_expiry.value()
         s.weekly_on = self.chk_weekly.isChecked()
-        save_terms_presets(sheets.parse_terms_presets(self.txt_terms.toPlainText()))
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
         s.dark_mode = theme.THEMES.get(s.theme, (None, None, False))[2]

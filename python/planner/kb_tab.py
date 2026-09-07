@@ -151,6 +151,10 @@ class KbView(QWidget):
         v.addLayout(top)
 
         self.lst = _ResultList()
+        # 왼쪽 자료 목록 글씨를 키운다 — 상담 중에 훑는 목록이라 잘 보여야 한다
+        self.lst.setStyleSheet(
+            "QListWidget { font-size: 12pt; }"
+            "QListWidget::item { padding: 6px 4px; }")
         self.lst.currentRowChanged.connect(self._show)
         self.lst.itemActivated.connect(
             lambda _i: self.picked.emit(self.lst.current_item_data() or {}))
