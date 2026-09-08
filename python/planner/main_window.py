@@ -162,10 +162,10 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
         _avail = QGuiApplication.primaryScreen().availableGeometry()
         # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭.
-        # 열을 두 개 늘리고 글씨를 키웠으므로 1280 으로는 '내용' 에 80px 밖에
-        # 안 남는다. 1400 이면 내용이 200px 쯤 되어 첫 줄이 읽힌다. 화면이
-        # 좁으면 어차피 아래 min 이 화면 폭으로 깎으므로 작은 노트북도 안전하다.
-        _w = min(1400, _avail.width() - 20)
+        # 1570 은 쓰시는 분이 정해 주신 값 — 고객명 236 · 내용 255 를 넣고도
+        # 남는 폭이다. 화면이 좁으면 어차피 아래 min 이 화면 폭으로 깎으므로
+        # 작은 노트북에서도 안전하다.
+        _w = min(1570, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
         self.setFixedHeight(_h)
         _lo, _hi = self._width_bounds(_avail)
@@ -829,19 +829,21 @@ class MainWindow(QMainWindow):
         # '내용' 은 길어서 다 못 보여 준다 — 남는 폭을 이 열이 받고, 좁아지면
         # 이 열부터 줄어든다(_fit_cust_columns). 잘린 부분은 툴팁으로 본다.
         #
-        # 아래 폭은 눈대중이 아니라 11pt 로 실제 그려 보고 sizeHintForColumn 으로
+        # 고객명(236) · 내용(255) · 안내멘트(80) 는 쓰시는 분이 직접 정해 주신 값.
+        # 안내멘트가 80 인 이유 — 복사하면 단추 글자가 '복사' → '✓ 복사' 로
+        # 길어지는데, 68 일 때 그 체크표시가 잘렸다.
+        # 나머지 폭은 눈대중이 아니라 실제로 그려 보고 sizeHintForColumn 으로
         # 잰 값이다. 기준으로 삼은 '가장 긴 현실적인 값' —
-        #   고객명 '주식회사 대한모빌리티' · 금융사 '우리금융캐피탈'
-        #   차종 '카니발 9인승 하이리무진' · 금액 '₩145,800,000' · 날짜 '2026. 12. 31'
-        # 글씨를 10pt→11pt 로 키운 뒤에도 예전 폭을 그대로 뒀더니 여섯 열이
-        # 잘렸다. 내용 말고는 잘리면 안 되므로 잰 값에 맞춰 다시 잡는다.
+        #   금융사 '우리금융캐피탈' · 차종 '카니발 9인승 하이리무진'
+        #   금액 '₩145,800,000' · 날짜 '2026. 12. 31'
+        # 잘려도 되는 건 '내용' 뿐이므로, 글씨 크기를 건드리면 여기도 다시 재야 한다.
         self.tbl_cust = self._make_table(
             ["순번", "고객명 / 사업자", "금융사", "차종", "차량가격",
              "계약일", "출고일", "진행현황", "수수료", "내용", "안내멘트", "견적서"],
-            [46, 170, 116, 180, 134, 116, 116, 78, 124, 200, 68, 58],
+            [46, 236, 116, 180, 134, 116, 116, 78, 124, 255, 80, 58],
             stretch_last=False)
-        # 글씨가 작아 안 읽힌다는 말씀에 맞춰 한 단계 키운다(기본 10pt → 11pt)
-        self.tbl_cust.setStyleSheet("QTableWidget { font-size: 11pt; }")
+        # 11pt 는 커 보인다 하셔서 한 단계 내린다(기본 글씨와 같은 10pt)
+        self.tbl_cust.setStyleSheet("QTableWidget { font-size: 10pt; }")
         self.tbl_cust.verticalHeader().setDefaultSectionSize(34)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         self.tbl_cust.setContextMenuPolicy(Qt.CustomContextMenu)
