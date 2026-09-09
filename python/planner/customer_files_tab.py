@@ -18,14 +18,14 @@ import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMessageBox, QPushButton, QSplitter, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import config, customer_files, theme
+from .file_preview import FilePreview
 
 # 목록 맨 윗줄에 놓는 '상위 폴더로' 자리. 진짜 파일이 아니라 표시용 표식이다.
 UP_ROW = "<<up>>"
@@ -66,7 +66,6 @@ class CustomerFilesTab(QWidget):
         self._gen = 0
         self._sig = None              # 지금 폴더의 요약값(바뀜 감지)
         self._preview_key = ""
-        self._pix = None
 
         v = QVBoxLayout(self)
 
@@ -124,14 +123,8 @@ class CustomerFilesTab(QWidget):
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(8, 0, 0, 0)
-        self.lbl_pv_title = QLabel("")
-        self.lbl_pv_title.setWordWrap(True)
-        self.lbl_pv_title.setStyleSheet("font-weight:bold;")
-        rv.addWidget(self.lbl_pv_title)
-        self.lbl_pv = QLabel("파일을 고르면 여기에 보입니다.")
-        self.lbl_pv.setAlignment(Qt.AlignCenter)
-        self.lbl_pv.setMinimumSize(QSize(240, 240))
-        rv.addWidget(self.lbl_pv, 1)
+        self.pv = FilePreview()
+        rv.addWidget(self.pv, 1)
         self.btn_open = QPushButton("연결 프로그램으로 열기")
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_current)
@@ -431,22 +424,18 @@ class CustomerFilesTab(QWidget):
                                  and self.source.kind == "local")
         if n is None:
             return
-        self.lbl_pv_title.setText(f"{n.where}/{n.name}" if n.where else n.name)
+        title = f"{n.where}/{n.name}" if n.where else n.name
         if n.is_dir:
-            self._pix = None
-            self.lbl_pv.setPixmap(QPixmap())
-            self.lbl_pv.setText("폴더입니다. 두 번 누르면 들어갑니다.")
+            self._preview_key = ""
+            self.pv.show_message("폴더입니다. 두 번 누르면 들어갑니다.", title)
             return
-        if not n.is_image:
-            self._pix = None
-            self.lbl_pv.setPixmap(QPixmap())
-            self.lbl_pv.setText(
-                "PDF 는 미리보기가 없습니다.\n[연결 프로그램으로 열기] 를 눌러 주세요."
-                if n.is_pdf else "미리보기를 지원하지 않는 형식입니다.")
+        if not n.viewable:
+            self._preview_key = ""
+            self.pv.show_message(
+                "미리보기를 지원하지 않는 형식입니다.\n"
+                "[연결 프로그램으로 열기] 를 눌러 주세요.", title)
             return
-        self._pix = None
-        self.lbl_pv.setPixmap(QPixmap())
-        self.lbl_pv.setText("여는 중…")
+        self.pv.show_message("여는 중…", title)
         self._preview_key = n.key
         src = self.source
 
@@ -461,25 +450,14 @@ class CustomerFilesTab(QWidget):
     def _on_preview(self, node, data, err: str):
         if node.key != self._preview_key:
             return                      # 그새 딴 걸 골랐다
+        title = f"{node.where}/{node.name}" if node.where else node.name
         if data is None:
-            self.lbl_pv.setText("미리보기 실패:\n" + err)
+            self.pv.show_message("미리보기 실패:\n" + err, title)
             return
-        pix = QPixmap()
-        if not pix.loadFromData(data):
-            self.lbl_pv.setText("그림을 읽지 못했습니다.")
-            return
-        self._show_pix(pix)
-
-    def _show_pix(self, pix: QPixmap):
-        self._pix = pix
-        self.lbl_pv.setText("")
-        self.lbl_pv.setPixmap(pix.scaled(self.lbl_pv.size(), Qt.KeepAspectRatio,
-                                         Qt.SmoothTransformation))
-
-    def resizeEvent(self, ev):
-        super().resizeEvent(ev)
-        if self._pix is not None and not self._pix.isNull():
-            self._show_pix(self._pix)
+        if node.is_pdf:
+            self.pv.show_pdf(data, node.key, title)
+        else:
+            self.pv.show_image(data, node.key, title)
 
     # ------------------------------------------------------------ 열기
     def _on_double(self, index):
@@ -544,6 +522,4 @@ class CustomerFilesTab(QWidget):
     # ------------------------------------------------------------ 테마
     def apply_theme(self):
         self.lbl_count.setStyleSheet(f"color:{theme.c('subtext')};")
-        self.lbl_pv.setStyleSheet(
-            f"color:{theme.c('subtext')};border:1px solid {theme.c('border')};"
-            f"border-radius:6px;")
+        self.pv.apply_theme()

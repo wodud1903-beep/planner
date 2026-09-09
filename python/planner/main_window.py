@@ -123,6 +123,11 @@ def _set_startup(enable: bool):
         pass
 
 
+# Qt 가 "제한 없음" 으로 치는 크기값. PySide6 이 Q_SIZE_MAX 를 내보내지
+# 않아 직접 적어 둔다(Qt 정의값 그대로).
+Q_SIZE_MAX = 16777215
+
+
 class MainWindow(QMainWindow):
     # 백그라운드 스레드 → UI 마샬링
     sig_tasks_done = Signal(object, str, int)   # (할일목록|None, 오류, 조회시작 epoch)
@@ -156,13 +161,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(config.APP_NAME)
-        # 세로만 고정하고 가로는 끌어서 늘릴 수 있게 둔다.
+        # 창 크기는 딱 두 가지 — '보통' 과 '최대화'.
         #
-        # 세로를 풀면 위아래로 늘렸을 때 '이번주 일정' 과 '내 할일' 사이 비율이
-        # 틀어지고 브리핑 칸이 허옇게 남는다. 반면 가로는 고객관리 표가 넓을수록
-        # 좋아서(고객명·차종이 안 잘린다) 넓히고 싶은 쪽은 늘 가로였다.
-        # 최대화 버튼은 계속 감춘다 — 최대화는 세로까지 바꾸려 든다.
-        self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
+        # 보통일 때는 세로를 고정하고 가로만 끌어서 늘린다. 세로를 풀면 위아래로
+        # 늘렸을 때 '이번주 일정' 과 '내 할일' 사이 비율이 틀어지고 브리핑 칸이
+        # 허옇게 남는다. 반면 가로는 고객관리 표가 넓을수록 좋다.
+        # 최대화는 그 세로 고정을 잠시 풀어 화면을 꽉 채우고, 되돌리면 다시
+        # 고정한다(_on_window_state). 그래서 어중간한 세로 크기는 나올 수 없다.
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         _avail = QGuiApplication.primaryScreen().availableGeometry()
         # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭.
         # 1570 은 쓰시는 분이 정해 주신 값 — 고객명 236 · 내용 255 를 넣고도
@@ -170,6 +176,9 @@ class MainWindow(QMainWindow):
         # 작은 노트북에서도 안전하다.
         _w = min(1570, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
+        self._normal_h = _h          # 보통 크기의 세로. 최대화를 풀면 이리 돌아온다
+        self._normal_w = _w          # 마지막으로 쓰던 보통 가로(아래에서 덮어씀)
+        self._maximized = False
         self.setFixedHeight(_h)
         _lo, _hi = self._width_bounds(_avail)
         self.setMinimumWidth(_lo)
@@ -180,7 +189,10 @@ class MainWindow(QMainWindow):
         self._width_timer.setSingleShot(True)
         self._width_timer.timeout.connect(self._remember_width)
         # 지난번에 맞춰 둔 폭이 있으면 그대로 연다(매번 다시 끌지 않도록)
-        self.resize(self._saved_width(_w, _avail), _h)
+        self._normal_w = self._saved_width(_w, _avail)
+        self.resize(self._normal_w, _h)
+        # 지난번에 최대화로 쓰던 사람은 최대화로 열어 준다
+        self._want_maximized = self._saved_maximized()
         self._center_on_screen()
 
         # 데이터
@@ -3174,10 +3186,52 @@ class MainWindow(QMainWindow):
             pass                        # 파일이 깨졌으면 조용히 기본값
         return max(lo, min(hi, want))
 
+    def _saved_maximized(self) -> bool:
+        try:
+            p = self._win_path()
+            if p.exists():
+                return bool((json.loads(p.read_text(encoding="utf-8")) or {})
+                            .get("maximized", False))
+        except Exception:
+            pass
+        return False
+
+    def changeEvent(self, event):
+        """창 크기는 '보통' 과 '최대화' 둘뿐 — 그 사이 값은 없다.
+
+        보통일 때는 세로를 고정해 두는데, 그대로 두면 최대화가 세로로 커지지
+        못한다. 그래서 최대화하는 순간 고정을 풀고, 되돌릴 때 다시 건다.
+        """
+        if event.type() == QEvent.WindowStateChange:
+            self._apply_size_mode()
+        super().changeEvent(event)
+
+    def _apply_size_mode(self):
+        now_max = self.isMaximized()
+        if now_max == getattr(self, "_maximized", False):
+            return
+        self._maximized = now_max
+        if now_max:
+            # 화면을 꽉 채울 수 있게 세로 고정과 가로 상한을 잠시 푼다
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(Q_SIZE_MAX)
+            self.setMaximumWidth(Q_SIZE_MAX)
+        else:
+            avail = QGuiApplication.primaryScreen().availableGeometry()
+            lo, hi = self._width_bounds(avail)
+            self.setMinimumWidth(lo)
+            self.setMaximumWidth(hi)
+            self.setFixedHeight(self._normal_h)   # 다시 '보통' 세로로
+            self.resize(max(lo, min(hi, self._normal_w)), self._normal_h)
+
     def _remember_width(self) -> None:
         try:
-            config.atomic_write(self._win_path(),
-                                json.dumps({"width": self.width()}))
+            # 최대화 중이면 그때의 폭이 아니라 '보통' 폭을 적어 둔다.
+            # 안 그러면 최대화를 풀었을 때 화면 가득한 폭이 그대로 굳는다.
+            w = self._normal_w if self.isMaximized() else self.width()
+            config.atomic_write(
+                self._win_path(),
+                json.dumps({"width": w, "maximized": self.isMaximized()}))
         except Exception:
             pass
 
@@ -3186,6 +3240,8 @@ class MainWindow(QMainWindow):
         # 뜨기 전(_saved_width 로 맞추는 중)에는 저장하지 않는다 — 그러면 화면에
         # 맞춰 줄인 값이 그대로 굳어 다음에 켤 때 더는 못 넓힌다.
         if getattr(self, "_centered_once", False):
+            if not self.isMaximized():
+                self._normal_w = self.width()   # 최대화가 아닐 때만 '보통' 폭
             self._width_timer.start(600)     # 끄는 중에는 계속 불린다 → 멈추면 저장
 
     def showEvent(self, event):
@@ -3195,6 +3251,11 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_centered_once", False):
             self._centered_once = True
             self._center_on_screen()
+            # 지난번에 최대화로 쓰던 사람은 최대화로 열어 준다.
+            # 자리를 잡은 뒤에 해야 최대화를 풀었을 때 제자리로 돌아온다.
+            if getattr(self, "_want_maximized", False):
+                self._want_maximized = False
+                self.showMaximized()
 
     def show_window(self):
         self.showNormal()

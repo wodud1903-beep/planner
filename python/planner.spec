@@ -21,7 +21,9 @@ a = Analysis(
         'tkinter',
         'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtWebEngineCore',
         'PySide6.QtWebEngineWidgets', 'PySide6.Qt3DCore', 'PySide6.QtMultimedia',
-        'PySide6.QtCharts', 'PySide6.QtDataVisualization', 'PySide6.QtPdf',
+        'PySide6.QtCharts', 'PySide6.QtDataVisualization',
+        # QtPdf 는 빼지 않는다 — '고객정보' 탭의 PDF 미리보기가 이걸 쓴다.
+        # (예전엔 쓰는 데가 없어서 용량 줄이려고 빼 두었다)
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
