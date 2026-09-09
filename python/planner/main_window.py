@@ -179,7 +179,16 @@ class MainWindow(QMainWindow):
         self._normal_h = _h          # 보통 크기의 세로. 최대화를 풀면 이리 돌아온다
         self._normal_w = _w          # 마지막으로 쓰던 보통 가로(아래에서 덮어씀)
         self._maximized = False
-        self.setFixedHeight(_h)
+        self._snapping = False
+        self._snap_from = None
+        # ⚠️ 세로를 setFixedHeight 로 못 박으면 최대화가 아예 안 된다.
+        #    창관리자는 최대화할 때도 '최대 세로' 를 지킨다. min==max 이면
+        #    최대화를 눌러도 크기는 그대로고 isMaximized() 만 True 가 된다.
+        #    최대화한 '뒤에' 고정을 푸는 방식도 소용없다 — 크기는 이미 그때
+        #    정해진다. 그래서 위쪽은 열어 두고, 최대화가 아닐 때 세로가 달라지면
+        #    도로 되돌리는 식으로 '두 가지 크기' 를 지킨다(resizeEvent).
+        self.setMinimumHeight(_h)
+        self.setMaximumHeight(Q_SIZE_MAX)
         _lo, _hi = self._width_bounds(_avail)
         self.setMinimumWidth(_lo)
         self.setMaximumWidth(_hi)
@@ -356,10 +365,21 @@ class MainWindow(QMainWindow):
         주간 요약은 설정에서 끌 수 있고(weekly_on), 시트를 아직 못 읽었으면
         그 자리에 이유를 적는다.
         """
+        # 이미 떠 있으면 또 띄우지 않는다. 이 창은 모달이라 위에 하나가 더
+        # 겹치면 아래 것의 [확인] 이 안 눌린다 — 예전에 브리핑과 주간 요약을
+        # 따로 띄웠을 때 겪은 그 문제가 같은 창끼리 다시 생긴다.
+        # (시작 브리핑 타이머가 도는 중에 [주간 요약] 을 누르면 실제로 겹친다)
+        if getattr(self, "_startup_open", False):
+            return
         from .startup_dialog import StartupDialog
         rows = self.sheet_rows if self.settings.weekly_on else []
-        StartupDialog.show_for(self.build_briefing_html(), self.build_briefing(),
-                               rows, date.today(), self)
+        self._startup_open = True
+        try:
+            StartupDialog.show_for(self.build_briefing_html(),
+                                   self.build_briefing(),
+                                   rows, date.today(), self)
+        finally:
+            self._startup_open = False
 
     def _on_hotkey(self):
         self.show_window()
@@ -3196,6 +3216,16 @@ class MainWindow(QMainWindow):
             pass
         return False
 
+    def _is_max(self) -> bool:
+        """최대화(또는 전체화면) 상태인가.
+
+        isMaximized() 는 상태가 바뀌는 도중 아직 False 일 수 있어, 창 상태
+        비트도 함께 본다. 안 그러면 최대화되는 중에 세로를 되돌려 버린다.
+        """
+        return bool(self.isMaximized() or self.isFullScreen()
+                    or (self.windowState() & (Qt.WindowMaximized
+                                              | Qt.WindowFullScreen)))
+
     def changeEvent(self, event):
         """창 크기는 '보통' 과 '최대화' 둘뿐 — 그 사이 값은 없다.
 
@@ -3207,40 +3237,70 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def _apply_size_mode(self):
-        now_max = self.isMaximized()
+        """최대화 ↔ 보통. 가로 상한만 여닫고, 세로는 resizeEvent 가 지킨다.
+
+        창 상태 알림(changeEvent)만 믿지 않고 resizeEvent 에서도 부른다.
+        몇 번을 불러도 상태가 그대로면 아무 일도 하지 않는다.
+        """
+        now_max = self._is_max()
         if now_max == getattr(self, "_maximized", False):
             return
         self._maximized = now_max
         if now_max:
-            # 화면을 꽉 채울 수 있게 세로 고정과 가로 상한을 잠시 푼다
-            self.setMinimumHeight(0)
-            self.setMaximumHeight(Q_SIZE_MAX)
+            # 화면을 꽉 채우려면 가로 상한(화면폭-20)도 걸리적거린다
             self.setMaximumWidth(Q_SIZE_MAX)
-        else:
-            avail = QGuiApplication.primaryScreen().availableGeometry()
-            lo, hi = self._width_bounds(avail)
-            self.setMinimumWidth(lo)
-            self.setMaximumWidth(hi)
-            self.setFixedHeight(self._normal_h)   # 다시 '보통' 세로로
+            return
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        lo, hi = self._width_bounds(avail)
+        self.setMinimumWidth(lo)
+        self.setMaximumWidth(hi)
+        # 쓰던 '보통' 크기로 되돌린다 (여기서 난 resize 는 되돌리기 대상이 아니다)
+        self._snapping = True
+        try:
             self.resize(max(lo, min(hi, self._normal_w)), self._normal_h)
+        finally:
+            self._snapping = False
 
     def _remember_width(self) -> None:
         try:
             # 최대화 중이면 그때의 폭이 아니라 '보통' 폭을 적어 둔다.
             # 안 그러면 최대화를 풀었을 때 화면 가득한 폭이 그대로 굳는다.
-            w = self._normal_w if self.isMaximized() else self.width()
-            config.atomic_write(
-                self._win_path(),
-                json.dumps({"width": w, "maximized": self.isMaximized()}))
+            mx = self._is_max()
+            w = self._normal_w if mx else self.width()
+            config.atomic_write(self._win_path(),
+                                json.dumps({"width": w, "maximized": mx}))
         except Exception:
             pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if not self._snapping:
+            # 창 상태 알림을 못 받은 경우에도 제약이 어긋난 채로 남지 않게 한다
+            self._apply_size_mode()
+        # 최대화가 아닌데 세로가 달라졌으면 되돌린다 — 크기는 '보통' 과 '최대화'
+        # 둘뿐이어야 한다. 세로를 아예 못 박아 두면 최대화가 안 되므로(위 __init__
+        # 설명), 이렇게 되돌리는 쪽으로 지킨다.
+        h = self.height()
+        if (getattr(self, "_centered_once", False)
+                and not self._snapping and not self._is_max()
+                and h != self._normal_h):
+            # 같은 높이에서 두 번은 조르지 않는다. 창관리자가 우리 요청을 안
+            # 받아 주면(그런 환경이 있다) 되돌리기 → resizeEvent → 되돌리기 로
+            # 끝없이 돌기 때문이다. 한 번 시도하고, 높이가 또 달라지면 그때 다시.
+            if self._snap_from != h:
+                self._snap_from = h
+                self._snapping = True
+                try:
+                    self.resize(self.width(), self._normal_h)
+                finally:
+                    self._snapping = False
+                return
+        elif h == self._normal_h:
+            self._snap_from = None      # 제자리로 왔으니 다음 시도를 허용
         # 뜨기 전(_saved_width 로 맞추는 중)에는 저장하지 않는다 — 그러면 화면에
         # 맞춰 줄인 값이 그대로 굳어 다음에 켤 때 더는 못 넓힌다.
         if getattr(self, "_centered_once", False):
-            if not self.isMaximized():
+            if not self._is_max():
                 self._normal_w = self.width()   # 최대화가 아닐 때만 '보통' 폭
             self._width_timer.start(600)     # 끄는 중에는 계속 불린다 → 멈추면 저장
 

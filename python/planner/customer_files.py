@@ -152,42 +152,48 @@ class LocalSource:
             return f"폴더가 아닙니다:\n{self.root}"
         return ""
 
-    def scan(self, limit: int = MAX_FILES) -> list:
-        """창고 전체를 훑어 Node 목록을 만든다."""
-        root = Path(self.root)
+    def scan(self, limit: int = MAX_FILES, on_batch=None) -> list:
+        """창고 전체를 훑어 Node 목록을 만든다(검색용).
+
+        os.walk + os.stat 로 하던 것을 os.scandir 로 바꿨다. walk 는 이름만 주므로
+        파일마다 os.stat 을 또 불러야 했는데, 그게 파일 수만큼 늘어나는 추가
+        호출이라 드라이브 폴더에서 특히 느렸다. scandir 이 주는 항목은 디렉터리를
+        읽을 때 얻은 정보를 그대로 들고 있어 그 호출이 필요 없다.
+
+        on_batch(지금까지 목록) 를 주면 폴더 하나를 끝낼 때마다 불러 준다.
+        다 끝나기 전에도 찾은 것부터 보여 주려고 쓴다.
+        """
         out: list = []
-        if not root.is_dir():
+        if not Path(self.root).is_dir():
             return out
-        base = str(root)
-        for dirpath, dirnames, filenames in os.walk(base):
-            # 건너뛸 폴더는 내려가지도 않는다
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
-                           and not d.startswith(".")]
-            rel = os.path.relpath(dirpath, base)
-            depth = 0 if rel == "." else rel.count(os.sep) + 1
-            if depth > MAX_DEPTH:
-                dirnames[:] = []
+        stack = [(self.root, "", 0)]
+        while stack:
+            path, shown, depth = stack.pop()
+            try:
+                with os.scandir(path) as it:
+                    entries = list(it)
+            except OSError:
                 continue
-            shown = "" if rel == "." else rel.replace("\\", "/")
-            for d in dirnames:
-                out.append(Node(name=d, is_dir=True, folder=shown,
-                                key=os.path.join(dirpath, d),
-                                mtime=_mtime(os.path.join(dirpath, d)),
-                                source=self.kind))
-            for f in filenames:
-                if f.startswith("~$") or f.startswith("."):
+            for e in entries:
+                if _skip_name(e.name):
                     continue
-                full = os.path.join(dirpath, f)
                 try:
-                    st = os.stat(full)
+                    is_dir = e.is_dir()
+                    st = e.stat()
                 except OSError:
                     continue
-                out.append(Node(name=f, is_dir=False, folder=shown,
-                                size=st.st_size,
-                                mtime=datetime.fromtimestamp(st.st_mtime),
-                                key=full, source=self.kind))
+                out.append(Node(
+                    name=e.name, is_dir=is_dir, folder=shown,
+                    size=0 if is_dir else st.st_size,
+                    mtime=datetime.fromtimestamp(st.st_mtime),
+                    key=e.path, source=self.kind))
+                if is_dir and depth < MAX_DEPTH:
+                    sub = f"{shown}/{e.name}" if shown else e.name
+                    stack.append((e.path, sub, depth + 1))
                 if len(out) >= limit:
                     return out
+            if on_batch is not None:
+                on_batch(out)
         return out
 
     # ---- 폴더 하나씩 (드라이브처럼 눌러서 들어간다) ----
