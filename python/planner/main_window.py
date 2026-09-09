@@ -38,6 +38,7 @@ from .greeting_tab import GreetingTab
 from .kb_tab import KbTab, QuickSearch
 from .doc_viewer import DocViewer
 from .edit_dialog import EditDialog
+from .google_button import GoogleSignInButton
 from .icon import make_icon
 from .models import (
     AppSettings, PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
     sig_fetch_done = Signal()
     sig_toast = Signal(str, str)
     sig_account = Signal(str)          # 로그인 계정 이메일 확인됨
+    sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
@@ -237,6 +239,7 @@ class MainWindow(QMainWindow):
         self.sig_fetch_done.connect(self._on_fetch_done)
         self.sig_toast.connect(self._toast)
         self.sig_account.connect(self._on_account_ready)
+        self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
         self.sig_update.connect(self._on_update_checked)
         self.sig_write_done.connect(self._on_write_done)
@@ -377,6 +380,8 @@ class MainWindow(QMainWindow):
         if app:
             theme.apply_to_app(app)   # 스타일시트 + 팔레트 함께
         self._apply_topbar_theme()
+        if hasattr(self, "btn_google"):
+            self.btn_google.apply_theme()   # 구글 단추는 제 배색을 따로 쓴다
         self.refresh_calendar()
         self.refresh_todo()
         self.refresh_alarm()
@@ -727,6 +732,12 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_weekly)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
+        # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
+        # 로그인 단추가 나와서, 처음 받은 사람은 그걸 찾지 못했다.
+        self.btn_google = GoogleSignInButton()
+        self.btn_google.clicked.connect(self.on_google_login_click)
+        self.btn_google.hide()          # update_google_status() 가 켜고 끈다
+        row.addWidget(self.btn_google)
         row.addStretch()
         # 빠른 필터
         row.addWidget(QLabel("표시:"))
@@ -1823,9 +1834,42 @@ class MainWindow(QMainWindow):
         if self.gauth.is_connected():
             self.lbl_status.setText("구글: 연결됨  (설정에서 로그인/로그아웃)")
             self.lbl_status.setStyleSheet(f"color:{theme.c('status_ok')};")
+            self.btn_google.hide()
         else:
-            self.lbl_status.setText("구글: 로그인 필요  ([설정] → Google 로그인)")
+            # 단추가 바로 옆에 있으므로 '설정으로 가라'는 안내는 필요 없다
+            self.lbl_status.setText("구글: 로그인 필요")
             self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
+            self.btn_google.set_busy(False)
+            self.btn_google.apply_theme()
+            self.btn_google.show()
+
+    # 설정 창을 거치지 않고 바로 로그인한다. 창이 멈추지 않게 딴 실에서 돌리고,
+    # 끝나면 _sig_google_login 으로 화면 실에 돌아온다.
+    def on_google_login_click(self):
+        if self.gauth.is_connected():
+            return
+        self.btn_google.set_busy(True)
+
+        def worker():
+            try:
+                self.gauth.authorize()
+                self.sig_google_login.emit(True, "")
+            except Exception as e:
+                self.sig_google_login.emit(False, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_google_login_done(self, ok: bool, err: str):
+        self.btn_google.set_busy(False)
+        self.update_google_status()
+        if not ok:
+            QMessageBox.warning(self, config.APP_NAME, "로그인 실패:\n" + err)
+            return
+        # 로그인 직후엔 켤 때 연결돼 있던 것과 같은 일을 해 줘야 한다 —
+        # 계정 확인 → 계정 폴더 정하기 → 동기화 → 일정/할일·고객 목록.
+        # _start_account_sync 가 그 줄을 통째로 밟는다(끝에서 fetch_all_async).
+        self._reset_sheet_cache()
+        self._start_account_sync()
 
     def _on_autofetch_toggled(self, on: bool):
         self.settings.auto_fetch = on
