@@ -33,6 +33,7 @@ from . import (
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
 from .commission_tab import CommissionTab
+from .customer_files_tab import CustomerFilesTab
 from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
 from .kb_tab import KbTab, QuickSearch
@@ -391,6 +392,8 @@ class MainWindow(QMainWindow):
             self.refresh_customers()
         if hasattr(self, "tab_comm"):
             self.tab_comm.apply_theme()
+        if hasattr(self, "tab_files"):
+            self.tab_files.apply_theme()
         if hasattr(self, "tab_greet"):
             self.tab_greet.apply_theme()
         if hasattr(self, "tab_kb"):
@@ -696,6 +699,12 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.tabs)
         self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
         self.tabs.addTab(self._build_customer_tab(), "고객관리")
+        # 고객별 서류 — 고객관리 바로 옆에 둔다(같은 고객을 두고 오가므로).
+        # 폴더가 크면 훑는 데 몇 초 걸리므로, 켤 때가 아니라 탭을 처음 열 때 읽는다.
+        self.tab_files = CustomerFilesTab(self.settings, self.gauth)
+        self.tabs.addTab(self.tab_files, "고객정보")
+        self._files_loaded = False
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tab_greet = GreetingTab()
         self.tab_greet.on_changed = self._touch_sync
         self.tabs.addTab(self.tab_greet, "멘트복사")
@@ -706,6 +715,20 @@ class MainWindow(QMainWindow):
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
+
+    def open_files_for(self, name: str):
+        """'고객정보' 탭으로 건너가 그 고객 이름으로 찾아 둔다."""
+        if not hasattr(self, "tab_files"):
+            return
+        self.tabs.setCurrentWidget(self.tab_files)   # 여기서 첫 훑기가 돈다
+        self.tab_files.search_for(name)
+
+    def _on_tab_changed(self, idx: int):
+        """'고객정보' 탭은 처음 열 때 한 번 읽는다(그 뒤엔 [새로고침])."""
+        if (not self._files_loaded and hasattr(self, "tab_files")
+                and self.tabs.widget(idx) is self.tab_files):
+            self._files_loaded = True
+            self.tab_files.reload()
 
     def _build_main_tab(self) -> QWidget:
         w = QWidget()
@@ -1026,6 +1049,11 @@ class MainWindow(QMainWindow):
                 a.triggered.connect(lambda _c=False, f=fin: self.open_kb_for(f))
             a = menu.addAction("🚑 보험사 사고접수 연락처")
             a.triggered.connect(lambda: self.open_kb_for("보험사 사고접수"))
+            name = (cr.values.get("customer") or "").strip()
+            if name:
+                a = menu.addAction(f"📁 고객정보에서 '{name}' 서류 보기")
+                a.triggered.connect(
+                    lambda _c=False, n=name: self.open_files_for(n))
             menu.addSeparator()
 
         for text, slot in [("수정", self.on_customer_edit),
@@ -1850,9 +1878,13 @@ class MainWindow(QMainWindow):
             return
         self.btn_google.set_busy(True)
 
+        # 설정에서 '드라이브에서 직접 조회' 를 켜 두었으면 그 권한도 같이 받는다
+        extra = ([config.SCOPE_DRIVE_READ]
+                 if getattr(self.settings, "files_use_drive", False) else [])
+
         def worker():
             try:
-                self.gauth.authorize()
+                self.gauth.authorize(extra_scopes=extra)
                 self.sig_google_login.emit(True, "")
             except Exception as e:
                 self.sig_google_login.emit(False, str(e))

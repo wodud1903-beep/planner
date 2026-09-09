@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.5.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -72,6 +72,16 @@ SHEETS_ENABLE_URL = (
     f"?project={GOOGLE_PROJECT_NUMBER}"
 )
 SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets"
+
+# 드라이브 전체 읽기 — '고객정보' 탭이 드라이브를 직접 조회할 때만 쓴다.
+#
+# ⚠️ 구글이 'restricted(제한됨)' 로 묶어 둔 권한이다. 기본 목록(GOOGLE_SCOPES)에
+#    넣으면 **모든 사용자**가 로그인할 때 '확인되지 않은 앱' 경고를 보게 되고,
+#    배포하려면 앱 인증과 매년 유료 보안심사(CASA)를 통과해야 한다.
+#    그래서 기본에서 빼 두고, 설정에서 켠 사람만 로그인 때 함께 요청한다.
+#    안 켜도 '고객정보' 탭은 드라이브 데스크톱이 내려받아 둔 로컬 폴더를 읽으므로
+#    이 권한 없이 그대로 쓸 수 있다 — 그쪽이 기본이다.
+SCOPE_DRIVE_READ = "https://www.googleapis.com/auth/drive.readonly"
 
 CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/{cal_id}/events"

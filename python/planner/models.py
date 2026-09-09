@@ -274,6 +274,13 @@ class AppSettings:
     sheet_on: bool = False
     sheet_id: str = config.DEF_SHEET_ID
     sheet_name: str = config.DEF_SHEET_NAME
+    # '고객정보' 탭 — 고객별 서류를 모아 둔 곳.
+    # files_dir 은 구글 드라이브 데스크톱이 PC 에 내려받아 둔 폴더(기본 경로).
+    # files_use_drive 를 켜면 그 폴더가 없을 때 드라이브를 직접 조회한다
+    # (drive.readonly 권한이 붙는다 — config.SCOPE_DRIVE_READ 설명 참고).
+    files_dir: str = ""
+    files_use_drive: bool = False
+    files_drive_folder: str = ""
 
     def to_json(self) -> dict:
         return {
@@ -307,6 +314,9 @@ class AppSettings:
             "sheetOn": self.sheet_on,
             "sheetId": self.sheet_id,
             "sheetName": self.sheet_name,
+            "filesDir": self.files_dir,
+            "filesUseDrive": self.files_use_drive,
+            "filesDriveFolder": self.files_drive_folder,
         }
 
     @classmethod
@@ -367,6 +377,9 @@ class AppSettings:
         s.sheet_on = bool(o.get("sheetOn", False))
         s.sheet_id = o.get("sheetId", config.DEF_SHEET_ID) or config.DEF_SHEET_ID
         s.sheet_name = o.get("sheetName", config.DEF_SHEET_NAME) or config.DEF_SHEET_NAME
+        s.files_dir = o.get("filesDir", "") or ""
+        s.files_use_drive = bool(o.get("filesUseDrive", False))
+        s.files_drive_folder = o.get("filesDriveFolder", "") or ""
         return s
 
     def save(self, path: Path) -> None:

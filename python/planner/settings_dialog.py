@@ -10,13 +10,15 @@
 from __future__ import annotations
 
 import json
+import os
 
 import threading
 from datetime import time
 
 from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGroupBox,
+    QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTextEdit, QTimeEdit,
     QVBoxLayout, QWidget,
 )
@@ -191,6 +193,40 @@ class SettingsDialog(QDialog):
             "⚠ 처음 사용할 때 [Google 로그아웃] 후 다시 로그인해야 합니다(권한 추가)."))
         root.addWidget(gb_s)
 
+        # ---- 고객정보(서류) ----
+        gb_files = QGroupBox("고객정보 — 고객별 서류 보기")
+        ffl = QFormLayout(gb_files)
+        frow = QHBoxLayout()
+        self.ed_files_dir = QLineEdit()
+        self.ed_files_dir.setPlaceholderText(
+            r"예) G:\내 드라이브\고객정보  또는  C:\Users\...\Google Drive\고객정보")
+        frow.addWidget(self.ed_files_dir, 1)
+        btn_files_dir = QPushButton("찾기")
+        btn_files_dir.clicked.connect(self._pick_files_dir)
+        frow.addWidget(btn_files_dir)
+        ffl.addRow("서류 폴더", frow)
+        ffl.addRow(QLabel(
+            "구글 드라이브 데스크톱이 PC 에 내려받아 둔 '고객정보' 폴더를 고르세요.\n"
+            "사무실과 집 PC 양쪽에 드라이브 데스크톱이 깔려 있으면, 한쪽에서 넣은\n"
+            "서류가 다른 쪽에서도 그대로 보입니다. 추가 권한이 필요 없고 인터넷이\n"
+            "없어도 열립니다."))
+
+        self.chk_files_drive = QCheckBox("폴더가 없을 때 구글 드라이브에서 직접 조회")
+        ffl.addRow("드라이브 조회", self.chk_files_drive)
+        self.ed_files_folder = QLineEdit()
+        self.ed_files_folder.setPlaceholderText("드라이브의 폴더 이름 (예: 고객정보)")
+        ffl.addRow("드라이브 폴더", self.ed_files_folder)
+        lbl_warn = QLabel(
+            "⚠ 이 기능을 켜면 로그인할 때 '드라이브 전체 읽기' 권한을 함께 요청합니다.\n"
+            "구글이 제한하는 권한이라, 켠 뒤에는 [Google 로그아웃] 후 다시 로그인해야\n"
+            "적용됩니다. 또 이 권한으로 앱을 여러 사람에게 배포하려면 구글 앱 인증과\n"
+            "매년 유료 보안심사를 통과해야 합니다.\n"
+            "→ 위의 '서류 폴더' 만 지정해도 기능은 똑같이 쓸 수 있습니다. 그쪽이 기본입니다.")
+        lbl_warn.setStyleSheet(f"color:{theme.strong('orange')};")
+        ffl.addRow(lbl_warn)
+        root.addWidget(gb_files)
+
+
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
         vl = QHBoxLayout(gb_v)
@@ -314,6 +350,9 @@ class SettingsDialog(QDialog):
         self.chk_sheet.setChecked(s.sheet_on)
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
+        self.ed_files_dir.setText(s.files_dir)
+        self.chk_files_drive.setChecked(s.files_use_drive)
+        self.ed_files_folder.setText(s.files_drive_folder)
         self.sp_expiry.setValue(s.expiry_months)
         self.chk_weekly.setChecked(s.weekly_on)
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
@@ -376,6 +415,9 @@ class SettingsDialog(QDialog):
         # 주소를 통째로 붙여넣어도 ID 만 뽑아 저장 (사용자가 ID 를 찾을 필요 없게)
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
+        s.files_dir = self.ed_files_dir.text().strip()
+        s.files_use_drive = self.chk_files_drive.isChecked()
+        s.files_drive_folder = self.ed_files_folder.text().strip()
         s.expiry_months = self.sp_expiry.value()
         s.weekly_on = self.chk_weekly.isChecked()
         s.theme = self.cmb_theme.currentData() or "light"
@@ -393,6 +435,12 @@ class SettingsDialog(QDialog):
         s.kb_hot_shift = self.chk_kb_shift.isChecked()
         s.kb_hot_key = self.cmb_kb_key.currentText()
         self.accept()
+
+    def _pick_files_dir(self):
+        start = self.ed_files_dir.text().strip() or os.path.expanduser("~")
+        d = QFileDialog.getExistingDirectory(self, "고객정보 폴더 선택", start)
+        if d:
+            self.ed_files_dir.setText(d)
 
     # ---- 구글 로그인 ----
     def _update_gstatus(self):
@@ -415,9 +463,14 @@ class SettingsDialog(QDialog):
         self.btn_login.setEnabled(False)
         self.btn_login.setText("로그인 중...")
 
+        # '드라이브에서 직접 조회' 를 켜 두었으면 그 권한도 같이 요청한다.
+        # 기본 권한에 넣지 않는 이유는 config.SCOPE_DRIVE_READ 설명 참고.
+        extra = ([config.SCOPE_DRIVE_READ]
+                 if self.chk_files_drive.isChecked() else [])
+
         def worker():
             try:
-                self.gauth.authorize()
+                self.gauth.authorize(extra_scopes=extra)
                 self._sig_login.emit(True, "")
             except Exception as e:
                 self._sig_login.emit(False, str(e))

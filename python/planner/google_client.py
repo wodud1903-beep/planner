@@ -162,8 +162,14 @@ class GoogleAuth:
         self._save()
 
     # ---- 로그인 ----
-    def authorize(self, timeout_sec: int = 120) -> None:
-        """브라우저 동의 흐름. 실패 시 GoogleError."""
+    def authorize(self, timeout_sec: int = 120,
+                  extra_scopes: Optional[list] = None) -> None:
+        """브라우저 동의 흐름. 실패 시 GoogleError.
+
+        extra_scopes 는 기본 권한에 얹어 달라고 할 것 — '고객정보' 탭에서
+        드라이브 직접 조회를 켠 사람만 drive.readonly 가 여기로 들어온다.
+        기본 목록에 넣지 않는 이유는 config.SCOPE_DRIVE_READ 설명 참고.
+        """
         httpd = None
         port = 0
         for p in config.REDIRECT_PORT_RANGE:
@@ -181,11 +187,15 @@ class GoogleAuth:
         httpd.timeout = 1
 
         redirect = f"http://127.0.0.1:{port}/"
+        want = list(config.GOOGLE_SCOPES)
+        for s in (extra_scopes or []):
+            if s and s not in want:
+                want.append(s)
         auth_url = config.AUTH_ENDPOINT + "?" + urllib.parse.urlencode({
             "client_id": config.GOOGLE_CLIENT_ID,
             "redirect_uri": redirect,
             "response_type": "code",
-            "scope": " ".join(config.GOOGLE_SCOPES),
+            "scope": " ".join(want),
             "access_type": "offline",
             "prompt": "consent",
         })
@@ -729,3 +739,83 @@ def drive_write(auth: GoogleAuth, name: str, content: str) -> str:
     if up.status_code not in (200, 201):
         raise GoogleError(f"Drive 업로드 실패 (HTTP {up.status_code})")
     return fid
+
+
+# ---------------------------------------------------------------------------
+# 드라이브 '내 드라이브' 조회 ('고객정보' 탭)
+#
+# 여기 있는 셋은 drive.readonly 권한이 있어야 동작한다. 그 권한은 기본으로
+# 요청하지 않으므로(config.SCOPE_DRIVE_READ 설명 참고), 부르는 쪽에서
+# has_scope() 로 먼저 확인한다(customer_files.DriveSource.available).
+# ---------------------------------------------------------------------------
+DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+def _drive_escape(name: str) -> str:
+    """드라이브 q 문법의 작은따옴표 이스케이프."""
+    return name.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
+    """폴더 이름(또는 id)으로 폴더 id 를 찾는다. 못 찾으면 빈 값.
+
+    이름이 같은 폴더가 여럿이면 가장 최근 것을 쓴다.
+    """
+    folder = (folder or "").strip()
+    if not folder:
+        return ""
+    # 이미 id 처럼 생겼으면 그대로 확인해 본다 (드라이브 id 에는 공백이 없다)
+    if " " not in folder and len(folder) >= 20:
+        r = requests.get(f"{config.DRIVE_FILES_URL}/{folder}",
+                         headers=auth._headers(), timeout=20,
+                         params={"fields": "id,mimeType"})
+        if r.status_code == 200 and r.json().get("mimeType") == DRIVE_FOLDER_MIME:
+            return folder
+    r = requests.get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+                     params={
+                         "q": (f"name='{_drive_escape(folder)}'"
+                               f" and mimeType='{DRIVE_FOLDER_MIME}'"
+                               " and trashed=false"),
+                         "fields": "files(id,name,modifiedTime)",
+                         "orderBy": "modifiedTime desc",
+                         "pageSize": 10,
+                     })
+    if r.status_code != 200:
+        raise GoogleError(f"드라이브 폴더 조회 실패 (HTTP {r.status_code})")
+    files = r.json().get("files", [])
+    return files[0]["id"] if files else ""
+
+
+def drive_list_folder(auth: GoogleAuth, folder_id: str) -> list:
+    """폴더 바로 밑의 폴더·파일 목록. 페이지가 나뉘면 끝까지 모은다."""
+    out: list = []
+    token = ""
+    while True:
+        params = {
+            "q": f"'{folder_id}' in parents and trashed=false",
+            "fields": ("nextPageToken,"
+                       "files(id,name,mimeType,size,modifiedTime)"),
+            "pageSize": 200,
+            "orderBy": "folder,modifiedTime desc",
+        }
+        if token:
+            params["pageToken"] = token
+        r = requests.get(config.DRIVE_FILES_URL, headers=auth._headers(),
+                         timeout=30, params=params)
+        if r.status_code != 200:
+            raise GoogleError(f"드라이브 목록 조회 실패 (HTTP {r.status_code})")
+        j = r.json()
+        out.extend(j.get("files", []))
+        token = j.get("nextPageToken", "")
+        if not token:
+            return out
+
+
+def drive_download(auth: GoogleAuth, file_id: str) -> bytes:
+    """파일 내용을 그대로 받는다(이미지·PDF 미리보기용)."""
+    r = requests.get(f"{config.DRIVE_FILES_URL}/{file_id}",
+                     headers=auth._headers(), timeout=60,
+                     params={"alt": "media"})
+    if r.status_code != 200:
+        raise GoogleError(f"드라이브 파일 내려받기 실패 (HTTP {r.status_code})")
+    return r.content
