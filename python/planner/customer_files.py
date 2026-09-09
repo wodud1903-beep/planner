@@ -10,9 +10,15 @@
                  앱 인증과 매년 유료 보안심사를 통과해야 한다.
                  그래서 기본으로 켜지 않는다 — 설정에서 켠 사람만 쓴다.
 
-폴더를 먼저 보여 주고 그 안의 파일을 보여 주는 식이 아니라, 창고 전체를 한 번
-훑어 두고(scan) 그 목록에서 찾는다. 고객 이름으로 찾을 때 폴더를 하나씩 열어
-볼 이유가 없기 때문이다.
+읽는 방법이 두 가지다.
+
+  children(node) — 그 폴더 '바로 밑' 만 읽는다. 화면은 이걸 쓴다. 드라이브
+                   웹처럼 눌러서 한 겹씩 들어간다. 폴더가 아무리 커도 즉시 뜬다.
+  scan()         — 창고 전체를 훑는다. 검색할 때만, 그것도 뒤에서 조용히 돈다.
+
+예전엔 켤 때마다 scan() 으로 트리 전체를 훑고 그 목록을 통째로 보여 줬다.
+드라이브 폴더가 크면 첫 화면이 나오기까지 한참 멈춰 있었다 — 그래서 화면용
+읽기와 검색용 읽기를 갈라 놓았다.
 """
 
 from __future__ import annotations
@@ -51,6 +57,14 @@ class Node:
     key: str = ""                 # 로컬이면 절대경로, 드라이브면 file id
     mime: str = ""
     source: str = "local"
+    is_root: bool = False         # 창고의 맨 위 폴더인가
+
+    @property
+    def rel(self) -> str:
+        """창고 기준 이 항목의 경로. 맨 위 폴더는 빈 값."""
+        if self.is_root:
+            return ""
+        return f"{self.folder}/{self.name}" if self.folder else self.name
 
     @property
     def ext(self) -> str:
@@ -176,6 +190,57 @@ class LocalSource:
                     return out
         return out
 
+    # ---- 폴더 하나씩 (드라이브처럼 눌러서 들어간다) ----
+    def root_node(self) -> Node:
+        name = os.path.basename(self.root.rstrip("\\/")) or self.root
+        return Node(name=name, is_dir=True, folder="", key=self.root,
+                    source=self.kind, is_root=True)
+
+    def _rel(self, key: str) -> str:
+        try:
+            r = os.path.relpath(key, self.root)
+        except ValueError:
+            return ""
+        return "" if r == "." else r.replace("\\", "/")
+
+    def children(self, node: Node) -> list:
+        """그 폴더 '바로 밑' 만 읽는다.
+
+        전체를 훑지 않으므로 폴더가 아무리 커도 즉시 나온다. 예전엔 켤 때마다
+        트리 전체를 훑어서 드라이브 폴더가 크면 한참 멈춰 있었다.
+        """
+        out: list = []
+        shown = self._rel(node.key)
+        try:
+            with os.scandir(node.key) as it:
+                for e in it:
+                    if _skip_name(e.name):
+                        continue
+                    try:
+                        is_dir = e.is_dir()
+                        st = e.stat()
+                    except OSError:
+                        continue
+                    out.append(Node(
+                        name=e.name, is_dir=is_dir, folder=shown,
+                        size=0 if is_dir else st.st_size,
+                        mtime=datetime.fromtimestamp(st.st_mtime),
+                        key=e.path, source=self.kind))
+        except OSError:
+            return out
+        return out
+
+    def parent_of(self, node: Node):
+        """상위 폴더. 창고 밖으로는 못 올라간다."""
+        if os.path.normpath(node.key) == os.path.normpath(self.root):
+            return None
+        up = os.path.dirname(node.key.rstrip("\\/"))
+        if len(os.path.normpath(up)) < len(os.path.normpath(self.root)):
+            return None
+        name = os.path.basename(up.rstrip("\\/")) or up
+        return Node(name=name, is_dir=True, folder=self._rel(os.path.dirname(up)),
+                    key=up, source=self.kind)
+
     def read_bytes(self, node: Node) -> bytes:
         with open(node.key, "rb") as fp:
             return fp.read()
@@ -183,6 +248,23 @@ class LocalSource:
     def local_path(self, node: Node) -> str:
         """연결 프로그램으로 열 때 쓸 실제 경로."""
         return node.key
+
+
+def _skip_name(name: str) -> bool:
+    """드라이브·오피스·윈도가 만드는 찌꺼기는 안 보여 준다."""
+    return (name in SKIP_DIRS or name.startswith(".")
+            or name.startswith("~$"))
+
+
+def signature(nodes: list) -> tuple:
+    """폴더 안이 바뀌었는지 싸게 견주기 위한 요약값.
+
+    이름·크기·시각이 하나라도 달라지면 값이 달라진다. 이것만 견주면 화면을
+    괜히 다시 그리지 않아도 되고, 바뀌었을 때만 조용히 갱신할 수 있다.
+    """
+    return tuple(sorted(
+        (n.name, n.is_dir, n.size,
+         int(n.mtime.timestamp()) if n.mtime else 0) for n in nodes))
 
 
 def _mtime(path: str):
@@ -246,6 +328,34 @@ class DriveSource:
                 if len(out) >= limit:
                     break
         return out
+
+    # ---- 폴더 하나씩 ----
+    def root_node(self) -> Node:
+        from . import google_client
+        fid = google_client.drive_folder_id(self.auth, self.folder)
+        return Node(name=self.folder or "고객정보", is_dir=True, folder="",
+                    key=fid, source=self.kind, is_root=True)
+
+    def children(self, node: Node) -> list:
+        from . import google_client
+        if not node.key:
+            return []
+        shown = node.rel
+        out = []
+        for it in google_client.drive_list_folder(self.auth, node.key):
+            is_dir = it.get("mimeType") == google_client.DRIVE_FOLDER_MIME
+            out.append(Node(
+                name=it.get("name", ""), is_dir=is_dir, folder=shown,
+                size=int(it.get("size") or 0),
+                mtime=_parse_rfc3339(it.get("modifiedTime", "")),
+                key=it.get("id", ""), mime=it.get("mimeType", ""),
+                source=self.kind))
+        return out
+
+    def parent_of(self, node: Node):
+        # 드라이브는 부모를 되짚기보다 지나온 길을 기억해 두는 편이 싸다.
+        # 화면(customer_files_tab)이 그 길을 들고 있으므로 여기서는 안 쓴다.
+        return None
 
     def read_bytes(self, node: Node) -> bytes:
         from . import google_client
