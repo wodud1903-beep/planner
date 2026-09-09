@@ -189,9 +189,13 @@ class MainWindow(QMainWindow):
         #    도로 되돌리는 식으로 '두 가지 크기' 를 지킨다(resizeEvent).
         self.setMinimumHeight(_h)
         self.setMaximumHeight(Q_SIZE_MAX)
+        # 가로 상한은 걸지 않는다. 창관리자는 '이 창이 얼마나 커질 수 있는가' 를
+        # 이 값으로 판단하는데, 화면폭보다 작은 상한이 걸려 있으면 최대화가
+        # 반쪽이 되거나(가로가 그 값에서 멈춤) 최대화 단추 자체가 죽는다.
+        # 화면 밖으로 나가지 않게 하는 일은 창관리자가 알아서 한다.
         _lo, _hi = self._width_bounds(_avail)
         self.setMinimumWidth(_lo)
-        self.setMaximumWidth(_hi)
+        self.setMaximumWidth(Q_SIZE_MAX)
         self._centered_once = False
         # 폭을 끄는 동안 계속 저장하지 않도록, 멈춘 뒤 한 번만 쓴다
         self._width_timer = QTimer(self)
@@ -3247,13 +3251,10 @@ class MainWindow(QMainWindow):
             return
         self._maximized = now_max
         if now_max:
-            # 화면을 꽉 채우려면 가로 상한(화면폭-20)도 걸리적거린다
-            self.setMaximumWidth(Q_SIZE_MAX)
             return
         avail = QGuiApplication.primaryScreen().availableGeometry()
         lo, hi = self._width_bounds(avail)
         self.setMinimumWidth(lo)
-        self.setMaximumWidth(hi)
         # 쓰던 '보통' 크기로 되돌린다 (여기서 난 resize 는 되돌리기 대상이 아니다)
         self._snapping = True
         try:

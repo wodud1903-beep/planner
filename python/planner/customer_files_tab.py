@@ -69,6 +69,8 @@ class CustomerFilesTab(QWidget):
         self._gen = 0
         self._sig = None              # 지금 폴더의 요약값(바뀜 감지)
         self._preview_key = ""
+        self._sort_col = 0        # 0=이름 · 마지막 열들=크기/날짜
+        self._sort_desc = False
 
         v = QVBoxLayout(self)
 
@@ -117,6 +119,9 @@ class CustomerFilesTab(QWidget):
         # 남는 폭은 '이름' 이 받는다. 마지막 칸(날짜)을 늘리면 날짜가 허옇게
         # 넓어지고 정작 긴 폴더 이름이 잘린다.
         self.tbl.horizontalHeader().setStretchLastSection(False)
+        hdr0 = self.tbl.horizontalHeader()
+        hdr0.setSectionsClickable(True)
+        hdr0.sectionClicked.connect(self._on_header_clicked)
         self.tbl.itemSelectionChanged.connect(self._on_select)
         self.tbl.doubleClicked.connect(self._on_double)
         # 오른쪽 단추 메뉴 · 바깥에서 끌어다 놓기
@@ -286,7 +291,8 @@ class CustomerFilesTab(QWidget):
     def _show_browse(self):
         keep = self._selected_name()
         self._set_columns(self.COLS, self.WIDTHS)
-        self._fill(self.rows, up=len(self.path) > 1)
+        self._mark_sort_header()
+        self._fill(self._sorted(self.rows), up=len(self.path) > 1)
         self.btn_up.setEnabled(len(self.path) > 1)
         self._update_where()
         n_dir = sum(1 for n in self.rows if n.is_dir)
@@ -372,7 +378,8 @@ class CustomerFilesTab(QWidget):
         pool = self.index if self.index is not None else self._partial
         hits = customer_files.search(pool, q)
         self._set_columns(self.SEARCH_COLS, self.SEARCH_WIDTHS)
-        self._fill(hits, up=False, with_where=True)
+        self._mark_sort_header()
+        self._fill(self._sorted(hits), up=False, with_where=True)
         self.btn_up.setEnabled(False)
         if self.index is None:
             self.lbl_count.setText(f"{len(hits):,}건 (훑는 중 {len(pool):,})")
@@ -380,6 +387,55 @@ class CustomerFilesTab(QWidget):
         else:
             self.lbl_count.setText(f"{len(hits):,} / {len(pool):,}건")
             self.lbl_where.setText("검색 결과 — 전체에서 찾았습니다")
+
+
+    # ---------------------------------------------------------------- 정렬
+    #
+    # 머리글을 누르면 그 기준으로 줄을 세운다. 같은 머리글을 또 누르면 거꾸로.
+    # 폴더는 늘 위에 둔다(윈도 탐색기와 같다) — 폴더와 파일이 섞이면 찾기 어렵다.
+    def _on_header_clicked(self, col: int):
+        name = self._cols[col] if col < len(self._cols) else ""
+        if name not in ("이름", "크기", "날짜", "위치"):
+            return
+        if col == self._sort_col:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_col, self._sort_desc = col, False
+        q = self.ed_search.text().strip()
+        if q:
+            self._show_search(q)
+        else:
+            self._show_browse()
+
+    def _sorted(self, rows: list) -> list:
+        name = (self._cols[self._sort_col]
+                if self._sort_col < len(self._cols) else "이름")
+        if name == "크기":
+            key = lambda n: (not n.is_dir, n.size)
+        elif name == "날짜":
+            key = lambda n: (not n.is_dir,
+                             n.mtime.timestamp() if n.mtime else 0)
+        elif name == "위치":
+            key = lambda n: (not n.is_dir, n.folder.lower(), n.name.lower())
+        else:                                   # 이름
+            key = lambda n: (not n.is_dir, n.name.lower())
+        out = sorted(rows, key=key, reverse=self._sort_desc)
+        if self._sort_desc:
+            # 거꾸로 세워도 폴더는 위에 남는다
+            out = ([n for n in out if n.is_dir]
+                   + [n for n in out if not n.is_dir])
+        return out
+
+    def _mark_sort_header(self):
+        """어느 기준으로 세웠는지 머리글에 화살표로 알린다."""
+        for i, nm in enumerate(self._cols):
+            item = self.tbl.horizontalHeaderItem(i)
+            if item is None:
+                continue
+            if i == self._sort_col:
+                item.setText(nm + ("  ▼" if self._sort_desc else "  ▲"))
+            else:
+                item.setText(nm)
 
     # ------------------------------------------------------------ 표
     def _set_columns(self, cols, widths):
@@ -394,6 +450,8 @@ class CustomerFilesTab(QWidget):
             hdr.setSectionResizeMode(i, QHeaderView.Interactive)
         # '이름' 이 남는 폭을 받아 긴 폴더 이름이 안 잘리게 한다
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        if self._sort_col >= len(cols):
+            self._sort_col, self._sort_desc = 0, False
 
     def _fill(self, rows: list, up: bool = False, with_where: bool = False):
         self.tbl.setRowCount(0)
