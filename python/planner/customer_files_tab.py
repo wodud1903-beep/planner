@@ -26,6 +26,12 @@ from . import config, customer_files, searchcombo, theme
 _ = searchcombo   # 다른 탭과 같은 검색 위젯 관례를 따르기 위한 자리(미사용)
 
 
+def _one_line(text: str) -> str:
+    """여러 줄 안내를 한 줄짜리 라벨에 넣을 수 있게 줄인다."""
+    s = " ".join((text or "").split())
+    return s if len(s) <= 90 else s[:88] + "…"
+
+
 class CustomerFilesTab(QWidget):
     """고객 서류 찾아보기."""
 
@@ -37,11 +43,12 @@ class CustomerFilesTab(QWidget):
 
     def __init__(self, settings, auth, parent=None):
         super().__init__(parent)
-        self.settings = settings
+        self._settings = settings
         self.auth = auth
         self.nodes: list = []
         self.source = None
         self._scanning = False
+        self._scan_gen = 0
         self._preview_key = ""
 
         v = QVBoxLayout(self)
@@ -119,13 +126,35 @@ class CustomerFilesTab(QWidget):
         self.sig_preview.connect(self._on_preview)
         self._update_where()
 
+    # ⚠️ 설정을 '복사해 두면' 안 된다.
+    #
+    # 로그인해서 계정이 확인되면 메인 창이 reload_data() 로 설정 객체를 통째로
+    # 새로 읽는다(self.settings = AppSettings.load(...)). 예전엔 이 탭이 만들
+    # 때 받은 옛 객체를 계속 붙들고 있어서, 설정에서 폴더를 지정해도 그 값이
+    # 새 객체에만 들어가고 탭은 빈 값을 보았다 — 폴더를 아무리 지정해도
+    # '0건' 이 나오던 원인이 이거였다. 그래서 늘 창이 지금 쓰는 설정을 본다.
+    @property
+    def settings(self):
+        w = self.window()
+        if w is not self:                      # 창이 없으면 자기 자신이 나온다
+            s = getattr(w, "settings", None)
+            if s is not None:
+                return s
+        return self._settings
+
+    def set_settings(self, s):
+        """창이 설정을 새로 읽었을 때 알려 준다(위 property 의 예비책)."""
+        self._settings = s
+
     # ------------------------------------------------------------ 폴더 지정
     def pick_folder(self):
         start = self.settings.files_dir or os.path.expanduser("~")
         d = QFileDialog.getExistingDirectory(self, "고객정보 폴더 선택", start)
         if not d:
             return
-        self.settings.files_dir = d
+        s = self.settings
+        s.files_dir = d
+        self._settings.files_dir = d      # 창이 없을 때(테스트 등)도 남게
         self._save_settings()
         self.reload()
 
@@ -136,39 +165,62 @@ class CustomerFilesTab(QWidget):
 
     # ------------------------------------------------------------ 읽기
     def reload(self):
-        if self._scanning:
-            return
+        # 훑는 중에 또 눌러도 새로 시작한다. 예전엔 여기서 그냥 돌아가 버려서,
+        # 어쩌다 _scanning 이 True 로 남으면 [새로고침] 이 영영 안 눌렸다.
         self.source, why = customer_files.pick_source(self.settings, self.auth)
         self._update_where()
         if self.source is None:
+            self._scanning = False
+            self.btn_reload.setEnabled(True)
             self.nodes = []
             self._fill([])
-            self.lbl_count.setText("")
-            self.lbl_where.setText("자료를 읽을 곳이 없습니다 — [폴더 선택]")
+            # 왜 안 되는지는 툴팁이 아니라 화면에 적는다 — 툴팁은 아무도 안 본다
+            self.lbl_count.setText("읽을 곳 없음")
+            self.lbl_where.setText("자료를 읽을 곳이 없습니다 — " + _one_line(why))
             self.lbl_where.setToolTip(why)
+            self.lbl_where.setStyleSheet(f"color:{theme.c('status_bad')};")
             return
+        self.lbl_where.setStyleSheet("")
         self._scanning = True
+        self._scan_gen += 1
+        gen = self._scan_gen
         self.btn_reload.setEnabled(False)
         self.lbl_count.setText("읽는 중…")
         src = self.source
 
         def worker():
+            # 무슨 일이 있어도 결과를 한 번은 보낸다 — 안 보내면 [새로고침] 이
+            # 잠긴 채로 남는다.
             try:
-                self.sig_scanned.emit(src.scan(), "")
+                nodes = src.scan()
             except Exception as e:
-                self.sig_scanned.emit(None, str(e))
+                self.sig_scanned.emit(None, f"{gen}\x00{e}")
+            else:
+                self.sig_scanned.emit(nodes, f"{gen}\x00")
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_scanned(self, nodes, err: str):
+        gen, _, msg = (err or "").partition("\x00")
+        # 늦게 온 예전 결과가 새 결과를 덮어쓰지 않게 한다
+        if gen.isdigit() and int(gen) != self._scan_gen:
+            return
         self._scanning = False
         self.btn_reload.setEnabled(True)
         if nodes is None:
-            self.lbl_count.setText("")
-            QMessageBox.warning(self, config.APP_NAME, "자료를 읽지 못했습니다:\n" + err)
+            self.lbl_count.setText("읽기 실패")
+            QMessageBox.warning(self, config.APP_NAME,
+                                "자료를 읽지 못했습니다:\n" + msg)
             return
         self.nodes = customer_files.sort_nodes(nodes)
         self._apply_filter()
+        if not self.nodes:
+            # 폴더는 찾았는데 안이 비었다 — 경로를 잘못 짚은 경우가 대부분이라
+            # 무엇을 본 것인지 그대로 보여 준다.
+            where = getattr(self.source, "root", "") or self.settings.files_drive_folder
+            self.lbl_count.setText("0건 — 폴더가 비어 있습니다")
+            self.lbl_where.setToolTip(
+                f"이 폴더 안에서 파일을 찾지 못했습니다:\n{where}")
 
     def _update_where(self):
         src = self.source

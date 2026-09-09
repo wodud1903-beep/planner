@@ -517,6 +517,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tab_kb"):
             self.tab_kb.set_account(getattr(self, "account_email", ""))
             self.tab_kb.reload()
+        if hasattr(self, "tab_files"):
+            # 설정 객체를 통째로 새로 읽었으므로 탭에도 새것을 넘긴다.
+            # (탭은 창의 설정을 직접 보기도 하지만, 여기서도 확실히 맞춰 둔다)
+            self.tab_files.set_settings(self.settings)
+            self._files_loaded = False       # 계정이 바뀌면 폴더도 달라진다
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -1912,6 +1917,9 @@ class MainWindow(QMainWindow):
         prev_theme = (getattr(self.settings, "theme", "")
                       or ("dark" if self.settings.dark_mode else "light"))
         prev_sheet = (self.settings.sheet_id.strip(), self.settings.sheet_name.strip())
+        prev_files = (self.settings.files_dir.strip(),
+                      self.settings.files_use_drive,
+                      self.settings.files_drive_folder.strip())
         dlg = SettingsDialog(self.gauth, self.settings, self,
                              account=getattr(self, 'account_email', ''),
                              on_backup=self.open_backup,
@@ -1928,6 +1936,16 @@ class MainWindow(QMainWindow):
             if hasattr(self, "tab_comm"):
                 self.tab_comm.reload_rates()   # 수당율을 고쳤을 수 있다
             self.fetch_rates_async()
+            # 서류 폴더를 바꿨으면 '고객정보' 탭을 다시 읽는다.
+            # 예전엔 설정에서 폴더를 지정해도 탭이 그대로여서, 다시 켜기 전엔
+            # 아무것도 안 나왔다.
+            now_files = (self.settings.files_dir.strip(),
+                         self.settings.files_use_drive,
+                         self.settings.files_drive_folder.strip())
+            if now_files != prev_files and hasattr(self, "tab_files"):
+                self.tab_files.set_settings(self.settings)
+                self._files_loaded = True
+                self.tab_files.reload()
             now_sheet = (self.settings.sheet_id.strip(),
                          self.settings.sheet_name.strip())
             if now_sheet != prev_sheet:
