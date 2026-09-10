@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, QByteArray, QSize, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QSize, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
@@ -38,6 +38,8 @@ class FilePreview(QWidget):
         self._buf = None                # PDF 바이트 — 문서가 사는 동안 붙들어 둔다
         self._page = 0
         self._zoom = 0.0      # 0 이면 '칸에 맞춤', 그 외는 배율
+        self._pan_from = None   # 끌기 시작한 자리(화면 기준)
+        self._pan_at = (0, 0)   # 끌기 시작할 때의 스크롤 위치
 
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
@@ -101,6 +103,10 @@ class FilePreview(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         v.addWidget(self.scroll, 1)
+
+        # 그림 위에서 끌면 옮겨 보게 한다
+        self.view.installEventFilter(self)
+        self.view.setMouseTracking(True)
 
         self.apply_theme()
         self._update_bar()
@@ -317,6 +323,44 @@ class FilePreview(QWidget):
                                   Qt.SmoothTransformation)
         return pix
 
+    # ---------------------------------------------------------------- 끌어서 옮기기
+    #
+    # 확대하면 그림이 칸보다 커진다. 그때는 스크롤막대를 잡는 대신 그림을
+    # 직접 끌어서 보고 싶은 자리로 옮길 수 있게 한다(지도 앱과 같은 조작).
+    def eventFilter(self, obj, ev):
+        if obj is self.view:
+            t = ev.type()
+            if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                if self._can_pan():
+                    self._pan_from = ev.globalPosition().toPoint()
+                    self._pan_at = (self.scroll.horizontalScrollBar().value(),
+                                    self.scroll.verticalScrollBar().value())
+                    self.view.setCursor(Qt.ClosedHandCursor)
+                    return True
+            elif t == QEvent.MouseMove and self._pan_from is not None:
+                d = ev.globalPosition().toPoint() - self._pan_from
+                # 끄는 방향으로 그림이 따라오게 — 스크롤은 반대로 움직인다
+                self.scroll.horizontalScrollBar().setValue(self._pan_at[0] - d.x())
+                self.scroll.verticalScrollBar().setValue(self._pan_at[1] - d.y())
+                return True
+            elif t == QEvent.MouseButtonRelease and self._pan_from is not None:
+                self._pan_from = None
+                self._update_cursor()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _can_pan(self) -> bool:
+        """칸보다 그림이 커야 옮길 자리가 있다."""
+        if self._src is None and self._doc is None:
+            return False
+        vp = self.scroll.viewport().size()
+        return (self.view.width() > vp.width() + 1
+                or self.view.height() > vp.height() + 1)
+
+    def _update_cursor(self):
+        self.view.setCursor(Qt.OpenHandCursor if self._can_pan()
+                            else Qt.ArrowCursor)
+
     def wheelEvent(self, ev):
         """Ctrl + 휠로 확대·축소. 그냥 휠은 스크롤 그대로."""
         if ev.modifiers() & Qt.ControlModifier:
@@ -352,6 +396,7 @@ class FilePreview(QWidget):
             self.view.resize(self.scroll.viewport().size())
         else:
             self.view.resize(pix.size())
+        self._update_cursor()
 
 
     def _update_bar(self):

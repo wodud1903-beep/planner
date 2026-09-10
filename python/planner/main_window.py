@@ -3220,15 +3220,50 @@ class MainWindow(QMainWindow):
             pass
         return False
 
+    def _snap_height_if_normal(self):
+        """미뤄 둔 되돌리기 — 이제야 최대화인지 아닌지 확실히 알 수 있다."""
+        if self._snapping or self._is_max():
+            return                      # 최대화였다 → 건드리지 않는다
+        h = self.height()
+        if h == self._normal_h:
+            self._snap_from = None
+            return
+        # 같은 높이에서 두 번은 조르지 않는다. 창관리자가 우리 요청을 안 받아
+        # 주면 되돌리기 → resizeEvent → 되돌리기 로 끝없이 돌기 때문이다.
+        if self._snap_from == h:
+            return
+        self._snap_from = h
+        self._snapping = True
+        try:
+            self.resize(self.width(), self._normal_h)
+        finally:
+            self._snapping = False
+
+    # 창이 '거의 화면만큼' 커졌으면 최대화로 친다. 창틀·제목줄 때문에 화면보다
+    # 조금 작게 잡히므로 여유를 둔다. 보통 크기(_normal_h)와는 넉넉히 벌어져
+    # 있어서 헷갈리지 않는다 — 보통 세로는 min(920, 화면-60) 이다.
+    MAX_SLACK_W, MAX_SLACK_H = 20, 40
+
     def _is_max(self) -> bool:
         """최대화(또는 전체화면) 상태인가.
 
-        isMaximized() 는 상태가 바뀌는 도중 아직 False 일 수 있어, 창 상태
-        비트도 함께 본다. 안 그러면 최대화되는 중에 세로를 되돌려 버린다.
+        ⚠️ 창 상태 비트만 믿으면 안 된다. 최대화를 누르면 '커졌다'(resize)가
+        '최대화됨'(state)보다 **먼저** 오는 창관리자가 있다(윈도가 그렇다).
+        그 틈에 세로를 되돌려 버려서, 가로만 커지고 세로는 제자리로 돌아갔다.
+        그래서 크기도 함께 본다 — 화면을 거의 채웠으면 최대화로 친다.
         """
-        return bool(self.isMaximized() or self.isFullScreen()
-                    or (self.windowState() & (Qt.WindowMaximized
-                                              | Qt.WindowFullScreen)))
+        if (self.isMaximized() or self.isFullScreen()
+                or (self.windowState() & (Qt.WindowMaximized
+                                          | Qt.WindowFullScreen))):
+            return True
+        try:
+            av = QGuiApplication.primaryScreen().availableGeometry()
+        except Exception:
+            return False
+        # '화면만큼' 이지 '화면보다 크게' 가 아니다. 화면보다 훌쩍 큰 창은
+        # 최대화가 아니라 그냥 억지로 키운 것이므로 되돌려야 한다.
+        return (abs(self.width() - av.width()) <= self.MAX_SLACK_W
+                and abs(self.height() - av.height()) <= self.MAX_SLACK_H)
 
     def changeEvent(self, event):
         """창 크기는 '보통' 과 '최대화' 둘뿐 — 그 사이 값은 없다.
@@ -3283,19 +3318,15 @@ class MainWindow(QMainWindow):
         # 설명), 이렇게 되돌리는 쪽으로 지킨다.
         h = self.height()
         if (getattr(self, "_centered_once", False)
-                and not self._snapping and not self._is_max()
-                and h != self._normal_h):
-            # 같은 높이에서 두 번은 조르지 않는다. 창관리자가 우리 요청을 안
-            # 받아 주면(그런 환경이 있다) 되돌리기 → resizeEvent → 되돌리기 로
-            # 끝없이 돌기 때문이다. 한 번 시도하고, 높이가 또 달라지면 그때 다시.
-            if self._snap_from != h:
-                self._snap_from = h
-                self._snapping = True
-                try:
-                    self.resize(self.width(), self._normal_h)
-                finally:
-                    self._snapping = False
-                return
+                and not self._snapping and h != self._normal_h):
+            # ⚠️ 여기서 바로 되돌리면 안 된다.
+            #
+            # 최대화를 누르면 창이 커지는 알림(resize)이 '최대화됨' 이라는 상태
+            # 알림보다 **먼저** 오는 경우가 있다(윈도가 그렇다). 그 순간에는
+            # 아직 최대화가 아닌 것으로 보이므로, 여기서 되돌려 버리면 가로만
+            # 커지고 세로는 도로 제자리로 돌아간다 — 실제로 그렇게 됐다.
+            # 그래서 판단을 잠시 미룬다. 그 사이에 상태 알림이 처리된다.
+            QTimer.singleShot(0, self._snap_height_if_normal)
         elif h == self._normal_h:
             self._snap_from = None      # 제자리로 왔으니 다음 시도를 허용
         # 뜨기 전(_saved_width 로 맞추는 중)에는 저장하지 않는다 — 그러면 화면에
