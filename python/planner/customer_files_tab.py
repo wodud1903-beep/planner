@@ -18,8 +18,9 @@ import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QBuffer, QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtCore import QBuffer, QEvent, QMimeData, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QDrag, QGuiApplication, QImage, QKeySequence,
+                           QPixmap)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
@@ -40,6 +41,50 @@ POLL_DRIVE = 45
 def _one_line(text: str) -> str:
     s = " ".join((text or "").split())
     return s if len(s) <= 90 else s[:88] + "…"
+
+
+
+class _FileTable(QTableWidget):
+    """바깥으로 끌어낼 수 있는 목록.
+
+    고른 파일을 그대로 끌어다 카카오톡 대화창에 놓으면 그 파일이 전송된다.
+    끌고 나가는 것은 '파일'이라야 한다 — 그림 데이터만 실으면 받는 쪽이
+    이름도 원본 화질도 모른 채 다시 만들어 낸다.
+    """
+
+    def __init__(self, cols, on_drag_paths, parent=None):
+        super().__init__(0, cols, parent)
+        self._on_drag_paths = on_drag_paths
+
+    def startDrag(self, actions):
+        paths = self._on_drag_paths()
+        if not paths:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(file_mime(paths))
+        # 끌고 다니는 동안 무엇을 쥐고 있는지 보이게 한다
+        icon = self.style().standardIcon(self.style().SP_FileIcon)
+        pm = icon.pixmap(32, 32)
+        if not pm.isNull():
+            drag.setPixmap(pm)
+        drag.exec(Qt.CopyAction)
+
+
+def file_mime(paths: list) -> QMimeData:
+    """파일을 클립보드·드래그에 실을 형태로 담는다.
+
+    - 파일 목록(urls)  : 카카오톡·탐색기가 '파일'로 받는다. 이게 본체다.
+    - 글자(경로)        : 경로를 글자로 받는 곳이 있다.
+    - 그림(그림 파일일 때): 파일을 못 받고 그림만 받는 곳(한글·워드 등)을 위해.
+    """
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile(p) for p in paths])
+    md.setText("\n".join(paths))
+    if len(paths) == 1:
+        img = QImage(paths[0])
+        if not img.isNull():
+            md.setImageData(img)
+    return md
 
 
 class CustomerFilesTab(QWidget):
@@ -108,7 +153,7 @@ class CustomerFilesTab(QWidget):
 
         # ---- 목록 + 미리보기 ----
         self.split = QSplitter(Qt.Horizontal)
-        self.tbl = QTableWidget(0, len(self.COLS))
+        self.tbl = _FileTable(len(self.COLS), self._drag_paths)
         self.tbl.setHorizontalHeaderLabels(self.COLS)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -128,7 +173,10 @@ class CustomerFilesTab(QWidget):
         self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl.customContextMenuRequested.connect(self._menu)
         self.tbl.setAcceptDrops(True)
-        self.tbl.setDragDropMode(QAbstractItemView.DropOnly)
+        # 끌어다 놓기(받기)와 끌어내기(보내기) 둘 다 한다
+        self.tbl.setDragEnabled(True)
+        self.tbl.setDragDropMode(QAbstractItemView.DragDrop)
+        self.tbl.setDefaultDropAction(Qt.CopyAction)
         self.tbl.viewport().setAcceptDrops(True)
         self.tbl.installEventFilter(self)
         self.tbl.viewport().installEventFilter(self)
@@ -389,6 +437,39 @@ class CustomerFilesTab(QWidget):
             self.lbl_where.setText("검색 결과 — 전체에서 찾았습니다")
 
 
+
+    # ------------------------------------------------ 복사해서 카카오톡으로
+    #
+    # 고른 파일을 클립보드에 '파일' 로 올린다. 카카오톡 대화창에서 Ctrl+V 하면
+    # 그 파일이 붙고, 목록에서 그대로 끌어다 놓아도 전송된다.
+    # 드라이브를 API 로 조회하는 중에는 PC 에 파일이 없으므로 안 된다.
+    def _drag_paths(self) -> list:
+        """지금 고른 것의 실제 경로. 끌어내기와 복사가 같이 쓴다."""
+        n = self._current()
+        if n is None or n.is_dir or self.source is None:
+            return []
+        path = self.source.local_path(n)
+        return [path] if path and os.path.exists(path) else []
+
+    def copy_selected(self):
+        """Ctrl+C — 고른 파일을 클립보드에 올린다."""
+        n = self._current()
+        if n is None:
+            return
+        if n.is_dir:
+            self._toast("폴더는 복사할 수 없습니다. 파일을 골라 주세요.")
+            return
+        paths = self._drag_paths()
+        if not paths:
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "이 파일은 PC 에 없어서 복사할 수 없습니다.\n"
+                "[설정] 에서 서류 폴더를 지정하면 복사·끌어내기가 됩니다.")
+            return
+        QApplication.clipboard().setMimeData(file_mime(paths))
+        self._toast(f"{os.path.basename(paths[0])} — 복사했습니다. "
+                    "카카오톡에서 Ctrl+V 로 붙여 넣으세요.")
+
     # ---------------------------------------------------------------- 정렬
     #
     # 머리글을 누르면 그 기준으로 줄을 세운다. 같은 머리글을 또 누르면 거꾸로.
@@ -636,6 +717,9 @@ class CustomerFilesTab(QWidget):
         """끌어다 놓기와 Ctrl+V·Delete 를 표에서 받는다."""
         t = ev.type()
         if t == QEvent.KeyPress:
+            if ev.matches(QKeySequence.Copy):
+                self.copy_selected()
+                return True
             if ev.matches(QKeySequence.Paste):
                 self.paste_clipboard()
                 return True
@@ -828,6 +912,11 @@ class CustomerFilesTab(QWidget):
         m = QMenu(self)
         n = self._current()
         editable = self._can_edit()
+        if n is not None and not n.is_dir:
+            a = m.addAction("복사  (Ctrl+C)")
+            a.setToolTip("카카오톡 대화창에서 Ctrl+V 로 붙여 넣을 수 있습니다")
+            a.triggered.connect(self.copy_selected)
+            m.addSeparator()
         if n is not None:
             a = m.addAction("이름 바꾸기")
             a.setEnabled(editable)

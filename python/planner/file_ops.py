@@ -129,6 +129,12 @@ def copy_in(sources: list, folder: str) -> tuple:
             if _inside(src, folder):
                 failed.append(f"{os.path.basename(src)} — 자기 안으로는 넣을 수 없습니다")
                 continue
+            # 이미 이 폴더에 있는 파일이면 아무 일도 하지 않는다.
+            # 목록에서 끌어다 같은 폴더에 놓는 일이 흔한데, 그때마다
+            # '이름 (2)' 사본이 생기면 곤란하다.
+            if os.path.normcase(os.path.dirname(os.path.abspath(src))) == \
+                    os.path.normcase(os.path.abspath(folder)):
+                continue
             name = os.path.basename(src.rstrip("\\/"))
             target = unique_path(folder, name)
             if os.path.isdir(src):
