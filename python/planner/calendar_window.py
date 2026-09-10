@@ -14,7 +14,7 @@ import webbrowser
 from datetime import date, datetime, time, timedelta
 
 from PySide6.QtCore import QDate, QRect, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QTextCharFormat
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,

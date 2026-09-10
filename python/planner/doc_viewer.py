@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
 )
 
-from . import config, theme
+from . import theme
 
 
 def fetch_image(url: str, auth=None) -> bytes:

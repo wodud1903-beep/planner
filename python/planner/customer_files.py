@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -273,13 +273,6 @@ def signature(nodes: list) -> tuple:
          int(n.mtime.timestamp()) if n.mtime else 0) for n in nodes))
 
 
-def _mtime(path: str):
-    try:
-        return datetime.fromtimestamp(os.stat(path).st_mtime)
-    except OSError:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # 구글 드라이브 API
 # ---------------------------------------------------------------------------
@@ -307,7 +300,13 @@ class DriveSource:
             return "조회할 드라이브 폴더가 지정되지 않았습니다."
         return ""
 
-    def scan(self, limit: int = MAX_FILES) -> list:
+    def scan(self, limit: int = MAX_FILES, on_batch=None) -> list:
+        """창고 전체를 훑는다(검색용).
+
+        ⚠️ on_batch 를 받는 것이 LocalSource.scan 과의 약속이다. 예전엔 이 쪽만
+        빠져 있어서, 드라이브 조회 모드에서 검색을 켜면 첫 줄에서 TypeError 가
+        나고 '검색 준비 실패' 만 뜬 채 영영 검색이 안 됐다.
+        """
         from . import google_client
         root_id = google_client.drive_folder_id(self.auth, self.folder)
         if not root_id:
@@ -333,6 +332,10 @@ class DriveSource:
                     queue.append((node.key, sub, depth + 1))
                 if len(out) >= limit:
                     break
+            # 폴더 하나를 끝낼 때마다 중간 결과를 넘긴다 — 네트워크를 타는
+            # 드라이브는 다 끝나기까지 한참이라, 찾은 것부터 보여 줘야 한다.
+            if on_batch is not None:
+                on_batch(out)
         return out
 
     # ---- 폴더 하나씩 ----

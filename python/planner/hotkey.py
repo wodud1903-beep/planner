@@ -47,7 +47,7 @@ class _HotkeyFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):  # noqa: N802
         if sys.platform == "win32" and event_type == "windows_generic_MSG":
             try:
-                import ctypes
+                import ctypes  # noqa: F401  (wintypes 를 쓰려면 부모부터)
                 from ctypes import wintypes
                 msg = wintypes.MSG.from_address(int(message))
                 if msg.message == WM_HOTKEY:

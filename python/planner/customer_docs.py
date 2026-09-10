@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
 )
 
-from . import config, kb, searchcombo, theme
+from . import config, searchcombo, theme
 
 FILE = "customer_docs.json"
 # 이 진행현황일 때만 '서류 미비' 를 브리핑에 알린다.

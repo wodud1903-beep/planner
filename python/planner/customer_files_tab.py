@@ -19,8 +19,7 @@ import sys
 import threading
 
 from PySide6.QtCore import QBuffer, QEvent, QMimeData, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import (QDrag, QGuiApplication, QImage, QKeySequence,
-                           QPixmap)
+from PySide6.QtGui import QDrag, QGuiApplication, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
@@ -114,8 +113,12 @@ class CustomerFilesTab(QWidget):
         self._gen = 0
         self._sig = None              # 지금 폴더의 요약값(바뀜 감지)
         self._preview_key = ""
-        self._sort_col = 0        # 0=이름 · 마지막 열들=크기/날짜
+        # 정렬 기준은 '몇 번째 칸' 이 아니라 '어느 칸 이름' 으로 들고 있는다.
+        # 찾아보기는 칸이 3개(이름·크기·날짜)인데 검색은 4개(이름·위치·크기·날짜)
+        # 라서, 번호로 기억하면 검색으로 넘어가는 순간 날짜가 크기로 바뀌었다.
+        self._sort_key = "이름"
         self._sort_desc = False
+        self._view: list = []
 
         v = QVBoxLayout(self)
 
@@ -326,15 +329,24 @@ class CustomerFilesTab(QWidget):
         changed = (sig != self._sig)
         self._sig = sig
         self.rows = customer_files.sort_nodes(nodes)
-        if self.ed_search.text().strip():
-            return                      # 검색 중이면 화면은 검색 결과를 지킨다
-        if changed:
-            self._show_browse()
         self._start_poll()
         # 검색은 트리 전체를 봐야 한다. 사용자가 글자를 칠 때까지 기다리지 말고
         # 지금부터 뒤에서 훑어 둔다 — 예전엔 첫 글자를 친 뒤에야 시작해서
         # '훑는 중' 을 한참 기다려야 했다.
+        #
+        # ⚠️ 이 두 줄은 검색 중에도 반드시 지나가야 한다. 예전엔 검색 중이면
+        #    여기서 그냥 돌아가 버려서, 파일을 넣거나 지운 직후(_after_change 가
+        #    검색 목록을 버린 상태)에 검색 목록을 다시 만들 사람이 아무도 없었다.
+        #    그러면 찾은 것이 0건으로 비거나 지운 파일이 계속 보였다.
         self._ensure_index()
+        q = self.ed_search.text().strip()
+        if q:
+            # 검색 중이면 화면은 검색 결과를 지킨다 — 다만 방금 읽은 내용으로
+            # 다시 그려 준다(넣고 뺀 것이 바로 보이게).
+            self._show_search(q)
+            return
+        if changed:
+            self._show_browse()
 
     def _show_browse(self):
         keep = self._selected_name()
@@ -478,19 +490,26 @@ class CustomerFilesTab(QWidget):
         name = self._cols[col] if col < len(self._cols) else ""
         if name not in ("이름", "크기", "날짜", "위치"):
             return
-        if col == self._sort_col:
+        if name == self._sort_key:
             self._sort_desc = not self._sort_desc
         else:
-            self._sort_col, self._sort_desc = col, False
+            self._sort_key, self._sort_desc = name, False
         q = self.ed_search.text().strip()
         if q:
             self._show_search(q)
         else:
             self._show_browse()
 
+    @property
+    def _sort_col(self) -> int:
+        """지금 칸 구성에서 정렬 기준이 몇 번째인가. 없으면 -1(화살표 없음)."""
+        try:
+            return self._cols.index(self._sort_key)
+        except ValueError:
+            return -1
+
     def _sorted(self, rows: list) -> list:
-        name = (self._cols[self._sort_col]
-                if self._sort_col < len(self._cols) else "이름")
+        name = self._sort_key
         if name == "크기":
             key = lambda n: (not n.is_dir, n.size)
         elif name == "날짜":
@@ -498,7 +517,7 @@ class CustomerFilesTab(QWidget):
                              n.mtime.timestamp() if n.mtime else 0)
         elif name == "위치":
             key = lambda n: (not n.is_dir, n.folder.lower(), n.name.lower())
-        else:                                   # 이름
+        else:                                   # 이름 (모르는 기준도 여기로)
             key = lambda n: (not n.is_dir, n.name.lower())
         out = sorted(rows, key=key, reverse=self._sort_desc)
         if self._sort_desc:
@@ -531,8 +550,9 @@ class CustomerFilesTab(QWidget):
             hdr.setSectionResizeMode(i, QHeaderView.Interactive)
         # '이름' 이 남는 폭을 받아 긴 폴더 이름이 안 잘리게 한다
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
-        if self._sort_col >= len(cols):
-            self._sort_col, self._sort_desc = 0, False
+        # 지금 칸 구성에 없는 기준('위치' 는 검색에만 있다)이면 이름순으로 돌아간다
+        if self._sort_key not in self._cols:
+            self._sort_key, self._sort_desc = "이름", False
 
     def _fill(self, rows: list, up: bool = False, with_where: bool = False):
         self.tbl.setRowCount(0)
@@ -560,7 +580,7 @@ class CustomerFilesTab(QWidget):
 
     def _current(self):
         r = self.tbl.currentRow()
-        view = getattr(self, "_view", [])
+        view = self._view
         if r < 0 or r >= len(view):
             return None
         n = view[r]
@@ -573,7 +593,7 @@ class CustomerFilesTab(QWidget):
     def _restore_selection(self, name: str):
         if not name:
             return
-        for r, n in enumerate(getattr(self, "_view", [])):
+        for r, n in enumerate(self._view):
             if n is not UP_ROW and n.name == name:
                 self.tbl.selectRow(r)
                 return
@@ -635,7 +655,7 @@ class CustomerFilesTab(QWidget):
 
     # ------------------------------------------------------------ 열기
     def _on_double(self, index):
-        view = getattr(self, "_view", [])
+        view = self._view
         r = index.row()
         if 0 <= r < len(view) and view[r] is UP_ROW:
             self.go_up()
@@ -660,7 +680,11 @@ class CustomerFilesTab(QWidget):
         up = getattr(self.source, "parent_of", None)
         chain = [node]
         cur = node
-        while up is not None:
+        # 창고보다 깊이 들어갈 일이 없으므로 그만큼만 올라간다. 상한을 안 두면
+        # parent_of 가 끝을 못 알아볼 때 여기서 영영 돌게 된다.
+        for _ in range(customer_files.MAX_DEPTH + 2):
+            if up is None:
+                break
             parent = self.source.parent_of(cur)
             if parent is None:
                 break
@@ -723,8 +747,13 @@ class CustomerFilesTab(QWidget):
             if ev.matches(QKeySequence.Paste):
                 self.paste_clipboard()
                 return True
-            if ev.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            if ev.key() == Qt.Key_Delete:
                 self.delete_selected()
+                return True
+            # 백스페이스는 탐색기와 같이 '상위 폴더로' 다. 예전엔 이것도 삭제라,
+            # 위로 올라가려고 누른 사람에게 지울지 묻는 창이 떴다.
+            if ev.key() == Qt.Key_Backspace:
+                self.go_up()
                 return True
             if ev.key() == Qt.Key_F2:
                 self.rename_selected()

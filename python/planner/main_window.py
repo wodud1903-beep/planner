@@ -16,19 +16,18 @@ import webbrowser
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from html import escape as html_escape
-from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon
+from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon,
     QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import (
     alarm_window, backup_dialog, config, contacts, customer_docs, followup,
-    google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater, weekly,
+    google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -169,7 +168,7 @@ class MainWindow(QMainWindow):
         # 최대화는 그 세로 고정을 잠시 풀어 화면을 꽉 채우고, 되돌리면 다시
         # 고정한다(_on_window_state). 그래서 어중간한 세로 크기는 나올 수 없다.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
-        _avail = QGuiApplication.primaryScreen().availableGeometry()
+        _avail = self._screen_avail()
         # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭.
         # 1570 은 쓰시는 분이 정해 주신 값 — 고객명 236 · 내용 255 를 넣고도
         # 남는 폭이다. 화면이 좁으면 어차피 아래 min 이 화면 폭으로 깎으므로
@@ -581,15 +580,23 @@ class MainWindow(QMainWindow):
         for f in (self.todo_file, self.alarm_file, self.taskalarm_file,
                   self.cfg_file, self.followup_file):
             try:
-                if f.exists():
-                    m = max(m, f.stat().st_mtime)
-            except Exception:
+                # exists() 도 결국 stat 이다. 한 번만 부르고 없으면 넘어간다.
+                m = max(m, f.stat().st_mtime)
+            except OSError:
                 pass
         return m
+
+    # 파일이 바뀌었는지 다시 보는 간격(초). 1초 타이머마다 보면 파일 다섯 개를
+    # 하루 43만 번 들여다보게 되는데, 바뀌자마자 올려야 할 만큼 급한 일이 아니다
+    # (어차피 올리는 것도 2.5초 미뤄 두고 모아서 한다).
+    AUTOSYNC_EVERY = 5
 
     def _maybe_autosync(self):
         """로컬 데이터 파일이 바뀌었으면(어느 경로로든) 업로드 예약."""
         if not self.gauth.is_connected():
+            return
+        self._autosync_tick = getattr(self, "_autosync_tick", 0) + 1
+        if self._autosync_tick % self.AUTOSYNC_EVERY:
             return
         m = self._data_mtime()
         if m > self._last_seen_mtime + 0.001:
@@ -3180,6 +3187,16 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _screen_avail(self):
+        """이 창이 올라가 있는 모니터의 쓸 수 있는 넓이.
+
+        ⚠️ primaryScreen 을 쓰면 안 된다. 모니터를 두 대 쓰는 분이 보조 모니터로
+        창을 옮겨 최대화하면, 그쪽 해상도가 주 모니터와 달라 '화면만큼 커졌나' 를
+        잘못 재고 세로가 도로 줄어든다(_is_max 참고).
+        """
+        scr = self.screen() or QGuiApplication.primaryScreen()
+        return scr.availableGeometry()
+
     # ---- 창 폭 기억 (세로는 고정이라 가로만 남긴다) ----
     def _width_bounds(self, avail):
         """이 화면에서 허용되는 (최소, 최대) 폭."""
@@ -3257,7 +3274,7 @@ class MainWindow(QMainWindow):
                                           | Qt.WindowFullScreen))):
             return True
         try:
-            av = QGuiApplication.primaryScreen().availableGeometry()
+            av = self._screen_avail()
         except Exception:
             return False
         # '화면만큼' 이지 '화면보다 크게' 가 아니다. 화면보다 훌쩍 큰 창은
@@ -3287,7 +3304,7 @@ class MainWindow(QMainWindow):
         self._maximized = now_max
         if now_max:
             return
-        avail = QGuiApplication.primaryScreen().availableGeometry()
+        avail = self._screen_avail()
         lo, hi = self._width_bounds(avail)
         self.setMinimumWidth(lo)
         # 쓰던 '보통' 크기로 되돌린다 (여기서 난 resize 는 되돌리기 대상이 아니다)
@@ -3381,6 +3398,11 @@ class MainWindow(QMainWindow):
 
     def _shutdown(self):
         self.timer.stop()
+        # 창 크기를 바꾸자마자 끄면 저장 타이머(600ms)가 못 돌고 끝난다.
+        # 그러면 방금 맞춘 폭이 다음에 켤 때 사라진다 — 여기서 마저 적어 둔다.
+        if self._width_timer.isActive():
+            self._width_timer.stop()
+            self._remember_width()
         try:
             self.hotkeys.release()
         except Exception:

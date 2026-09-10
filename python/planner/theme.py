@@ -152,7 +152,7 @@ def set_theme(theme) -> None:
     key = _RETIRED.get(key, key)            # 없앤 테마는 가장 가까운 것으로
     if key not in THEMES:
         key = "light"
-    _name, (_disp, pal, dark) = key, THEMES[key]
+    _name, (_, pal, dark) = key, THEMES[key]
     _current = pal
     _is_dark = dark
 

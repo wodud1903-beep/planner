@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from pathlib import Path
 
 # 윈도에서 파일 이름에 못 쓰는 글자
 BAD_CHARS = r'\/:*?"<>|'

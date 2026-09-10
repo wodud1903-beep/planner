@@ -16,7 +16,6 @@ Client ID/Secret 을 앱에 내장(config)하여 직원이 [Google 로그인] �
 from __future__ import annotations
 
 import http.server
-import socket
 import threading
 import time
 import urllib.parse
@@ -203,7 +202,6 @@ class GoogleAuth:
         webbrowser.open(auth_url)
 
         # code 수신 대기
-        import time as _time
         waited = 0.0
         try:
             while not httpd.auth_code and not httpd.auth_error and waited < timeout_sec:  # type: ignore[attr-defined]

@@ -104,18 +104,42 @@ class FilePreview(QWidget):
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         v.addWidget(self.scroll, 1)
 
-        # 그림 위에서 끌면 옮겨 보게 한다
+        # 그림 위에서 끌면 옮겨 보게 하고, Ctrl+휠로 확대·축소한다.
+        #
+        # ⚠️ 휠은 반드시 여기서 가로채야 한다. 마우스는 늘 그림 위에 있는데,
+        #    그 휠 알림은 그림표(view)와 스크롤칸(viewport)이 먼저 받아 스크롤에
+        #    써 버리고 위로 올려 보내지 않는다. 그래서 FilePreview.wheelEvent 는
+        #    한 번도 불리지 않았고, 단추 설명에 적어 둔 'Ctrl + 마우스 휠' 이
+        #    실제로는 전혀 안 먹었다.
         self.view.installEventFilter(self)
+        self.scroll.viewport().installEventFilter(self)
         self.view.setMouseTracking(True)
 
         self.apply_theme()
         self._update_bar()
 
     # ------------------------------------------------------------ 보여 주기
+    def _drop_doc(self):
+        """보던 PDF 를 놓아 준다.
+
+        ⚠️ 예전엔 QPdfDocument(self) 로 만들어 이 화면의 '자식' 으로 붙였다.
+        그러면 파이썬 쪽에서 손을 놓아도 C++ 객체는 화면이 살아 있는 한 안
+        없어진다. PDF 를 한 장씩 넘겨볼 때마다 그 문서와, 통째로 들고 있던 파일
+        내용이 그대로 쌓여서, 스캔 서류가 많은 폴더를 훑고 나면 메모리가 계속
+        늘었다. 그래서 지금은 부모 없이 만들어 파이썬이 혼자 임자가 되게 하고
+        (아래 show_pdf), 여기서 손을 놓는 즉시 없어지게 한다.
+        """
+        doc, self._doc = self._doc, None
+        if doc is not None:
+            try:
+                doc.close()          # 버퍼를 놓게 한 뒤에 버려야 안전하다
+            except Exception:
+                pass
+        self._buf = None
+
     def show_message(self, text: str, title: str = ""):
         self._src = None
-        self._doc = None
-        self._buf = None
+        self._drop_doc()
         self._key = ""
         self.lbl_title.setText(title)
         self.view.setPixmap(QPixmap())
@@ -127,8 +151,7 @@ class FilePreview(QWidget):
         if not pix.loadFromData(data):
             self.show_message("그림을 읽지 못했습니다.", title)
             return False
-        self._doc = None
-        self._buf = None
+        self._drop_doc()
         self._src = pix
         self._key = key
         self._angle = self._angles.get(key, 0)
@@ -152,15 +175,18 @@ class FilePreview(QWidget):
         if not buf.open(QBuffer.ReadOnly):
             self.show_message("PDF 를 열지 못했습니다.", title)
             return False
-        doc = QPdfDocument(self)
+        # 부모를 주지 않는다 — 파이썬이 임자여야 손을 놓는 즉시 없어진다(_drop_doc)
+        doc = QPdfDocument()
         err = doc.load(buf)
         # 잠긴 PDF 등은 여기서 걸린다
         if doc.pageCount() <= 0:
+            doc.close()                 # 못 읽은 문서도 쌓이면 안 된다
             self.show_message(
                 f"PDF 를 읽지 못했습니다. ({err})\n"
                 "[연결 프로그램으로 열기] 를 눌러 주세요.", title)
             return False
         self._src = None
+        self._drop_doc()                # 앞서 보던 PDF 를 먼저 놓아 준다
         self._doc = doc
         self._buf = buf                 # 문서가 이 버퍼를 계속 읽는다
         self._key = key
@@ -328,6 +354,14 @@ class FilePreview(QWidget):
     # 확대하면 그림이 칸보다 커진다. 그때는 스크롤막대를 잡는 대신 그림을
     # 직접 끌어서 보고 싶은 자리로 옮길 수 있게 한다(지도 앱과 같은 조작).
     def eventFilter(self, obj, ev):
+        if obj is self.view or obj is self.scroll.viewport():
+            t = ev.type()
+            # Ctrl+휠 = 확대·축소. 그림 위에서 굴려도 먹어야 하므로 여기서 잡는다.
+            if t == QEvent.Wheel and (ev.modifiers() & Qt.ControlModifier):
+                if self._src is not None or self._doc is not None:
+                    self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
+                    ev.accept()
+                    return True
         if obj is self.view:
             t = ev.type()
             if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
