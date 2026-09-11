@@ -165,6 +165,7 @@ class LocalSource:
 
     def __init__(self, root: str):
         self.root = (root or "").strip()
+        self.failed = 0          # 훑다가 못 읽은 폴더 수 (화면이 알릴 수 있게)
 
     def available(self) -> bool:
         return bool(self.root) and Path(self.root).is_dir()
@@ -191,6 +192,7 @@ class LocalSource:
         다 끝나기 전에도 찾은 것부터 보여 주려고 쓴다.
         """
         out: list = []
+        self.failed = 0
         if not Path(self.root).is_dir():
             return out
         stack = [(self.root, "", 0)]
@@ -200,6 +202,7 @@ class LocalSource:
                 with os.scandir(path) as it:
                     entries = list(it)
             except OSError:
+                self.failed += 1
                 continue
             for e in entries:
                 if _skip_name(e.name):
@@ -314,6 +317,7 @@ class DriveSource:
     def __init__(self, auth, folder: str = ""):
         self.auth = auth
         self.folder = (folder or "").strip()   # 폴더 이름 또는 폴더 id
+        self.failed = 0          # 훑다가 못 읽은 폴더 수 (화면이 알릴 수 있게)
 
     def available(self) -> bool:
         from . import config
@@ -341,6 +345,7 @@ class DriveSource:
         from concurrent.futures import ThreadPoolExecutor
 
         from . import google_client
+        self.failed = 0
         root_id = google_client.drive_folder_id(self.auth, self.folder)
         if not root_id:
             return []
@@ -393,11 +398,16 @@ class DriveSource:
 
         권한이 없는 폴더가 섞여 있을 수 있는데, 그 하나 때문에 검색 목록 전체를
         못 만들면 곤란하다.
+
+        ⚠️ 다만 **조용히** 넘기지는 않는다. 못 읽은 폴더의 서류는 검색에 안
+        나오는데, 찾는 사람은 서류가 없는 줄로 알게 된다. 몇 곳이 빠졌는지
+        세어 두고 화면이 그 사실을 알리게 한다(failed).
         """
         from . import google_client
         try:
             return google_client.drive_list_folder(self.auth, folder_id)
         except Exception:
+            self.failed += 1
             return []
 
     # ---- 폴더 하나씩 ----

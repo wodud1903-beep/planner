@@ -124,6 +124,7 @@ class CustomerFilesTab(QWidget):
         self._last_q = ""
         self._last_hits: list = []
         self._last_pool_n = -1
+        self._index_failed = 0        # 훑다가 못 읽은 폴더 수
 
         v = QVBoxLayout(self)
 
@@ -511,6 +512,9 @@ class CustomerFilesTab(QWidget):
             self.lbl_count.setText("검색 준비 실패")
             return
         self.index = customer_files.sort_nodes(nodes)
+        # 못 읽은 폴더가 있었는지 기억해 둔다 — 그 폴더의 서류는 검색에 안 나오는데,
+        # 말해 주지 않으면 '서류가 없다' 고 오해하게 된다.
+        self._index_failed = int(getattr(self.source, "failed", 0) or 0)
         q = self.ed_search.text().strip()
         if q:
             self._show_search(q)
@@ -525,9 +529,23 @@ class CustomerFilesTab(QWidget):
         if self.index is None:
             self.lbl_count.setText(f"{len(hits):,}건 (훑는 중 {len(pool):,})")
             self.lbl_where.setText("검색 결과 — 아직 훑는 중이라 더 나올 수 있습니다")
+            return
+        self.lbl_count.setText(f"{len(hits):,} / {len(pool):,}건")
+        nf = getattr(self, "_index_failed", 0)
+        if nf:
+            self.lbl_where.setText(
+                f"검색 결과 — 폴더 {nf}곳을 읽지 못해 빠진 서류가 있을 수 있습니다")
+            self.lbl_where.setToolTip(
+                "권한이 없거나 잠시 연결이 막힌 폴더입니다.\n"
+                "[새로고침] 을 누르면 다시 읽습니다.")
+        elif len(pool) >= customer_files.MAX_FILES:
+            self.lbl_where.setText(
+                f"검색 결과 — {customer_files.MAX_FILES:,}건까지만 훑었습니다")
+            self.lbl_where.setToolTip(
+                "서류가 상한보다 많아 뒷부분은 검색에 안 나옵니다.")
         else:
-            self.lbl_count.setText(f"{len(hits):,} / {len(pool):,}건")
             self.lbl_where.setText("검색 결과 — 전체에서 찾았습니다")
+            self.lbl_where.setToolTip("")
 
 
 

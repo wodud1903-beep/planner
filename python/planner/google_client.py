@@ -783,6 +783,41 @@ def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
     return files[0]["id"] if files else ""
 
 
+# 구글이 '너무 빨리 묻는다'(429)거나 잠깐 탈이 났을 때(5xx) 다시 물어보는 횟수.
+#
+# ⚠️ 이게 왜 필요해졌나: '고객정보' 의 검색 목록을 만들 때 한 겹의 폴더들을 한꺼번에
+#    (8개씩) 묻도록 바꿨다. 빨라진 대신 구글이 속도를 제한할 여지가 생겼다.
+#    그때 그냥 포기하면 그 폴더의 서류가 검색에서 **조용히** 빠져 버린다 —
+#    찾는 사람은 서류가 없는 줄 알게 된다. 그래서 조금 쉬고 다시 묻는다.
+DRIVE_RETRIES = 3
+DRIVE_BACKOFF = 0.6            # 0.6초 → 1.2초 → 2.4초
+
+
+def _retry_after(resp, attempt: int) -> float:
+    """얼마나 쉬었다 다시 물을까. 구글이 알려 주면 그 값을 따른다."""
+    hinted = (resp.headers or {}).get("Retry-After", "") if resp is not None else ""
+    try:
+        if hinted:
+            return min(10.0, float(hinted))
+    except ValueError:
+        pass
+    return DRIVE_BACKOFF * (2 ** attempt)
+
+
+def _get_with_retry(url: str, auth: GoogleAuth, params: dict, timeout: int = 30):
+    """구글에 묻는다. 속도제한·일시적 탈이면 조금 쉬고 다시 묻는다."""
+    last = None
+    for attempt in range(DRIVE_RETRIES):
+        r = _http().get(url, headers=auth._headers(), timeout=timeout,
+                        params=params)
+        if r.status_code not in (429, 500, 502, 503, 504):
+            return r
+        last = r
+        if attempt + 1 < DRIVE_RETRIES:
+            time.sleep(_retry_after(r, attempt))
+    return last
+
+
 def drive_list_folder(auth: GoogleAuth, folder_id: str) -> list:
     """폴더 바로 밑의 폴더·파일 목록. 페이지가 나뉘면 끝까지 모은다."""
     out: list = []
@@ -799,10 +834,10 @@ def drive_list_folder(auth: GoogleAuth, folder_id: str) -> list:
         }
         if token:
             params["pageToken"] = token
-        r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(),
-                        timeout=30, params=params)
-        if r.status_code != 200:
-            raise GoogleError(f"드라이브 목록 조회 실패 (HTTP {r.status_code})")
+        r = _get_with_retry(config.DRIVE_FILES_URL, auth, params)
+        if r is None or r.status_code != 200:
+            code = "응답 없음" if r is None else f"HTTP {r.status_code}"
+            raise GoogleError(f"드라이브 목록 조회 실패 ({code})")
         j = r.json()
         out.extend(j.get("files", []))
         token = j.get("nextPageToken", "")
