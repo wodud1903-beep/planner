@@ -90,8 +90,8 @@ class CustomerFilesTab(QWidget):
     """고객 서류 찾아보기."""
 
     sig_listed = Signal(object, str)           # (Node 목록|None, "세대\0오류")
-    sig_indexed = Signal(object, str)          # (Node 목록|None, 오류)
-    sig_index_progress = Signal(int)           # 훑는 중 몇 건까지 왔나
+    sig_indexed = Signal(object, str)          # (Node 목록|None, "훑기번호\0오류")
+    sig_index_progress = Signal(int)           # 훑는 중 (훑기번호)
     sig_preview = Signal(object, object, str)  # (Node, bytes|None, 오류)
 
     COLS = ["이름", "크기", "날짜"]
@@ -111,6 +111,7 @@ class CustomerFilesTab(QWidget):
         self._indexing = False
         self._listing = False
         self._gen = 0
+        self._index_gen = 0           # 몇 번째 훑기인가(낡은 결과 버리기)
         self._sig = None              # 지금 폴더의 요약값(바뀜 감지)
         self._preview_key = ""
         # 정렬 기준은 '몇 번째 칸' 이 아니라 '어느 칸 이름' 으로 들고 있는다.
@@ -119,6 +120,10 @@ class CustomerFilesTab(QWidget):
         self._sort_key = "이름"
         self._sort_desc = False
         self._view: list = []
+        # 글자를 덧붙여 칠 때 직전 결과만 다시 거르기 위한 기억(_filter)
+        self._last_q = ""
+        self._last_hits: list = []
+        self._last_pool_n = -1
 
         v = QVBoxLayout(self)
 
@@ -190,7 +195,10 @@ class CustomerFilesTab(QWidget):
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(8, 0, 0, 0)
-        self.pv = FilePreview()
+        # 미리보기에서 본 서류를 그 자리에서 바로 카카오톡으로 보낸다.
+        # 보낼 수 없는 경우(드라이브 직접 조회 중 등)의 안내는 copy_selected 가
+        # 이미 맡고 있으므로 한 곳에 모아 둔다.
+        self.pv = FilePreview(on_send=self.copy_selected)
         rv.addWidget(self.pv, 1)
         self.btn_open = QPushButton("연결 프로그램으로 열기")
         self.btn_open.setEnabled(False)
@@ -208,6 +216,11 @@ class CustomerFilesTab(QWidget):
         # 뒤에서 조용히 다시 읽어 바뀐 게 있으면 반영한다
         self._poll = QTimer(self)
         self._poll.timeout.connect(self._poll_tick)
+
+        # 타자가 멎으면 찾는다 (한 자마다 전부 훑지 않게)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self._run_search)
 
         self.apply_theme()
         self._update_where()
@@ -244,8 +257,7 @@ class CustomerFilesTab(QWidget):
     def reload(self):
         """창고를 다시 잡고 맨 위 폴더부터 보여 준다."""
         self.source, why = customer_files.pick_source(self.settings, self.auth)
-        self.index = None                  # 창고가 바뀌면 검색 목록도 버린다
-        self._partial = []
+        self._drop_index()                 # 창고가 바뀌면 검색 목록도 버린다
         self._sig = None
         if self.source is None:
             self._poll.stop()
@@ -326,9 +338,16 @@ class CustomerFilesTab(QWidget):
                                 "폴더를 읽지 못했습니다:\n" + msg)
             return
         sig = customer_files.signature(nodes)
+        first = self._sig is None
         changed = (sig != self._sig)
         self._sig = sig
         self.rows = customer_files.sort_nodes(nodes)
+        if changed and not first and self.index is not None:
+            # 폴더 안이 바뀌었다 → 검색 목록도 낡았다. 사무실에서 올린 서류가
+            # 집 PC 로 동기화돼 들어오면 검색에도 나와야 한다. 예전엔 검색 목록을
+            # 켤 때 한 번만 만들어서, 하루 종일 띄워 두면 새 서류가 검색에
+            # 영영 안 나왔다.
+            self._drop_index()
         self._start_poll()
         # 검색은 트리 전체를 봐야 한다. 사용자가 글자를 칠 때까지 기다리지 말고
         # 지금부터 뒤에서 훑어 둔다 — 예전엔 첫 글자를 친 뒤에야 시작해서
@@ -383,17 +402,65 @@ class CustomerFilesTab(QWidget):
     def _on_search_changed(self):
         q = self.ed_search.text().strip()
         if not q:
+            self._search_timer.stop()
             self._show_browse()
             return
         self._ensure_index()
-        # 아직 다 못 훑었어도 지금까지 찾은 것으로 바로 보여 준다.
-        # 기다리게 하지 않는 편이 낫고, 대개 찾는 것은 이미 그 안에 있다.
-        self._show_search(q)
+        # 한 자 칠 때마다 곧바로 훑지 않고 아주 잠깐 기다린다. 빠르게 치거나
+        # 키를 누른 채 두면 그 사이 글자는 건너뛰고 마지막 것만 찾는다 —
+        # 한 자당 한 번씩 전부 훑으면 서류가 많을 때 타자가 밀린다.
+        self._search_timer.start(self.SEARCH_DELAY)
+
+    # 마지막 타자 뒤 이만큼 쉬면 찾기 시작한다(밀리초). 사람이 다음 자를 치는
+    # 간격보다는 짧아서 기다린다는 느낌은 들지 않는다.
+    SEARCH_DELAY = 130
+
+    def _run_search(self):
+        q = self.ed_search.text().strip()
+        if q:
+            # 아직 다 못 훑었어도 지금까지 찾은 것으로 바로 보여 준다.
+            # 기다리게 하지 않는 편이 낫고, 대개 찾는 것은 이미 그 안에 있다.
+            self._show_search(q)
+
+    def _filter(self, pool: list, q: str) -> list:
+        """찾기 — 글자를 덧붙이는 중이면 직전 결과만 다시 거른다.
+
+        '김' → '김상' → '김상현' 처럼 글자를 붙여 갈 때, 뒤 글자는 앞 글자를
+        만족하는 것 중에서만 나올 수 있다. 그래서 전체를 다시 훑지 않고 직전에
+        찾아 둔 것만 본다. '김' 에서 300건이 남았으면 그다음 자는 10만건이 아니라
+        300건만 보므로 거의 공짜다.
+
+        창고를 다시 읽었거나(목록 크기가 달라짐) 글자를 지운 경우에는 믿을 수
+        없으니 전체를 다시 본다.
+        """
+        n = len(pool)
+        if (self._last_q and q.startswith(self._last_q) and n == self._last_pool_n):
+            base = self._last_hits
+        else:
+            base = pool
+        hits = customer_files.search(base, q)
+        self._last_q, self._last_hits, self._last_pool_n = q, hits, n
+        return hits
 
     def search_for(self, text: str):
         """고객관리에서 '이 고객 서류 보기' 로 넘어올 때 쓴다."""
         self.ed_search.setText(text or "")
         self.ed_search.setFocus()
+
+    def _drop_index(self):
+        """검색 목록이 낡았다 — 버리고 다시 만들게 한다.
+
+        표(_index_gen)를 올려 두는 것이 핵심이다. 지금 돌고 있는 훑기가 있으면
+        그 결과는 낡은 것이므로, 나중에 도착해도 받지 않는다. '훑는 중' 표시도
+        내려 두어야 새 훑기가 바로 시작할 수 있다.
+        """
+        self.index = None
+        self._partial = []
+        self._indexing = False
+        self._index_gen += 1
+        self._last_q = ""            # 좁혀 가며 찾던 기억도 함께 버린다
+        self._last_hits = []
+        self._last_pool_n = -1
 
     def _ensure_index(self):
         """검색용 전체 목록을 뒤에서 만든다(한 번만).
@@ -405,26 +472,40 @@ class CustomerFilesTab(QWidget):
             return
         self._indexing = True
         self._partial = []
+        # ⚠️ 몇 번째 훑기인지 표를 달아 보낸다.
+        #
+        # 훑는 데는 시간이 걸린다. 그 사이에 파일을 넣거나 지우면 검색 목록을
+        # 버리고 새로 훑기 시작하는데, 그때 **먼저 떠난 훑기가 나중에 도착**해서
+        # 새 목록을 낡은 것으로 덮어써 버렸다. 그러면 방금 넣은 서류가 검색에
+        # 안 나온다. 폴더 읽기(_gen)에는 이 표가 있었는데 훑기에는 없었다.
+        self._index_gen += 1
+        gen = self._index_gen
         src = self.source
 
         def worker():
             try:
                 def batch(got):
                     # 목록은 계속 자라므로 그때그때 복사해 넘긴다
-                    self._partial = list(got)
-                    self.sig_index_progress.emit(len(got))
-                self.sig_indexed.emit(src.scan(on_batch=batch), "")
+                    if gen == self._index_gen:
+                        self._partial = list(got)
+                        self.sig_index_progress.emit(gen)
+                self.sig_indexed.emit(src.scan(on_batch=batch), str(gen))
             except Exception as e:
-                self.sig_indexed.emit(None, str(e))
+                self.sig_indexed.emit(None, f"{gen}\x00{e}")
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_index_progress(self, n: int):
+    def _on_index_progress(self, gen: int):
+        if gen != self._index_gen:
+            return                      # 먼저 떠났다가 늦게 온 훑기
         if not self.ed_search.text().strip():
             return
         self._show_search(self.ed_search.text().strip(), partial=True)
 
     def _on_indexed(self, nodes, err: str):
+        gen, _, msg = (err or "").partition("\x00")
+        if gen.isdigit() and int(gen) != self._index_gen:
+            return                      # 낡은 훑기 결과로 새 목록을 덮지 않는다
         self._indexing = False
         if nodes is None:
             self.lbl_count.setText("검색 준비 실패")
@@ -436,7 +517,7 @@ class CustomerFilesTab(QWidget):
 
     def _show_search(self, q: str, partial: bool = False):
         pool = self.index if self.index is not None else self._partial
-        hits = customer_files.search(pool, q)
+        hits = self._filter(pool, q)
         self._set_columns(self.SEARCH_COLS, self.SEARCH_WIDTHS)
         self._mark_sort_header()
         self._fill(self._sorted(hits), up=False, with_where=True)
@@ -926,8 +1007,7 @@ class CustomerFilesTab(QWidget):
 
     def _after_change(self, msg: str, failed: list):
         """넣거나 뺀 뒤 — 목록과 검색 목록을 다시 읽는다."""
-        self.index = None            # 검색 목록이 낡았다
-        self._partial = []
+        self._drop_index()           # 검색 목록이 낡았다
         self._sig = None             # 무조건 다시 그리게
         self._list_current(quiet=False)
         if failed:

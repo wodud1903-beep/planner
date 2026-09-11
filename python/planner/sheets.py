@@ -28,10 +28,9 @@ import threading
 import urllib.parse
 from dataclasses import dataclass, field
 
-import requests
-
 from . import config
 from .google_client import GoogleAuth, GoogleError
+from .net import http as _http
 
 # 열 인덱스(0=A) → (필드키, 화면표시 이름)
 FIELDS: list[tuple[int, str, str]] = [
@@ -293,7 +292,7 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     헤더 행은 A열 '순번' + B열에 '고객명' 이 들어간 행으로 자동 탐지한다.
     """
     url = config.SHEETS_BATCH_GET_URL.format(sheet_id=sheet_id)
-    r = requests.get(url, headers=_headers(auth), timeout=30, params=[
+    r = _http().get(url, headers=_headers(auth), timeout=30, params=[
         ("ranges", f"'{sheet_name}'!A1:Q"),
         ("ranges", f"'{sheet_name}'!S1:T"),
         ("valueRenderOption", "FORMATTED_VALUE"),
@@ -366,7 +365,7 @@ def read_ments(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
     """
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(sheet_name, "R1:R"))
-    r = requests.get(url, headers=_headers(auth), timeout=30,
+    r = _http().get(url, headers=_headers(auth), timeout=30,
                      params={"valueRenderOption": "FORMATTED_VALUE"})
     _check(r)
     out = {}
@@ -393,7 +392,7 @@ def read_uids(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
     """
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_UID)}1:{col_letter(COL_UID)}"))
-    r = requests.get(url, headers=_headers(auth), timeout=20)
+    r = _http().get(url, headers=_headers(auth), timeout=20)
     if r.status_code != 200:
         return {}                     # U열이 아직 없는 시트 — 조용히 넘어간다
     out = {}
@@ -409,7 +408,7 @@ def write_uid(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     """U열에 고객ID 를 적는다 (다른 칸은 건드리지 않는다)."""
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_UID)}{row}"))
-    r = requests.put(url, headers=_headers(auth), timeout=20,
+    r = _http().put(url, headers=_headers(auth), timeout=20,
                      params={"valueInputOption": "RAW"},
                      json={"values": [[uid]]})
     _check(r)
@@ -418,7 +417,7 @@ def write_uid(auth: GoogleAuth, sheet_id: str, sheet_name: str,
 def _sheet_props(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
     """시트(탭)의 gid 와 격자 크기."""
     url = config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
-    r = requests.get(url, headers=_headers(auth), timeout=30,
+    r = _http().get(url, headers=_headers(auth), timeout=30,
                      params={"fields": "sheets(properties(sheetId,title,gridProperties))"})
     _check(r)
     for sh in (r.json() or {}).get("sheets", []):
@@ -449,25 +448,25 @@ def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
             "length": COL_UID + 1 - props["cols"],
         }})
     if reqs:
-        rb = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+        rb = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
                            headers=_headers(auth), timeout=30, json={"requests": reqs})
         _check(rb)
 
     a1 = f"{col_letter(COL_UID)}{header_row}"
     url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, a1))
-    r = requests.get(url, headers=_headers(auth), timeout=20)
+    r = _http().get(url, headers=_headers(auth), timeout=20)
     cur = ""
     if r.status_code == 200:
         vals = (r.json() or {}).get("values", [])
         cur = str(vals[0][0]) if (vals and vals[0]) else ""
     if cur.strip():
         return                                   # 이미 준비됨
-    rp = requests.put(url, headers=_headers(auth), timeout=20,
+    rp = _http().put(url, headers=_headers(auth), timeout=20,
                       params={"valueInputOption": "RAW"},
                       json={"values": [[UID_HEADER]]})
     _check(rp)
     # 열 숨기기
-    rb = requests.post(
+    rb = _http().post(
         config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
         headers=_headers(auth), timeout=30,
         json={"requests": [{"updateDimensionProperties": {
@@ -489,7 +488,7 @@ def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
     """
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(sheet_name, "S1:S"))
-    r = requests.get(url, headers=_headers(auth), timeout=30,
+    r = _http().get(url, headers=_headers(auth), timeout=30,
                      params={"valueRenderOption": "FORMULA"})
     _check(r)
     out = {}
@@ -510,7 +509,7 @@ def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     try:
         url = config.SHEETS_VALUES_URL.format(
             sheet_id=sheet_id, rng=_rng(sheet_name, f"A{last_row}"))
-        r = requests.get(url, headers=_headers(auth), timeout=20,
+        r = _http().get(url, headers=_headers(auth), timeout=20,
                          params={"valueRenderOption": "FORMULA"})
         if r.status_code == 200:
             vals = (r.json() or {}).get("values", [])
@@ -734,7 +733,7 @@ def _write_cells(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     if not data:
         return
     url = config.SHEETS_BATCH_UPDATE_VALUES_URL.format(sheet_id=sheet_id)
-    r = requests.post(url, headers=_headers(auth), timeout=30,
+    r = _http().post(url, headers=_headers(auth), timeout=30,
                       json={"valueInputOption": "USER_ENTERED", "data": data})
     _check(r)
 
@@ -742,7 +741,7 @@ def _write_cells(auth: GoogleAuth, sheet_id: str, sheet_name: str,
 def _sheet_gid(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> int:
     """시트(탭) 이름 → gid. 수식 복사(copyPaste)에 필요."""
     url = config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
-    r = requests.get(url, headers=_headers(auth), timeout=30,
+    r = _http().get(url, headers=_headers(auth), timeout=30,
                      params={"fields": "sheets(properties(sheetId,title))"})
     _check(r)
     for sh in (r.json() or {}).get("sheets", []):
@@ -787,7 +786,7 @@ def _copy_row_style(auth: GoogleAuth, sheet_id: str, gid: int,
             "pasteType": "PASTE_FORMULA",
         }})
     url = config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id)
-    r = requests.post(url, headers=_headers(auth), timeout=30, json={"requests": reqs})
+    r = _http().post(url, headers=_headers(auth), timeout=30, json={"requests": reqs})
     _check(r)
 
 
@@ -839,7 +838,7 @@ def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int) -> Non
     try:
         url = config.SHEETS_VALUES_URL.format(
             sheet_id=sheet_id, rng=_rng(sheet_name, f"A{row}"))
-        r = requests.get(url, headers=_headers(auth), timeout=20,
+        r = _http().get(url, headers=_headers(auth), timeout=20,
                          params={"valueRenderOption": "FORMULA"})
         if r.status_code == 200:
             vals = (r.json() or {}).get("values", [])
@@ -875,13 +874,13 @@ def _find_or_create_folder(auth: GoogleAuth, name: str) -> str:
     """드라이브에 전용 폴더를 찾거나 만든다(앱이 만든 파일만 접근하는 권한)."""
     q = (f"name='{name}' and mimeType='application/vnd.google-apps.folder'"
          " and trashed=false")
-    r = requests.get(config.DRIVE_FILES_URL, headers=_headers(auth), timeout=20,
+    r = _http().get(config.DRIVE_FILES_URL, headers=_headers(auth), timeout=20,
                      params={"q": q, "fields": "files(id,name)", "pageSize": 1})
     if r.status_code == 200:
         files = (r.json() or {}).get("files", [])
         if files:
             return files[0].get("id", "")
-    r = requests.post(config.DRIVE_FILES_URL, headers=_headers(auth), timeout=20,
+    r = _http().post(config.DRIVE_FILES_URL, headers=_headers(auth), timeout=20,
                       json={"name": name,
                             "mimeType": "application/vnd.google-apps.folder"})
     _check(r)
@@ -913,7 +912,7 @@ def upload_image(auth: GoogleAuth, data: bytes, filename: str) -> str:
 
     h = _headers(auth)
     h["Content-Type"] = f"multipart/related; boundary={boundary}"
-    r = requests.post(config.DRIVE_UPLOAD_URL, headers=h, data=body, timeout=120,
+    r = _http().post(config.DRIVE_UPLOAD_URL, headers=h, data=body, timeout=120,
                       params={"uploadType": "multipart", "fields": "id"})
     _check(r)
     file_id = (r.json() or {}).get("id", "")
@@ -921,7 +920,7 @@ def upload_image(auth: GoogleAuth, data: bytes, filename: str) -> str:
         raise GoogleError("이미지 업로드에 실패했습니다.")
 
     # 시트가 이미지를 가져올 수 있도록 '링크가 있는 누구나 보기' 로 공개
-    pr = requests.post(f"{config.DRIVE_FILES_URL}/{file_id}/permissions",
+    pr = _http().post(f"{config.DRIVE_FILES_URL}/{file_id}/permissions",
                        headers=_headers(auth), timeout=20,
                        json={"role": "reader", "type": "anyone"})
     if pr.status_code not in (200, 201):
@@ -977,7 +976,7 @@ def read_rates(auth: GoogleAuth, sheet_id: str, tab: str = RATES_TAB):
     """공유 수당율 표를 읽는다. 탭이 없으면 None (아직 아무도 안 올린 상태)."""
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(tab, "A1:D"))
-    r = requests.get(url, headers=_headers(auth), timeout=20)
+    r = _http().get(url, headers=_headers(auth), timeout=20)
     if r.status_code != 200:
         return None
     rows = (r.json() or {}).get("values", [])
@@ -1010,21 +1009,21 @@ def write_rates(auth: GoogleAuth, sheet_id: str, rates: dict,
                 tab: str = RATES_TAB) -> None:
     """공유 수당율 표를 덮어쓴다. 탭이 없으면 만든다."""
     # 1) 탭 확보
-    meta = requests.get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
+    meta = _http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
                         headers=_headers(auth), timeout=30,
                         params={"fields": "sheets(properties(sheetId,title))"})
     _check(meta)
     titles = [(sh.get("properties", {}) or {}).get("title")
               for sh in (meta.json() or {}).get("sheets", [])]
     if tab not in titles:
-        r = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+        r = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
                           headers=_headers(auth), timeout=30,
                           json={"requests": [{"addSheet": {
                               "properties": {"title": tab}}}]})
         _check(r)
 
     # 2) 기존 내용 비우고 새로 쓴다 (차종을 지운 경우까지 반영)
-    rc = requests.post(
+    rc = _http().post(
         config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
         + "/values/" + _rng(tab, "A1:D10000") + ":clear",
         headers=_headers(auth), timeout=30, json={})
@@ -1037,7 +1036,7 @@ def write_rates(auth: GoogleAuth, sheet_id: str, rates: dict,
                            "TRUE" if truck else "FALSE"])
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(tab, f"A1:D{len(values)}"))
-    r = requests.put(url, headers=_headers(auth), timeout=30,
+    r = _http().put(url, headers=_headers(auth), timeout=30,
                      params={"valueInputOption": "RAW"},
                      json={"values": values})
     _check(r)
@@ -1062,7 +1061,7 @@ def read_kb(auth: GoogleAuth, sheet_id: str, tab: str = KB_TAB):
     """
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(tab, KB_COLS))
-    r = requests.get(url, headers=_headers(auth), timeout=20)
+    r = _http().get(url, headers=_headers(auth), timeout=20)
     if r.status_code != 200:
         return None
     rows = (r.json() or {}).get("values", [])
@@ -1086,21 +1085,21 @@ def read_kb(auth: GoogleAuth, sheet_id: str, tab: str = KB_TAB):
 def write_kb(auth: GoogleAuth, sheet_id: str, items: list,
              tab: str = KB_TAB) -> None:
     """공유 업무자료를 덮어쓴다. 탭이 없으면 만든다."""
-    meta = requests.get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
+    meta = _http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
                         headers=_headers(auth), timeout=30,
                         params={"fields": "sheets(properties(sheetId,title))"})
     _check(meta)
     titles = [(sh.get("properties", {}) or {}).get("title")
               for sh in (meta.json() or {}).get("sheets", [])]
     if tab not in titles:
-        r = requests.post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+        r = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
                           headers=_headers(auth), timeout=30,
                           json={"requests": [{"addSheet": {
                               "properties": {"title": tab}}}]})
         _check(r)
 
     # 지운 자료까지 반영되도록 비우고 새로 쓴다
-    rc = requests.post(
+    rc = _http().post(
         config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
         + "/values/" + _rng(tab, "A1:F10000") + ":clear",
         headers=_headers(auth), timeout=30, json={})
@@ -1117,7 +1116,7 @@ def write_kb(auth: GoogleAuth, sheet_id: str, items: list,
         ])
     url = config.SHEETS_VALUES_URL.format(
         sheet_id=sheet_id, rng=_rng(tab, f"A1:F{len(values)}"))
-    r = requests.put(url, headers=_headers(auth), timeout=30,
+    r = _http().put(url, headers=_headers(auth), timeout=30,
                      params={"valueInputOption": "RAW"},
                      json={"values": values})
     _check(r)

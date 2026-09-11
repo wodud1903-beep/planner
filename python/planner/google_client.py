@@ -26,9 +26,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-import requests
-
 from . import config
+from .net import http as _http
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +217,7 @@ class GoogleAuth:
         self._exchange_code(httpd.auth_code, redirect)  # type: ignore[attr-defined]
 
     def _exchange_code(self, code: str, redirect: str) -> None:
-        resp = requests.post(config.TOKEN_ENDPOINT, data={
+        resp = _http().post(config.TOKEN_ENDPOINT, data={
             "code": code,
             "client_id": config.GOOGLE_CLIENT_ID,
             "client_secret": config.GOOGLE_CLIENT_SECRET,
@@ -242,7 +241,7 @@ class GoogleAuth:
     def _refresh(self) -> None:
         if not self.refresh_token:
             raise GoogleError("연결되지 않았습니다. [Google 로그인]을 먼저 하세요.")
-        resp = requests.post(config.TOKEN_ENDPOINT, data={
+        resp = _http().post(config.TOKEN_ENDPOINT, data={
             "client_id": config.GOOGLE_CLIENT_ID,
             "client_secret": config.GOOGLE_CLIENT_SECRET,
             "refresh_token": self.refresh_token,
@@ -324,7 +323,7 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
     time_max = (base + timedelta(days=forward_days)).astimezone().isoformat()
 
     # 1) 캘린더 목록 (선택된 것 위주)
-    r = requests.get(config.CALENDAR_LIST_URL, headers=headers, timeout=20,
+    r = _http().get(config.CALENDAR_LIST_URL, headers=headers, timeout=20,
                      params={"fields": "items(id,selected,primary)"})
     if r.status_code != 200:
         raise GoogleError(f"캘린더 목록 조회 실패 (HTTP {r.status_code})")
@@ -338,7 +337,7 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
     def fetch_one(cal_id: str) -> list[CalEvent]:
         url = config.CALENDAR_EVENTS_URL.format(cal_id=urllib.parse.quote(cal_id))
         try:
-            er = requests.get(url, headers=headers, params={
+            er = _http().get(url, headers=headers, params={
                 "timeMin": time_min,
                 "timeMax": time_max,
                 "singleEvents": "true",
@@ -388,7 +387,7 @@ def fetch_tasks(auth: GoogleAuth) -> list[GoogleTask]:
     """모든 작업목록의 미완료 할일 (목록별 병렬 조회)."""
     token = auth.valid_token()
     headers = {"Authorization": "Bearer " + token}
-    r = requests.get(config.TASKLISTS_URL, headers=headers, timeout=20,
+    r = _http().get(config.TASKLISTS_URL, headers=headers, timeout=20,
                      params={"fields": "items(id,title)"})
     if r.status_code != 200:
         raise GoogleError(f"작업목록 조회 실패 (HTTP {r.status_code})")
@@ -397,7 +396,7 @@ def fetch_tasks(auth: GoogleAuth) -> list[GoogleTask]:
     def fetch_one(item):
         list_id, list_name = item
         try:
-            tr = requests.get(config.TASKS_URL.format(list_id=list_id), headers=headers, params={
+            tr = _http().get(config.TASKS_URL.format(list_id=list_id), headers=headers, params={
                 "showCompleted": "false",
                 "maxResults": 100,
                 "fields": "items(id,title,notes,due)",
@@ -445,7 +444,7 @@ def insert_task(auth: GoogleAuth, list_id: str, title: str, notes: str,
     if due:
         body["due"] = due.strftime("%Y-%m-%dT00:00:00.000Z")
     lid = list_id or "@default"
-    r = requests.post(config.TASKS_URL.format(list_id=lid), headers=headers, json=body, timeout=30)
+    r = _http().post(config.TASKS_URL.format(list_id=lid), headers=headers, json=body, timeout=30)
     if r.status_code not in (200, 201):
         raise GoogleError(_task_write_error(r))
     try:
@@ -479,7 +478,7 @@ def update_task(auth: GoogleAuth, list_id: str, task_id: str, title: str,
         body["due"] = due.strftime("%Y-%m-%dT00:00:00.000Z")
     else:
         body["due"] = None
-    r = requests.patch(config.TASK_ITEM_URL.format(list_id=list_id, task_id=task_id),
+    r = _http().patch(config.TASK_ITEM_URL.format(list_id=list_id, task_id=task_id),
                        headers=headers, json=body, timeout=30)
     if r.status_code != 200:
         raise GoogleError(_task_write_error(r))
@@ -487,7 +486,7 @@ def update_task(auth: GoogleAuth, list_id: str, task_id: str, title: str,
 
 def complete_task(auth: GoogleAuth, list_id: str, task_id: str) -> None:
     headers = auth._headers()
-    r = requests.patch(config.TASK_ITEM_URL.format(list_id=list_id, task_id=task_id),
+    r = _http().patch(config.TASK_ITEM_URL.format(list_id=list_id, task_id=task_id),
                        headers=headers, json={"status": "completed"}, timeout=30)
     if r.status_code != 200:
         raise GoogleError(_task_write_error(r))
@@ -495,7 +494,7 @@ def complete_task(auth: GoogleAuth, list_id: str, task_id: str) -> None:
 
 def delete_task(auth: GoogleAuth, list_id: str, task_id: str) -> None:
     headers = auth._headers()
-    r = requests.delete(config.TASK_ITEM_URL.format(list_id=list_id, task_id=task_id),
+    r = _http().delete(config.TASK_ITEM_URL.format(list_id=list_id, task_id=task_id),
                         headers=headers, timeout=30)
     if r.status_code not in (200, 204):
         raise GoogleError(_task_write_error(r))
@@ -518,7 +517,7 @@ def granted_scopes(auth: GoogleAuth) -> list[str]:
       - 목록에 spreadsheets 가 없다 → 재로그인/동의화면 설정 문제
       - 있는데도 403 이다        → 클라우드에서 Sheets API 미사용설정
     """
-    r = requests.get(config.TOKENINFO_URL,
+    r = _http().get(config.TOKENINFO_URL,
                      params={"access_token": auth.valid_token()}, timeout=15)
     if r.status_code != 200:
         raise GoogleError(f"권한 확인 실패 (HTTP {r.status_code})")
@@ -536,7 +535,7 @@ def get_user_email(auth: GoogleAuth) -> str:
         if wait:
             time.sleep(wait)
         try:
-            r = requests.get(config.USERINFO_URL, headers=auth._headers(), timeout=15)
+            r = _http().get(config.USERINFO_URL, headers=auth._headers(), timeout=15)
             if r.status_code == 200:
                 return (r.json().get("email") or "").strip().lower()
             if r.status_code in (401, 403):
@@ -551,7 +550,7 @@ def get_user_email(auth: GoogleAuth) -> str:
 # ---------------------------------------------------------------------------
 def fetch_calendar_list(auth: GoogleAuth) -> list[dict]:
     """캘린더 목록: [{id, name, primary, selected, color}] (기본 캘린더 먼저)."""
-    r = requests.get(config.CALENDAR_LIST_URL, headers=auth._headers(), timeout=20,
+    r = _http().get(config.CALENDAR_LIST_URL, headers=auth._headers(), timeout=20,
                      params={"fields": "items(id,summary,primary,selected,backgroundColor)"})
     if r.status_code != 200:
         raise GoogleError(f"캘린더 목록 조회 실패 (HTTP {r.status_code})")
@@ -601,7 +600,7 @@ def insert_event(auth: GoogleAuth, calendar_id: str, summary: str,
         body["start"] = {"dateTime": sdt.isoformat()}
         body["end"] = {"dateTime": edt.isoformat()}
     cid = urllib.parse.quote(calendar_id or "primary")
-    r = requests.post(config.CALENDAR_EVENTS_URL.format(cal_id=cid),
+    r = _http().post(config.CALENDAR_EVENTS_URL.format(cal_id=cid),
                       headers=headers, json=body, timeout=20)
     if r.status_code not in (200, 201):
         raise GoogleError(_task_write_error(r) if r.status_code == 403
@@ -656,7 +655,7 @@ def update_event(auth: GoogleAuth, calendar_id: str, event_id: str, summary: str
     body = _event_body(summary, day, start_time, end_time, all_day, description)
     cid = urllib.parse.quote(calendar_id or "primary")
     url = config.CALENDAR_EVENTS_URL.format(cal_id=cid) + "/" + urllib.parse.quote(event_id)
-    r = requests.patch(url, headers=headers, json=body, timeout=20)
+    r = _http().patch(url, headers=headers, json=body, timeout=20)
     if r.status_code not in (200, 201):
         if r.status_code == 403:
             raise GoogleError(_task_write_error(r))
@@ -688,7 +687,7 @@ def delete_event(auth: GoogleAuth, calendar_id: str, event_id: str) -> None:
         raise GoogleError("이 일정은 삭제할 수 없습니다 (일정 ID 없음).")
     cid = urllib.parse.quote(calendar_id or "primary")
     url = config.CALENDAR_EVENTS_URL.format(cal_id=cid) + "/" + urllib.parse.quote(event_id)
-    r = requests.delete(url, headers=auth._headers(), timeout=20)
+    r = _http().delete(url, headers=auth._headers(), timeout=20)
     # 410 = 이미 지워짐 → 목적은 달성된 것이므로 성공으로 본다
     if r.status_code not in (200, 204, 410):
         if r.status_code == 403:
@@ -702,7 +701,7 @@ def delete_event(auth: GoogleAuth, calendar_id: str, event_id: str) -> None:
 # Drive appDataFolder (다중 PC 동기화용 앱 전용 저장공간)
 # ---------------------------------------------------------------------------
 def drive_find(auth: GoogleAuth, name: str) -> Optional[str]:
-    r = requests.get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
+    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
         "spaces": "appDataFolder",
         "q": f"name='{name}'",
         "fields": "files(id,name,modifiedTime)",
@@ -714,7 +713,7 @@ def drive_find(auth: GoogleAuth, name: str) -> Optional[str]:
 
 
 def drive_read(auth: GoogleAuth, file_id: str) -> str:
-    r = requests.get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
+    r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
                      timeout=20, params={"alt": "media"})
     if r.status_code != 200:
         raise GoogleError(f"Drive 다운로드 실패 (HTTP {r.status_code})")
@@ -725,14 +724,14 @@ def drive_write(auth: GoogleAuth, name: str, content: str) -> str:
     """appDataFolder 에 name 파일을 만들거나 갱신. file_id 반환."""
     fid = drive_find(auth, name)
     if fid is None:
-        meta = requests.post(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+        meta = _http().post(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
                              json={"name": name, "parents": ["appDataFolder"]})
         if meta.status_code not in (200, 201):
             raise GoogleError(f"Drive 파일 생성 실패 (HTTP {meta.status_code})")
         fid = meta.json()["id"]
     hdr = auth._headers()
     hdr["Content-Type"] = "application/json; charset=UTF-8"
-    up = requests.patch(f"{config.DRIVE_UPLOAD_URL}/{fid}", headers=hdr, timeout=30,
+    up = _http().patch(f"{config.DRIVE_UPLOAD_URL}/{fid}", headers=hdr, timeout=30,
                         params={"uploadType": "media"}, data=content.encode("utf-8"))
     if up.status_code not in (200, 201):
         raise GoogleError(f"Drive 업로드 실패 (HTTP {up.status_code})")
@@ -764,12 +763,12 @@ def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
         return ""
     # 이미 id 처럼 생겼으면 그대로 확인해 본다 (드라이브 id 에는 공백이 없다)
     if " " not in folder and len(folder) >= 20:
-        r = requests.get(f"{config.DRIVE_FILES_URL}/{folder}",
+        r = _http().get(f"{config.DRIVE_FILES_URL}/{folder}",
                          headers=auth._headers(), timeout=20,
                          params={"fields": "id,mimeType"})
         if r.status_code == 200 and r.json().get("mimeType") == DRIVE_FOLDER_MIME:
             return folder
-    r = requests.get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
                      params={
                          "q": (f"name='{_drive_escape(folder)}'"
                                f" and mimeType='{DRIVE_FOLDER_MIME}'"
@@ -793,13 +792,15 @@ def drive_list_folder(auth: GoogleAuth, folder_id: str) -> list:
             "q": f"'{folder_id}' in parents and trashed=false",
             "fields": ("nextPageToken,"
                        "files(id,name,mimeType,size,modifiedTime)"),
-            "pageSize": 200,
+            # 구글이 허용하는 최대치. 200 이면 한 폴더에 파일이 1,000개일 때
+            # 왕복을 다섯 번 해야 했다 — 네트워크를 타는 일이라 그게 곧 기다림이다.
+            "pageSize": 1000,
             "orderBy": "folder,modifiedTime desc",
         }
         if token:
             params["pageToken"] = token
-        r = requests.get(config.DRIVE_FILES_URL, headers=auth._headers(),
-                         timeout=30, params=params)
+        r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(),
+                        timeout=30, params=params)
         if r.status_code != 200:
             raise GoogleError(f"드라이브 목록 조회 실패 (HTTP {r.status_code})")
         j = r.json()
@@ -811,7 +812,7 @@ def drive_list_folder(auth: GoogleAuth, folder_id: str) -> list:
 
 def drive_download(auth: GoogleAuth, file_id: str) -> bytes:
     """파일 내용을 그대로 받는다(이미지·PDF 미리보기용)."""
-    r = requests.get(f"{config.DRIVE_FILES_URL}/{file_id}",
+    r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}",
                      headers=auth._headers(), timeout=60,
                      params={"alt": "media"})
     if r.status_code != 200:

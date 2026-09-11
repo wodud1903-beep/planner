@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -37,8 +37,10 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 PDF_EXT = {".pdf"}
 VIEWABLE_EXT = IMAGE_EXT | PDF_EXT
 
-# 한 번에 너무 많이 훑어 창이 멈추지 않도록 하는 상한.
-MAX_FILES = 20000
+# 검색용으로 훑는 개수 상한. 2만에서 10만으로 올렸다 — 서류가 아주 많은 분도
+# 전부 걸리게 하려는 것이다(로컬 폴더 기준 2,800건 훑기가 16ms 라 10만도 1초
+# 안쪽이고, 훑는 일은 어차피 뒤에서 돈다).
+MAX_FILES = 100000
 MAX_DEPTH = 8
 
 # 훑지 않는 폴더 — 드라이브 데스크톱·윈도가 만드는 것들
@@ -58,6 +60,24 @@ class Node:
     mime: str = ""
     source: str = "local"
     is_root: bool = False         # 창고의 맨 위 폴더인가
+    # 검색용으로 미리 다듬어 둔 글자(hangul.prepare). 한 번 만들고 계속 쓴다.
+    # 속을 빠르게 보려고 들고 있는 것일 뿐이니, 견주거나 찍을 때는 빼 둔다.
+    _hay: Optional[tuple] = field(default=None, compare=False, repr=False)
+
+    def search_text(self) -> str:
+        """이 항목을 찾을 때 들여다보는 글자.
+
+        폴더는 제 이름만, 파일은 '들어 있는 폴더 + 제 이름'. 폴더 이름으로도
+        그 안의 파일이 찾히게 하려는 것이다 — '김상현' 으로 찾으면 '김상현'
+        폴더 안의 계약서.pdf 도 나와야 쓸모가 있다.
+        """
+        return self.name if self.is_dir else f"{self.folder} {self.name}"
+
+    def haystack(self) -> tuple:
+        """검색용으로 다듬어 둔 글자. 없으면 이때 만들어 두고 계속 쓴다."""
+        if self._hay is None:
+            self._hay = hangul.prepare(self.search_text())
+        return self._hay
 
     @property
     def rel(self) -> str:
@@ -106,18 +126,25 @@ class Node:
 def search(nodes: list, query: str) -> list:
     """폴더명·파일명으로 거른다. 초성('ㄱㅅㅎ')도 걸린다.
 
-    폴더 안에 든 파일은 그 폴더 이름으로도 찾히게 한다 — '김상현' 으로 찾으면
-    '김상현' 폴더 안의 계약서.pdf 도 나와야 쓸모가 있다.
+    검색창에 한 자 칠 때마다 불리는 자리다. 그래서 항목마다 다듬어 둔 글자를
+    쓰고(Node.haystack), 매번 초성을 다시 뽑지 않는다 — 그게 예전 느림의 주범
+    이었다(파일 2만 개에 한 자당 147ms → 약 25ms).
     """
     q = (query or "").strip()
     if not q:
         return list(nodes)
-    out = []
+    hit = hangul.matches_prepared
+    return [n for n in nodes if hit(n.haystack(), q)]
+
+
+def warm_haystacks(nodes: list) -> None:
+    """검색용 글자를 미리 만들어 둔다 — 반드시 백그라운드에서 부른다.
+
+    이 일을 첫 타자 때 화면 쪽에서 하면 그 한 자가 유독 느리다. 훑어 둘 때
+    같이 해 두면 사용자는 기다리는 줄도 모른다.
+    """
     for n in nodes:
-        hay = n.name if n.is_dir else f"{n.folder} {n.name}"
-        if hangul.matches(hay, q):
-            out.append(n)
-    return out
+        n.haystack()
 
 
 def sort_nodes(nodes: list) -> list:
@@ -182,11 +209,15 @@ class LocalSource:
                     st = e.stat()
                 except OSError:
                     continue
-                out.append(Node(
+                node = Node(
                     name=e.name, is_dir=is_dir, folder=shown,
                     size=0 if is_dir else st.st_size,
                     mtime=datetime.fromtimestamp(st.st_mtime),
-                    key=e.path, source=self.kind))
+                    key=e.path, source=self.kind)
+                # 검색용 글자는 여기서 만들어 둔다. 여기는 백그라운드라 공짜지만,
+                # 첫 타자 때 화면 쪽에서 하면 그 한 자가 유독 느리다.
+                node.haystack()
+                out.append(node)
                 if is_dir and depth < MAX_DEPTH:
                     sub = f"{shown}/{e.name}" if shown else e.name
                     stack.append((e.path, sub, depth + 1))
@@ -307,36 +338,67 @@ class DriveSource:
         빠져 있어서, 드라이브 조회 모드에서 검색을 켜면 첫 줄에서 TypeError 가
         나고 '검색 준비 실패' 만 뜬 채 영영 검색이 안 됐다.
         """
+        from concurrent.futures import ThreadPoolExecutor
+
         from . import google_client
         root_id = google_client.drive_folder_id(self.auth, self.folder)
         if not root_id:
             return []
         out: list = []
-        # 폴더를 하나씩 내려가며 훑는다 (넓이 우선 — 얕은 자료가 먼저 보인다)
-        queue = [(root_id, "", 0)]
-        while queue and len(out) < limit:
-            fid, shown, depth = queue.pop(0)
-            if depth > MAX_DEPTH:
-                continue
-            for it in google_client.drive_list_folder(self.auth, fid):
-                is_dir = it.get("mimeType") == google_client.DRIVE_FOLDER_MIME
-                node = Node(
-                    name=it.get("name", ""), is_dir=is_dir, folder=shown,
-                    size=int(it.get("size") or 0),
-                    mtime=_parse_rfc3339(it.get("modifiedTime", "")),
-                    key=it.get("id", ""), mime=it.get("mimeType", ""),
-                    source=self.kind)
-                out.append(node)
-                if is_dir:
-                    sub = f"{shown}/{node.name}" if shown else node.name
-                    queue.append((node.key, sub, depth + 1))
+        # 한 겹씩 내려가면서, 그 겹의 폴더들은 **한꺼번에** 물어본다.
+        #
+        # 예전엔 폴더 하나 묻고 답 기다리고 다음 폴더 묻기를 되풀이했다. 한 번
+        # 왕복이 0.2~0.3초인데 고객 폴더가 400개면 그것만 100초다 — 검색이
+        # 준비되기까지 한참 기다려야 했던 진짜 이유다. 기다리는 일(네트워크)은
+        # 겹쳐서 해도 되므로 한 번에 여러 개를 묻는다.
+        level = [(root_id, "")]
+        depth = 0
+        while level and depth <= MAX_DEPTH and len(out) < limit:
+            with ThreadPoolExecutor(max_workers=self.FANOUT) as pool:
+                answers = list(pool.map(
+                    lambda fs: self._list_safe(fs[0]), level))
+            nxt = []
+            for (fid, shown), items in zip(level, answers):
+                for it in items:
+                    is_dir = it.get("mimeType") == google_client.DRIVE_FOLDER_MIME
+                    node = Node(
+                        name=it.get("name", ""), is_dir=is_dir, folder=shown,
+                        size=int(it.get("size") or 0),
+                        mtime=_parse_rfc3339(it.get("modifiedTime", "")),
+                        key=it.get("id", ""), mime=it.get("mimeType", ""),
+                        source=self.kind)
+                    node.haystack()          # 검색용 글자도 여기서 만들어 둔다
+                    out.append(node)
+                    if is_dir:
+                        sub = f"{shown}/{node.name}" if shown else node.name
+                        nxt.append((node.key, sub))
+                    if len(out) >= limit:
+                        break
                 if len(out) >= limit:
                     break
-            # 폴더 하나를 끝낼 때마다 중간 결과를 넘긴다 — 네트워크를 타는
-            # 드라이브는 다 끝나기까지 한참이라, 찾은 것부터 보여 줘야 한다.
+            # 한 겹을 끝낼 때마다 중간 결과를 넘긴다 — 네트워크를 타는 드라이브는
+            # 다 끝나기까지 한참이라, 찾은 것부터 보여 줘야 한다.
             if on_batch is not None:
                 on_batch(out)
-        return out
+            level = nxt
+            depth += 1
+        return out[:limit]
+
+    # 한 겹에서 동시에 물어볼 폴더 수. 너무 올리면 구글이 속도를 제한한다
+    # (429). 8개면 체감은 충분히 빨라지고 제한에는 걸리지 않는다.
+    FANOUT = 8
+
+    def _list_safe(self, folder_id: str) -> list:
+        """폴더 하나 읽기 — 한 곳이 실패해도 전체를 멈추지 않는다.
+
+        권한이 없는 폴더가 섞여 있을 수 있는데, 그 하나 때문에 검색 목록 전체를
+        못 만들면 곤란하다.
+        """
+        from . import google_client
+        try:
+            return google_client.drive_list_folder(self.auth, folder_id)
+        except Exception:
+            return []
 
     # ---- 폴더 하나씩 ----
     def root_node(self) -> Node:

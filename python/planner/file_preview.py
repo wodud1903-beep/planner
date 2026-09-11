@@ -28,8 +28,11 @@ except Exception:                     # pragma: no cover
 class FilePreview(QWidget):
     """그림·PDF 를 보여 주고, 돌리고, PDF 는 장을 넘긴다."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, on_send=None):
         super().__init__(parent)
+        # 보고 있는 서류를 그 자리에서 카카오톡으로 보내려고 쓰는 길.
+        # 실제로 무엇을 보낼지는 목록을 들고 있는 쪽(고객정보 탭)이 안다.
+        self._on_send = on_send
         self._angle = 0                 # 지금 보고 있는 것의 각도
         self._angles: dict = {}         # 파일별로 기억해 둔 각도
         self._key = ""
@@ -76,6 +79,14 @@ class FilePreview(QWidget):
         self.lbl_zoom.setAlignment(Qt.AlignCenter)
         bar.addWidget(self.lbl_zoom)
         bar.addStretch()
+        # 보고 있는 그 서류를 바로 보낸다. 예전엔 미리보기로 확인한 뒤 다시
+        # 목록으로 가서 고르고 Ctrl+C 를 눌러야 했다.
+        self.btn_send = QPushButton("카톡으로 보내기")
+        self.btn_send.setToolTip(
+            "이 파일을 클립보드에 올립니다. 카카오톡 대화창에서 Ctrl+V 로 붙여 넣으세요")
+        self.btn_send.clicked.connect(self._send)
+        self.btn_send.setVisible(self._on_send is not None)
+        bar.addWidget(self.btn_send)
         self.btn_prev = QPushButton("◀")
         self.btn_prev.setToolTip("이전 장")
         self.btn_prev.clicked.connect(lambda: self.go_page(self._page - 1))
@@ -433,12 +444,23 @@ class FilePreview(QWidget):
         self._update_cursor()
 
 
+    def set_send_action(self, on_send) -> None:
+        """'카톡으로 보내기' 를 누르면 할 일을 정해 준다(없으면 단추를 숨긴다)."""
+        self._on_send = on_send
+        self.btn_send.setVisible(on_send is not None)
+        self._update_bar()
+
+    def _send(self):
+        if self._on_send is not None:
+            self._on_send()
+
     def _update_bar(self):
         has = self._src is not None or self._doc is not None
         self.btn_left.setEnabled(has)
         self.btn_right.setEnabled(has)
         for b in (self.btn_zoom_in, self.btn_zoom_out, self.btn_fit):
             b.setEnabled(has)
+        self.btn_send.setEnabled(has)
         self.lbl_zoom.setText(
             ("맞춤" if self.fitted else f"{self._zoom * 100:.0f}%") if has else "")
         n = self.page_count
