@@ -281,6 +281,12 @@ class AppSettings:
     files_dir: str = ""
     files_use_drive: bool = False
     files_drive_folder: str = ""
+    # 받은팩스 폴더 — 휴대폰 모바일팩스에서 '공유 → 드라이브 저장' 으로 넣으면
+    # 드라이브 데스크톱이 PC 로 내려받는 그 폴더. 비워 두면 팩스 기능이 잠잠하다.
+    fax_dir: str = ""
+    fax_watch: bool = True
+    # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
+    tab_order: list = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -317,6 +323,9 @@ class AppSettings:
             "filesDir": self.files_dir,
             "filesUseDrive": self.files_use_drive,
             "filesDriveFolder": self.files_drive_folder,
+            "faxDir": self.fax_dir,
+            "faxWatch": self.fax_watch,
+            "tabOrder": list(self.tab_order or []),
         }
 
     @classmethod
@@ -380,6 +389,9 @@ class AppSettings:
         s.files_dir = o.get("filesDir", "") or ""
         s.files_use_drive = bool(o.get("filesUseDrive", False))
         s.files_drive_folder = o.get("filesDriveFolder", "") or ""
+        s.fax_dir = o.get("faxDir", "") or ""
+        s.fax_watch = bool(o.get("faxWatch", True))
+        s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         return s
 
     def save(self, path: Path) -> None:

@@ -26,9 +26,15 @@ _MEMO_QUIET_MIN = 340
 
 class AlarmWindow(QWidget):
     def __init__(self, title: str, ment: str, stack_index: int, siren: bool = True,
-                 html: str = ""):
+                 html: str = "", action: tuple = ()):
+        """action = (단추이름, 누르면 할 일) — 없으면 단추가 안 생긴다.
+
+        팩스 도착 알람의 [보기] 가 이걸 쓴다. 무엇을 보여 줄지는 알람이 모르고
+        부르는 쪽이 안다(file_preview.set_send_action 과 같은 방식).
+        """
         super().__init__()
         self._siren = siren
+        self._action = action
         self._blink = 0
         self._snooze_left = 0
 
@@ -114,13 +120,19 @@ class AlarmWindow(QWidget):
         self.btn_snooze.clicked.connect(self._snooze)
         self.btn_ok = QPushButton("확인")
         self.btn_ok.clicked.connect(self._dismiss)
-        for b in (self.btn_copy, self.btn_snooze, self.btn_ok):
+        # 눌러서 바로 열어 보는 단추(팩스 [보기] 등)
+        self.btn_act = QPushButton(action[0] if action else "")
+        self.btn_act.clicked.connect(self._do_action)
+        self.btn_act.setVisible(bool(action))
+        for b in (self.btn_copy, self.btn_snooze, self.btn_ok, self.btn_act):
             b.setFixedHeight(38)
             b.setStyleSheet(btn_css)
         if ment.strip():
             btns.addWidget(self.btn_copy)
         else:
             self.btn_copy.hide()
+        if action:
+            btns.addWidget(self.btn_act)
         if siren:
             btns.addWidget(self.btn_snooze)
         else:
@@ -218,6 +230,19 @@ class AlarmWindow(QWidget):
         self._timer.stop()
         self._snooze_timer.stop()
 
+    def _do_action(self):
+        """[보기] 같은 단추 — 시킨 일을 하고 팝업을 닫는다.
+
+        일을 하다 탈이 나도 팝업은 닫는다. 안 그러면 못 닫는 창이 화면에 남는다.
+        """
+        fn = self._action[1] if len(self._action) > 1 else None
+        try:
+            if callable(fn):
+                fn()
+        except Exception:
+            pass
+        self._dismiss()
+
     def _dismiss(self):
         self.stop()
         self.close()
@@ -235,8 +260,8 @@ class AlarmWindow(QWidget):
 
 
 def popup(title: str, ment: str, stack_index: int, siren: bool = True,
-          html: str = "") -> AlarmWindow:
-    w = AlarmWindow(title, ment, stack_index, siren, html)
+          html: str = "", action: tuple = ()) -> AlarmWindow:
+    w = AlarmWindow(title, ment, stack_index, siren, html, action)
     _open_alarms.append(w)
     w.show_no_activate()
     return w

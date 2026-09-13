@@ -33,7 +33,11 @@ from . import hangul
 
 # 보여 줄 파일 종류. 그 외(엑셀·한글 문서 등)도 목록에는 나오지만
 # 미리보기는 안 되고 '연결 프로그램으로 열기' 만 된다.
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+#
+# tif/tiff 는 **팩스 때문에** 들어 있다. 팩스는 PDF 아니면 TIFF 로 오는데, 예전엔
+# tif 가 빠져 있어서 받은 팩스가 '미리보기를 지원하지 않는 형식' 으로 나왔다.
+# 여러 장 TIFF 도 장을 넘겨 볼 수 있다(file_preview 의 QImageReader 경로).
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
 PDF_EXT = {".pdf"}
 VIEWABLE_EXT = IMAGE_EXT | PDF_EXT
 

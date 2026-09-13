@@ -26,7 +26,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, backup_dialog, config, contacts, customer_docs, followup,
+    alarm_window, backup_dialog, config, contacts, customer_docs,
+    fax_watch, fax_window, followup,
     google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
@@ -288,6 +289,17 @@ class MainWindow(QMainWindow):
         self._sync_poll = QTimer(self)
         self._sync_poll.timeout.connect(lambda: self.sync_now_async(manual=False))
         self._sync_poll.start(10 * 60 * 1000)
+
+        # 받은팩스 폴더 지켜보기.
+        #
+        # ⚠️ 고객정보 탭의 폴더 감시로는 안 된다 — 그건 그 탭이 보일 때만, 지금 보고
+        #    있는 폴더만 본다. 팩스는 어느 탭에 있든 트레이로 내려가 있든 잡아야 하므로
+        #    창에 딸린 별도 타이머로 둔다. 폴더 하나 훑기는 수 ms 라 부담이 없다.
+        self._fax = fax_watch.FaxFolder(
+            self.settings.fax_dir, self._load_fax_seen())
+        self._fax_poll = QTimer(self)
+        self._fax_poll.timeout.connect(self._check_fax)
+        self._fax_poll.start(self.FAX_POLL_MS)
 
         # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
         self._task_refetch_timer = QTimer(self)
@@ -742,8 +754,12 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._topbar)
         self._apply_topbar_theme()
 
-        # 탭
+        # 탭 — 끌어서 순서를 바꿀 수 있다.
+        # 사람마다 자주 쓰는 탭이 다르니 자리를 직접 정하게 하고, 그 순서를 기억한다.
+        # (설정에 담아 두므로 사무실 PC 와 집 PC 가 같은 배치가 된다)
         self.tabs = QTabWidget()
+        self.tabs.setMovable(True)
+        self.tabs.tabBar().setToolTip("탭을 끌어서 순서를 바꿀 수 있습니다")
         outer.addWidget(self.tabs)
         self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
         self.tabs.addTab(self._build_customer_tab(), "고객관리")
@@ -763,6 +779,49 @@ class MainWindow(QMainWindow):
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
+        # 지난번에 맞춰 둔 순서로 되돌린 뒤부터 바뀜을 기록한다
+        # (되돌리는 동안 나는 tabMoved 까지 저장하면 순서가 뒤엉킨다)
+        self._restore_tab_order()
+        self.tabs.tabBar().tabMoved.connect(self._remember_tab_order)
+
+    # ------------------------------------------------------------ 탭 순서
+    def _tab_names(self) -> list:
+        return [self.tabs.tabText(i) for i in range(self.tabs.count())]
+
+    def _restore_tab_order(self):
+        """설정에 적힌 순서대로 탭을 옮긴다.
+
+        판을 바꾼 뒤 탭이 늘거나 줄 수 있으므로 **이름으로** 맞춘다. 설정에 없는
+        탭(새로 생긴 것)은 건드리지 않고 제자리에 둔다 — 새 기능이 눈에 안 띄는
+        맨 끝으로 밀리지 않게.
+        """
+        want = [str(x) for x in (getattr(self.settings, "tab_order", None) or [])]
+        if not want:
+            return
+        self._tab_moving = True
+        try:
+            at = 0
+            for name in want:
+                cur = self._tab_names()
+                if name not in cur:
+                    continue            # 없어진 탭
+                i = cur.index(name)
+                if i != at:
+                    self.tabs.tabBar().moveTab(i, at)
+                at += 1
+        except Exception:
+            pass
+        finally:
+            self._tab_moving = False
+
+    def _remember_tab_order(self, *args):
+        if getattr(self, "_tab_moving", False):
+            return
+        try:
+            self.settings.tab_order = self._tab_names()
+            self._save_settings()
+        except Exception:
+            pass
 
     def open_files_for(self, name: str):
         """'고객정보' 탭으로 건너가 그 고객 이름으로 찾아 둔다."""
@@ -832,7 +891,7 @@ class MainWindow(QMainWindow):
         self.lbl_week = QLabel("이번주 일정")
         v.addWidget(self.lbl_week)
         self.tbl_week = self._make_table(["날짜", "시각", "구분", "내용"], [130, 80, 80, 620])
-        self.tbl_week.setMaximumHeight(250)
+        self.tbl_week.setMaximumHeight(300)   # 행이 높아진 만큼 같이 늘린다
         # 일정을 더블클릭하면 캘린더 창이 그 날짜로 열린다 (바로 수정·삭제 가능)
         self.tbl_week.doubleClicked.connect(self._on_week_dblclick)
         v.addWidget(self.tbl_week)
@@ -925,8 +984,10 @@ class MainWindow(QMainWindow):
             [46, 236, 116, 180, 134, 116, 116, 78, 124, 255, 80, 58],
             stretch_last=False)
         # 11pt 는 커 보인다 하셔서 한 단계 내린다(기본 글씨와 같은 10pt)
+        # 고객관리는 열이 많아 글자를 한 단계 작게 둔다(10pt) — 키우면 열이 잘린다.
+        # 대신 한 칸 높이는 넉넉히 해서 눈이 편하게 한다.
         self.tbl_cust.setStyleSheet("QTableWidget { font-size: 10pt; }")
-        self.tbl_cust.verticalHeader().setDefaultSectionSize(34)
+        self.tbl_cust.verticalHeader().setDefaultSectionSize(40)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         self.tbl_cust.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl_cust.customContextMenuRequested.connect(self._cust_context_menu)
@@ -1861,6 +1922,11 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tbl_alarm)
         return w
 
+    # 표 글자 크기와 한 칸 높이 — 한 곳에서 정한다.
+    # 하루 종일 들여다보는 화면이라 조금 크게 잡았다(예전 9pt/기본높이 → 11pt/38px).
+    TABLE_PT = 11
+    ROW_H = 38
+
     def _make_table(self, headers, widths, stretch_last: bool = True) -> QTableWidget:
         """표 하나.
 
@@ -1869,6 +1935,8 @@ class MainWindow(QMainWindow):
         """
         t = QTableWidget(0, len(headers))
         t.setHorizontalHeaderLabels(headers)
+        t.setStyleSheet(f"QTableWidget {{ font-size: {self.TABLE_PT}pt; }}")
+        t.verticalHeader().setDefaultSectionSize(self.ROW_H)
         t.verticalHeader().setVisible(False)
         t.setEditTriggers(QAbstractItemView.NoEditTriggers)
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1888,6 +1956,7 @@ class MainWindow(QMainWindow):
             ("캘린더 열기", self.open_calendar),
             # 브리핑과 주간 요약이 한 화면이 되어 메뉴도 한 줄로 합쳤다
             ("주간 요약", self.show_startup_screen),
+            ("받은 팩스", self.open_fax),
             ("지금 백업", lambda: self._backup(manual=True)),
             ("업데이트 확인", lambda: self.check_update(manual=True)),
             (None, None),
@@ -3160,6 +3229,75 @@ class MainWindow(QMainWindow):
             self.refresh_alarm()
             self._touch_sync()          # 되돌린 상태를 다른 PC 에도 전파
         backup_dialog.BackupDialog(self, on_restored=after_restore).exec()
+
+    # ------------------------------------------------------------ 받은 팩스
+    #
+    # 휴대폰 모바일팩스에서 '공유 → 드라이브 저장' 으로 받은팩스 폴더에 넣으면,
+    # 드라이브 데스크톱이 PC 로 내려받고 여기서 그걸 잡아 알린다.
+    # (SK텔링크 모바일팩스에는 앱이 붙을 수 있는 공개 API 도, 수신 팩스 자동 메일
+    #  전달도 없다. 그래서 폴더를 거치는 이 길이 유일하게 되는 길이다.)
+    FAX_POLL_MS = 10 * 1000
+    FAX_FILE = "fax_seen.json"
+
+    def _load_fax_seen(self) -> set:
+        try:
+            p = config.data_file(self.FAX_FILE)
+            if p.exists():
+                got = json.loads(p.read_text(encoding="utf-8"))
+                return set(got if isinstance(got, list) else [])
+        except Exception:
+            pass
+        return set()
+
+    def _save_fax_seen(self) -> None:
+        try:
+            config.atomic_write(config.data_file(self.FAX_FILE),
+                                json.dumps(sorted(self._fax.seen),
+                                           ensure_ascii=False))
+        except Exception:
+            pass
+        self._touch_sync()
+
+    def _check_fax(self):
+        """10초마다 — 새로 들어온 팩스가 있으면 알린다."""
+        if not self.settings.fax_watch:
+            return
+        want = self.settings.fax_dir or ""
+        if self._fax.folder != want:
+            # 설정에서 폴더를 바꿨다 → 새 폴더의 기존 파일로 알람하지 않는다
+            self._fax.set_folder(want)
+            self._fax.seen = self._load_fax_seen()
+        if not self._fax.folder:
+            return
+        try:
+            got = self._fax.tick()
+        except Exception:
+            return                      # 폴더가 잠깐 안 보여도 조용히 넘어간다
+        if not got:
+            return
+        self._save_fax_seen()
+        self._on_fax_arrived(got)
+
+    def _on_fax_arrived(self, got: list):
+        """새 팩스 알림 — 여러 건이 와도 팝업은 하나로 묶는다."""
+        first = got[0][0]
+        if len(got) == 1:
+            title = "팩스 도착"
+            body = fax_watch.label(*got[0])
+        else:
+            title = f"팩스 {len(got)}건 도착"
+            body = "\n".join(fax_watch.label(n, i) for n, i in got[:8])
+            if len(got) > 8:
+                body += f"\n… 외 {len(got) - 8}건"
+        # 사이렌이 아니라 조용한 안내로 띄운다 — 팩스는 급히 깨울 일이 아니다.
+        alarm_window.popup(title, body, self.alarm_stack, siren=False,
+                           action=("보기", lambda n=first: self.open_fax(n)))
+        self.alarm_stack = (self.alarm_stack + 1) % 5
+        self._toast(title, body.split("\n")[0])
+
+    def open_fax(self, pick: str = ""):
+        """받은 팩스 창을 연다."""
+        fax_window.show_for(self.settings.fax_dir, pick or "", self)
 
     # ------------------------------------------------------------ 트레이/종료
     def _toast(self, title: str, text: str):

@@ -3,6 +3,11 @@
 그림은 받은 바이트를 그대로 그리고, PDF 는 Qt 가 페이지를 그림으로 그려 준다
 (QtPdf). 스캔한 서류는 눕혀 찍힌 게 흔해서 돌려 보기가 꼭 필요하다.
 
+**그림도 여러 장일 수 있다.** 팩스는 TIFF 로 오는 일이 흔하고 대개 여러 장이다.
+예전엔 QPixmap.loadFromData 로 한 장만 읽어서 2장부터 조용히 사라졌다 — 서류를 다
+받은 줄 알고 넘어가게 되는, 가장 위험한 종류의 버그였다. 이제 QImageReader 로
+장 수를 세고 장을 넘긴다(PDF 와 같은 단추를 쓴다).
+
 돌린 각도는 파일마다 따로 기억한다 — 목록을 오가도 그 각도가 유지된다.
 창 크기가 바뀌면 다시 맞춰 그린다.
 """
@@ -10,7 +15,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QBuffer, QByteArray, QEvent, QSize, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QTransform
+from PySide6.QtGui import (QColor, QImage, QImageReader, QPainter, QPixmap,
+                           QTransform)
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
     QWidget)
@@ -36,7 +42,9 @@ class FilePreview(QWidget):
         self._angle = 0                 # 지금 보고 있는 것의 각도
         self._angles: dict = {}         # 파일별로 기억해 둔 각도
         self._key = ""
-        self._src = None                # 원본 QPixmap (그림일 때)
+        self._src = None                # 지금 장의 QPixmap (그림일 때)
+        self._img_data = None           # 그림 원본 바이트 — 장을 넘길 때 다시 읽는다
+        self._img_pages = 0             # 그림이 몇 장인가 (여러 장 TIFF·GIF)
         self._doc = None                # QPdfDocument (PDF 일 때)
         self._buf = None                # PDF 바이트 — 문서가 사는 동안 붙들어 둔다
         self._page = 0
@@ -63,11 +71,11 @@ class FilePreview(QWidget):
         self.btn_right.clicked.connect(lambda: self.rotate(90))
         bar.addWidget(self.btn_right)
         self.btn_zoom_out = QPushButton("－")
-        self.btn_zoom_out.setToolTip("축소 (Ctrl + 마우스 휠)")
+        self.btn_zoom_out.setToolTip("축소 (마우스 휠 내리기)")
         self.btn_zoom_out.clicked.connect(lambda: self.zoom_by(1 / 1.25))
         bar.addWidget(self.btn_zoom_out)
         self.btn_zoom_in = QPushButton("＋")
-        self.btn_zoom_in.setToolTip("확대 (Ctrl + 마우스 휠)")
+        self.btn_zoom_in.setToolTip("확대 (마우스 휠 올리기)")
         self.btn_zoom_in.clicked.connect(lambda: self.zoom_by(1.25))
         bar.addWidget(self.btn_zoom_in)
         self.btn_fit = QPushButton("맞춤")
@@ -149,7 +157,7 @@ class FilePreview(QWidget):
         self._buf = None
 
     def show_message(self, text: str, title: str = ""):
-        self._src = None
+        self._drop_img()
         self._drop_doc()
         self._key = ""
         self.lbl_title.setText(title)
@@ -157,13 +165,60 @@ class FilePreview(QWidget):
         self.view.setText(text)
         self._update_bar()
 
+    def _drop_img(self):
+        """보던 그림을 놓아 준다."""
+        self._src = None
+        self._img_data = None
+        self._img_pages = 0
+
+    @staticmethod
+    def _read_img(data: bytes, page: int = 0):
+        """그림에서 그 장을 읽는다 → (QImage|None, 장수).
+
+        ⚠️ 읽개(QImageReader)와 버퍼(QBuffer)를 **이 함수 밖으로 내보내지 않는다.**
+        읽개는 버퍼를 가리키고만 있어서, 버퍼가 먼저 없어지면 읽개가 죽을 때 이미
+        없어진 자리를 건드려 **프로그램이 통째로 꺼진다**. 실제로 두 번 겪었다 —
+        한 번은 장을 넘길 때, 한 번은 프로그램을 끝낼 때(둘 다 segfault).
+        그래서 붙들어 두지 않고, 여기서 만들어 여기서 **순서대로** 없앤다.
+        """
+        buf = QBuffer()
+        buf.setData(QByteArray(data))
+        buf.open(QBuffer.ReadOnly)
+        r = QImageReader(buf)
+        r.setAutoTransform(True)        # 사진의 회전 정보(EXIF)를 따른다
+        count = r.imageCount()
+        count = count if count and count > 0 else 1
+        img = None
+        if page <= 0 or r.jumpToImage(page):
+            got = r.read()
+            if not got.isNull():
+                img = got
+        del r                           # 읽개 먼저
+        del buf                         # 버퍼 나중
+        return img, count
+
+    def _load_img_page(self, page: int) -> bool:
+        """그림의 그 장을 읽어 self._src 에 올린다."""
+        if not self._img_data:
+            return False
+        img, _n = self._read_img(self._img_data, page)
+        if img is None:
+            return False
+        self._src = QPixmap.fromImage(img)
+        return True
+
     def show_image(self, data: bytes, key: str, title: str = "") -> bool:
-        pix = QPixmap()
-        if not pix.loadFromData(data):
+        # 여러 장 TIFF·GIF 면 장수가 2 이상. 셀 수 없는 형식은 1 로 본다.
+        img, pages = self._read_img(data, 0)
+        if img is None:
             self.show_message("그림을 읽지 못했습니다.", title)
             return False
         self._drop_doc()
-        self._src = pix
+        self._drop_img()
+        self._img_data = bytes(data)
+        self._img_pages = pages
+        self._page = 0
+        self._src = QPixmap.fromImage(img)
         self._key = key
         self._angle = self._angles.get(key, 0)
         self._zoom = 0.0            # 새 파일은 '맞춤' 부터
@@ -196,7 +251,7 @@ class FilePreview(QWidget):
                 f"PDF 를 읽지 못했습니다. ({err})\n"
                 "[연결 프로그램으로 열기] 를 눌러 주세요.", title)
             return False
-        self._src = None
+        self._drop_img()
         self._drop_doc()                # 앞서 보던 PDF 를 먼저 놓아 준다
         self._doc = doc
         self._buf = buf                 # 문서가 이 버퍼를 계속 읽는다
@@ -222,18 +277,28 @@ class FilePreview(QWidget):
         self._redraw()
 
     def go_page(self, page: int):
-        if self._doc is None:
+        n = self.page_count
+        if n <= 1:
             return
-        page = max(0, min(page, self._doc.pageCount() - 1))
+        page = max(0, min(page, n - 1))
         if page == self._page:
             return
-        self._page = page
+        if self._doc is None:
+            # 그림은 그 장을 다시 읽어야 한다. 못 읽으면 자리를 지킨다.
+            keep, self._page = self._page, page
+            if not self._load_img_page(page):
+                self._page = keep
+                return
+        else:
+            self._page = page
         self._redraw()
         self._update_bar()
 
     @property
     def page_count(self) -> int:
-        return self._doc.pageCount() if self._doc is not None else 0
+        if self._doc is not None:
+            return self._doc.pageCount()
+        return self._img_pages
 
     @property
     def angle(self) -> int:
@@ -367,8 +432,12 @@ class FilePreview(QWidget):
     def eventFilter(self, obj, ev):
         if obj is self.view or obj is self.scroll.viewport():
             t = ev.type()
-            # Ctrl+휠 = 확대·축소. 그림 위에서 굴려도 먹어야 하므로 여기서 잡는다.
-            if t == QEvent.Wheel and (ev.modifiers() & Qt.ControlModifier):
+            # 휠 = 확대·축소. 그림 위에서 굴려도 먹어야 하므로 여기서 잡는다.
+            #
+            # Ctrl 을 안 눌러도 확대되게 했다 — 미리보기 칸에서는 굴리면 커지는 쪽이
+            # 자연스럽고, 서류를 볼 때 매번 Ctrl 을 같이 누르는 게 번거롭다.
+            # 확대한 뒤 자리를 옮기는 것은 **끌기**로 한다(이미 그렇게 동작한다).
+            if t == QEvent.Wheel:
                 if self._src is not None or self._doc is not None:
                     self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
                     ev.accept()
@@ -407,8 +476,12 @@ class FilePreview(QWidget):
                             else Qt.ArrowCursor)
 
     def wheelEvent(self, ev):
-        """Ctrl + 휠로 확대·축소. 그냥 휠은 스크롤 그대로."""
-        if ev.modifiers() & Qt.ControlModifier:
+        """휠로 확대·축소 (칸 바깥에서 굴렸을 때의 대비책).
+
+        실제로는 위 eventFilter 가 먼저 잡는다 — 마우스는 늘 그림 위에 있고, 그
+        휠 알림은 여기까지 올라오지 않기 때문이다.
+        """
+        if self._src is not None or self._doc is not None:
             self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
             ev.accept()
             return

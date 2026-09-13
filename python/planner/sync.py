@@ -30,7 +30,8 @@ SYNC_FILE = "planner_sync.json"
 _FILES = ["todos.json", "pcalarms.json", "taskalarms.json", "plan_cfg.json",
           "followups.json", "ment_copied.json", "customer_notes.json",
           "terms_presets.json", "commission_rates.json", "greetings.json",
-          "kb_shared.json", "kb_mine.json", "customer_docs.json"]
+          "kb_shared.json", "kb_mine.json", "customer_docs.json",
+          "fax_seen.json"]
 
 # 항목 단위로 합치는 파일 → (모양, 열쇠)
 #   list    : [{...}]        열쇠 값이 같으면 한 건으로 본다
@@ -45,6 +46,8 @@ _MERGE = {
     "customer_notes.json": ("dictlist", None),
     "ment_copied.json": ("set", None),
     "followups.json": ("set", None),
+    # 사무실에서 확인한 팩스가 집 PC 를 켤 때 다시 뜨면 안 된다 → 합집합
+    "fax_seen.json": ("set", None),
 }
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"

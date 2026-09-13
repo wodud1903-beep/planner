@@ -226,6 +226,27 @@ class SettingsDialog(QDialog):
         ffl.addRow(lbl_warn)
         root.addWidget(gb_files)
 
+        # ---- 받은 팩스 ----
+        gb_fax = QGroupBox("받은 팩스 — 팩스가 오면 알려 주기")
+        xfl = QFormLayout(gb_fax)
+        xrow = QHBoxLayout()
+        self.ed_fax_dir = QLineEdit()
+        self.ed_fax_dir.setPlaceholderText(
+            r"예) G:\내 드라이브\받은팩스")
+        xrow.addWidget(self.ed_fax_dir, 1)
+        btn_fax_dir = QPushButton("찾기")
+        btn_fax_dir.clicked.connect(self._pick_fax_dir)
+        xrow.addWidget(btn_fax_dir)
+        xfl.addRow("받은팩스 폴더", xrow)
+        self.chk_fax = QCheckBox("팩스가 들어오면 알람으로 알려 주기")
+        xfl.addRow("알림", self.chk_fax)
+        xfl.addRow(QLabel(
+            "휴대폰 모바일팩스에서 받은 팩스를 [공유] → 드라이브의 이 폴더에 저장하면,\n"
+            "PC 가 그걸 알아채서 알람을 띄우고 바로 보여 줍니다. PDF 는 물론 여러 장짜리\n"
+            "TIFF 팩스도 장을 넘겨 볼 수 있습니다.\n"
+            "※ 폴더를 처음 지정할 때 이미 들어 있던 팩스로는 알람이 울리지 않습니다."))
+        root.addWidget(gb_fax)
+
 
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
@@ -351,6 +372,8 @@ class SettingsDialog(QDialog):
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
         self.ed_files_dir.setText(s.files_dir)
+        self.ed_fax_dir.setText(s.fax_dir)
+        self.chk_fax.setChecked(s.fax_watch)
         self.chk_files_drive.setChecked(s.files_use_drive)
         self.ed_files_folder.setText(s.files_drive_folder)
         self.sp_expiry.setValue(s.expiry_months)
@@ -416,6 +439,8 @@ class SettingsDialog(QDialog):
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.files_dir = self.ed_files_dir.text().strip()
+        s.fax_dir = self.ed_fax_dir.text().strip()
+        s.fax_watch = self.chk_fax.isChecked()
         s.files_use_drive = self.chk_files_drive.isChecked()
         s.files_drive_folder = self.ed_files_folder.text().strip()
         s.expiry_months = self.sp_expiry.value()
@@ -435,6 +460,12 @@ class SettingsDialog(QDialog):
         s.kb_hot_shift = self.chk_kb_shift.isChecked()
         s.kb_hot_key = self.cmb_kb_key.currentText()
         self.accept()
+
+    def _pick_fax_dir(self):
+        start = self.ed_fax_dir.text().strip() or os.path.expanduser("~")
+        d = QFileDialog.getExistingDirectory(self, "받은팩스 폴더 선택", start)
+        if d:
+            self.ed_fax_dir.setText(d)
 
     def _pick_files_dir(self):
         start = self.ed_files_dir.text().strip() or os.path.expanduser("~")
