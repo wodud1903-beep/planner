@@ -1,0 +1,63 @@
+name: Deploy PWA to Pages
+
+# 폰에서 쓰는 웹앱(web/)을 GitHub Pages 로 올린다.
+#  - web/ 이나 CHANGELOG.md 가 바뀌면 자동
+#  - 수동 실행도 가능
+# exe 빌드(build-exe.yml)는 paths 가 'python/**' 허용목록이라 여기에 안 걸린다.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'CHANGELOG.md'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# ⚠️ cancel-in-progress 를 켜지 않는다.
+#    배포 도중에 취소되면 옛 파일과 새 파일이 섞인 사이트가 나갈 수 있고,
+#    그 상태의 서비스워커는 반쯤 갱신된 앱을 손님에게 보여준다.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 변경 이력을 웹 폴더로 복사
+        run: cp CHANGELOG.md web/CHANGELOG.md
+
+      - name: 검사용 파일은 빼고 올린다
+        run: rm -rf web/verify
+
+      - name: 빌드 번호 박아 넣기
+        shell: bash
+        # 커밋 sha 를 빌드 번호로 쓴다. 서비스워커 캐시 이름이 여기서 갈리므로
+        # 한 커밋 = 한 세대가 되고, 세대가 섞일 수 없다.
+        run: |
+          BUILD="${GITHUB_SHA::12}"
+          VER=$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' python/planner/config.py)
+          echo "빌드=$BUILD 버전=$VER"
+          test -n "$VER"                      # config.py 에서 못 읽으면 여기서 멈춘다
+          grep -rl '__BUILD_ID__\|__APP_VERSION__' web \
+            | xargs -r sed -i "s/__BUILD_ID__/$BUILD/g; s/__APP_VERSION__/$VER/g"
+          # 치환이 남았으면 배포하지 않는다 — 캐시 이름이 리터럴로 굳으면
+          # 다음 배포에서 새 판으로 갈아타지 못한다.
+          ! grep -rq '__BUILD_ID__\|__APP_VERSION__' web
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

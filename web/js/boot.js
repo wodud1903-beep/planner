@@ -1,0 +1,95 @@
+// 켤 때 하는 일.
+//
+// 순서가 중요하다: **캐시로 먼저 그리고**, 그 다음에 조용히 새로 받는다.
+// 로그인이나 네트워크를 기다리며 빈 화면을 보여 주지 않는다.
+import { shell, paintState, markTab, setBody } from "./ui/chrome.js";
+import { html } from "./ui/dom.js";
+import * as router from "./router.js";
+import * as auth from "./auth.js";
+import * as store from "./store.js";
+import * as kbui from "./ui/kb.js";
+import * as about from "./ui/about.js";
+
+const BUILD_CHECK_MS = 5 * 60 * 1000;
+let _lastCheck = 0;
+let _touched = false;          // 사용자가 이 화면을 만졌나 (갱신을 미룰지 판단)
+
+document.getElementById("app").innerHTML = shell();
+addEventListener("pointerdown", () => { _touched = true; }, { once: true, capture: true });
+addEventListener("keydown", () => { _touched = true; }, { once: true, capture: true });
+
+auth.init();
+auth.onChange(paintState);
+paintState();
+
+router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
+router.on(/^\/kb$/, () => kbui.screen(null));
+router.on(/^\/about$/, () => about.screen());
+router.on(/^\/docs$/, () => notYet("고객정보 서류", "구글 계정 연결 뒤에 만듭니다."));
+router.on(/^\/customers$/, () => notYet("고객관리 조회", "구글 계정 연결 뒤에 만듭니다."));
+
+function notYet(title, why) {
+  markTab(location.hash.slice(1));
+  setBody(html`<div class="pane"><div class="empty">
+    <p style="font-size:17px;font-weight:600;color:var(--text)">${title}</p>
+    <p>${why}</p></div></div>`);
+}
+
+(async function start() {
+  const ui = await store.ui();
+  if (!location.hash && ui.route) location.hash = ui.route;
+  router.start();
+  addEventListener("hashchange", () => store.ui({ route: location.hash.slice(1) }));
+
+  // 화면이 뜬 다음에 조용히 로그인·자료 받기
+  setTimeout(async () => {
+    await auth.token();                 // 조용한 시도 (실패해도 화면은 그대로)
+    paintState();
+    kbui.load();
+  }, 0);
+
+  registerSW();
+})();
+
+// ---------------------------------------------------------------- 자동 갱신
+async function registerSW() {
+  if (!("serviceWorker" in navigator)) return;
+  let reg;
+  try { reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" }); }
+  catch (e) { return; }
+
+  const applyIfSafe = () => {
+    const w = reg.waiting;
+    if (!w) return;
+    // 방금 켰거나 방금 앞으로 돌아온 때만 바꾼다. 쓰는 중이면 미룬다.
+    if (_touched && document.visibilityState === "visible") return;
+    store.ui({ route: location.hash.slice(1) }).then(() => {
+      w.postMessage({ type: "SKIP_WAITING" });
+    });
+  };
+  navigator.serviceWorker.addEventListener("controllerchange", () => location.reload());
+  reg.addEventListener("updatefound", () => {
+    const sw = reg.installing;
+    if (sw) sw.addEventListener("statechange", () => {
+      if (sw.state === "installed" && reg.waiting) applyIfSafe();
+    });
+  });
+
+  // GitHub Pages 는 10분 캐시라 서비스워커 자동 확인이 늦다.
+  // version.json 을 no-store 로 직접 찍어 보고 다르면 바로 확인시킨다.
+  const probe = async () => {
+    if (Date.now() - _lastCheck < BUILD_CHECK_MS) return;
+    _lastCheck = Date.now();
+    try {
+      const r = await fetch("./version.json", { cache: "no-store" });
+      if (!r.ok) return;
+      const { build } = await r.json();
+      const cur = (await caches.keys()).find((k) => k.startsWith("app-"));
+      if (cur && build && cur !== "app-" + build) { await reg.update(); applyIfSafe(); }
+    } catch (e) {}
+  };
+  probe();
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { _touched = false; probe(); }
+  });
+}

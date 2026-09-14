@@ -1,0 +1,121 @@
+/* 폴드7을 먼저 생각한 화면.
+   접힌 커버 화면(~400px)과 펼친 안쪽 화면(~870px)을 **컨테이너 쿼리** 하나로 가른다.
+   기기를 알아내려 하지 않는다 — 접었다 펴도 새로고침이 없으므로 순수 CSS 라야 한다. */
+:root {
+  --bg: #f5f7fa; --card: #ffffff; --text: #1e2733; --sub: #6b7a8d;
+  --line: #d8e0ea; --accent: #5b8fbf; --accent-bg: #e8f0f8;
+  --bad: #c0392b; --ok: #2e7d5b; --warn: #b06a00;
+  --tap: 48px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10141a; --card: #171c24; --text: #e6ecf3; --sub: #93a2b5;
+    --line: #263140; --accent: #7fb3e0; --accent-bg: #1b2735;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, "Noto Sans KR", "Malgun Gothic", sans-serif;
+  overscroll-behavior-y: contain;
+  /* ⚠️ 재는 자리는 #app 이 아니라 **body** 다.
+     @container 규칙은 '가장 가까운 조상 컨테이너'를 보고 판단한다 —
+     자기 자신은 보지 않는다. container-type 을 #app 에 두면
+     `@container { #app { flex-direction: row } }` 가 **영영 안 걸린다**
+     (#app 위에 컨테이너가 없으니까). 자식인 nav.tabs 만 바뀌어서
+     펼쳤을 때 레일만 세로가 되고 본체는 그대로 세로로 쌓이는,
+     알아채기 어려운 모양이 된다. 실제로 그 상태로 한 번 만들었다. */
+  container-type: inline-size;
+}
+#app { display: flex; flex-direction: column; height: 100dvh; }
+
+/* ---- 위 ---- */
+header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  background: var(--card); border-bottom: 1px solid var(--line); flex: none;
+}
+header h1 { font-size: 16px; margin: 0; font-weight: 700; }
+header .grow { flex: 1; }
+.chip {
+  font-size: 12px; padding: 4px 9px; border-radius: 999px;
+  background: var(--accent-bg); color: var(--accent); border: 0; cursor: pointer;
+}
+.chip.bad { background: #fdeaea; color: var(--bad); }
+@media (prefers-color-scheme: dark) { .chip.bad { background: #3a1f1f; } }
+
+/* ---- 가운데 ---- */
+main { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
+.pane { padding: 10px 12px 20px; }
+.searchbar { position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 2; }
+.searchbar input {
+  width: 100%; height: var(--tap); padding: 0 12px; font-size: 16px;  /* 16px 미만이면 폰이 확대한다 */
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--text);
+}
+.cats { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0; scrollbar-width: none; }
+.cats::-webkit-scrollbar { display: none; }
+.cats button {
+  flex: none; font-size: 13px; padding: 7px 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--sub);
+}
+.cats button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+ul.list { list-style: none; margin: 0; padding: 0; }
+ul.list > li {
+  content-visibility: auto; contain-intrinsic-size: auto 64px;   /* 수천 줄이어도 안 버벅이게 */
+  border-bottom: 1px solid var(--line);
+}
+ul.list button.row {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  padding: 11px 4px; min-height: var(--tap); color: var(--text); font: inherit;
+}
+.row .t { font-weight: 600; }
+.row .s { font-size: 13px; color: var(--sub); margin-top: 2px; }
+.empty { color: var(--sub); text-align: center; padding: 40px 10px; }
+
+/* ---- 본문(업무자료·변경 이력 공용) ---- */
+.kbbody { font-size: 14px; }
+.kbhead { margin: 10px 0 4px; font-weight: 700; color: var(--accent); }
+.kbline { margin: 2px 0 2px 4px; white-space: pre-wrap; word-break: break-word; }
+.kbgap { margin: 6px 0; }
+.kbsep { border: 0; border-top: 1px dashed var(--line); margin: 12px 0 6px; }
+.kbbody a { color: var(--accent); }
+.chk { list-style: none; padding: 0; margin: 8px 0 0; }
+.chk li { padding: 6px 0 6px 22px; position: relative; border-bottom: 1px solid var(--line); }
+.chk li::before { content: "☐"; position: absolute; left: 2px; color: var(--sub); }
+
+/* ---- 아래 탭 (엄지가 닿는 곳) ---- */
+nav.tabs {
+  display: flex; flex: none; background: var(--card);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+nav.tabs a {
+  flex: 1; text-align: center; padding: 10px 4px; min-height: var(--tap);
+  color: var(--sub); text-decoration: none; font-size: 12px;
+}
+nav.tabs a[aria-current="page"] { color: var(--accent); font-weight: 700; }
+nav.tabs .ico { display: block; font-size: 19px; line-height: 1.2; }
+
+/* ---- 펼친 화면: 같은 DOM 이 왼쪽 레일 + 두 판이 된다 ---- */
+@container (min-width: 640px) {
+  #app { flex-direction: row-reverse; }
+  nav.tabs {
+    flex-direction: column; border-top: 0; border-right: 1px solid var(--line);
+    width: 96px; justify-content: flex-start; padding-top: 8px;
+  }
+  nav.tabs a { flex: none; padding: 14px 4px; }
+  #body { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .split { display: flex; gap: 0; height: 100%; }
+  .split > .left { width: 340px; flex: none; overflow: auto; border-right: 1px solid var(--line); }
+  .split > .right { flex: 1; overflow: auto; min-width: 0; }
+}
+@container (max-width: 639px) {
+  .split > .right { display: none; }
+  .split.detail > .left { display: none; }
+  .split.detail > .right { display: block; }
+}
+.backbtn { display: none; }
+@container (max-width: 639px) { .split.detail .backbtn { display: inline-block; } }
