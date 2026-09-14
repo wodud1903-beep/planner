@@ -9,6 +9,7 @@ import * as H from "../js/hangul.js";
 import * as F from "../js/fmt.js";
 import * as C from "../js/customers.js";
 import * as D from "../js/drive.js";
+import * as CM from "../js/commission.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -87,6 +88,19 @@ for (const [input, kind, value] of [
   eq(`parseFolderRef(${JSON.stringify(input)})`, D.parseFolderRef(input), { kind, value });
 }
 console.log("  12개 대조");
+
+console.log("\n[8] 수당 계산 (commission.calc) — 1원도 어긋나면 안 된다");
+for (const [price, rate, truck, pay, free, want] of V.commission_calc) {
+  eq(`calc(${price}, ${rate}%, ${truck ? "화물" : "승용"}, 지급 ${pay}%, ${free ? "면세" : "과세"})`,
+     CM.calc(price, rate, truck, pay, free), want);
+}
+console.log(`  ${V.commission_calc.length}개 대조`);
+
+console.log("\n[9] 공유 수당율 표 풀기 (sheets.read_rates)");
+for (const [rows, want] of V.parse_rates) {
+  eq(`parseRates(${rows.length}줄)`, CM.parseRates(rows), want);
+}
+console.log(`  ${V.parse_rates.length}개 대조`);
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);

@@ -7,6 +7,10 @@ export class WrongAccount extends Error {}
 export class Offline extends Error {}
 /** 시트/탭 이름이 틀렸을 때. 화면이 '탭 고르기' 를 띄울 수 있게 따로 둔다. */
 export class BadRange extends Error {}
+/** 토큰에 그 권한이 안 붙어 있을 때. **다시 로그인하면 풀린다** —
+ *  '계정이 다르다'(WrongAccount) 와 처방이 정반대라 반드시 갈라야 한다.
+ *  권한 목록을 늘리면 기존 토큰에는 새 권한이 없어서 꼭 한 번은 여기로 온다. */
+export class NeedScope extends Error {}
 
 /** 구글이 돌려준 진짜 메시지를 뽑는다.
  *
@@ -44,7 +48,11 @@ async function call(url) {
     } catch (e) { setOffline(true); throw new Offline(); }
   }
   // 403 은 토큰 문제가 아니라 '이 계정으로는 못 연다' 는 뜻이다. 다시 로그인해도 소용없다.
-  if (r.status === 403) throw new WrongAccount();
+  if (r.status === 403) {
+    const m = await detail(r);
+    if (/insufficient|scope/i.test(m)) throw new NeedScope(m);
+    throw new WrongAccount();
+  }
   if (!r.ok) {
     const msg = await detail(r);
     // 400 + 'Unable to parse range' 는 거의 언제나 **탭 이름이 다른 것**이다.

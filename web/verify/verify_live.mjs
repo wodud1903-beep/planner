@@ -81,7 +81,7 @@ p.on("requestfailed", (r) => (r.url().includes("localhost:8131") ? bad : blocked
 p.on("response", (r) => { if (r.status() >= 400) bad.push(r.status() + " " + r.url()); });
 
 await p.goto(S.url, { waitUntil: "networkidle" });
-ok("탭 네 개가 보인다", (await p.locator("nav.tabs a").count()) === 4);
+ok("탭 여섯 개가 보인다", (await p.locator("nav.tabs a").count()) === 6);
 ok("우리 파일 중 못 받은 게 없다", bad.length === 0, bad.join(" | "));
 
 await p.click('nav.tabs a[data-tab="/about"]');
@@ -99,9 +99,21 @@ ok("배포된 빌드 번호로 캐시가 만들어진다", keys.includes("app-" 
 
 await p.setViewportSize({ width: 880, height: 1100 });
 await p.waitForTimeout(300);
-ok("펼치면 옆으로 눕는다",
-   (await p.evaluate(() => getComputedStyle(document.querySelector("#app")).flexDirection))
-   === "row-reverse");
+// 펼치면 격자가 되고, 머리말은 **가로로** 누워야 한다.
+// (flex 로 눕히면 머리말까지 오른쪽에 세로 띠로 서던 버그가 있었다)
+const wide = await p.evaluate(() => {
+  const g = (sel) => { const r = document.querySelector(sel).getBoundingClientRect();
+                       return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+  return { display: getComputedStyle(document.querySelector("#app")).display,
+           head: g("header"), body: g("#body"), tabs: g("nav.tabs") };
+});
+ok("펼치면 격자로 바뀐다", wide.display === "grid", wide.display);
+ok("머리말이 가로로 눕고 본문 위에 있다",
+   wide.head.w > 600 && wide.head.h < 120 && wide.head.y < wide.body.y,
+   `머리말 ${Math.round(wide.head.w)}x${Math.round(wide.head.h)}`);
+ok("탭 레일이 맨 왼쪽에 세로로 선다",
+   wide.tabs.x === 0 && wide.tabs.w < 200 && wide.body.x >= wide.tabs.w,
+   `rail x=${Math.round(wide.tabs.x)} w=${Math.round(wide.tabs.w)}`);
 
 // 구글 로그인 스크립트는 이 컨테이너에서 막힌다 — 그래도 화면이 살아 있어야 한다.
 // 그게 '로그인 실패해도 화면을 안 바꾼다' 는 약속이다.

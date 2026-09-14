@@ -2,7 +2,7 @@
 // 고객 서류 폴더는 **내 드라이브** 에 있다(공유 드라이브가 아니라서 driveId 류
 // 매개변수가 필요 없다 — 나중에 공유 드라이브로 옮기면 여기를 고쳐야 한다).
 import { token, setOffline } from "./auth.js";
-import { NeedSignIn, WrongAccount, Offline } from "./sheets.js";
+import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 
 const FILES = "https://www.googleapis.com/drive/v3/files";
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -18,7 +18,12 @@ async function call(url, { raw = false } = {}) {
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
-  if (r.status === 403) throw new WrongAccount();
+  if (r.status === 403) {
+    let m = "";
+    try { m = ((await r.clone().json()).error || {}).message || ""; } catch (x) {}
+    if (/insufficient|scope/i.test(m)) throw new NeedScope(m);
+    throw new WrongAccount();
+  }
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`드라이브를 읽지 못했습니다 (HTTP ${r.status})`);
   return raw ? r.blob() : r.json();

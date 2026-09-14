@@ -2,9 +2,13 @@
 import { html, render, $, raw } from "./dom.js";
 import * as auth from "../auth.js";
 
+// 여섯 칸이다. 접힌 커버 화면(~400px)에서 한 칸이 66px 남짓이라
+// 글자는 짧게, 그림은 하나씩만 쓴다.
 const TABS = [
+  ["/agenda", "🗓", "일정"],
   ["/docs", "📄", "서류"],
   ["/customers", "👥", "고객"],
+  ["/calc", "🧮", "수당"],
   ["/kb", "📚", "자료"],
   ["/about", "ⓘ", "정보"],
 ];

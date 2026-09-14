@@ -220,3 +220,69 @@ pre.ment {
 }
 .vpage + .vpage { margin-top: 8px; }   /* PDF 는 한 장씩 아래로 이어 붙인다 */
 a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
+
+/* ---- 일정 / 할일 ---- */
+.notice { font-size: 13px; padding: 8px 10px; border-radius: 8px;
+  background: var(--accent-bg); color: var(--accent); margin: 0 0 10px; }
+.notice.bad { background: #fdecea; color: var(--bad); }
+@media (prefers-color-scheme: dark) { .notice.bad { background: #3a1f1f; } }
+:root[data-theme="dark"] .notice.bad { background: #3a1f1f; }
+
+.taskrow { display: flex; gap: 10px; align-items: flex-start;
+  padding: 8px 0; border-bottom: 1px solid var(--line); }
+/* 밖에서 엄지로 누른다 — 작으면 옆 항목을 누르게 된다 */
+.tickbtn {
+  flex: none; width: 40px; height: 40px; border-radius: 999px;
+  border: 2px solid var(--line); background: var(--card);
+  color: var(--sub); font-size: 17px; cursor: pointer;
+}
+.tickbtn:active { background: var(--accent-bg); border-color: var(--accent); }
+.taskbody { flex: 1; min-width: 0; }
+.taskbody .t { font-weight: 600; display: block; }
+.taskbody .s { font-size: 13px; color: var(--sub); display: block; margin-top: 2px;
+  white-space: pre-wrap; }
+
+.daysep { list-style: none; font-weight: 700; font-size: 13px; color: var(--sub);
+  padding: 12px 0 4px; }
+.daysep.today { color: var(--warn); }
+.daysep.tomorrow { color: var(--accent); }
+.daysep.past { opacity: .6; }
+.evrow { list-style: none; display: flex; gap: 10px; padding: 7px 0;
+  border-bottom: 1px solid var(--line); }
+.evtime { flex: none; width: 52px; font-size: 13px; color: var(--sub);
+  font-variant-numeric: tabular-nums; padding-top: 1px; }
+.evbody { flex: 1; min-width: 0; }
+.evbody .t { display: block; word-break: break-word; }
+.evbody .d { font-size: 12px; color: var(--sub); }
+.tag.today { background: #ffe9cf; color: var(--warn); }
+.tag.tomorrow { background: var(--accent-bg); color: var(--accent); }
+.tag.past { background: #fdecea; color: var(--bad); }
+@media (prefers-color-scheme: dark) {
+  .tag.today { background: #3a2d1a; } .tag.past { background: #3a1f1f; }
+}
+:root[data-theme="dark"] .tag.today { background: #3a2d1a; }
+:root[data-theme="dark"] .tag.past { background: #3a1f1f; }
+
+/* ---- 수당계산기 ---- */
+.flab { display: block; font-size: 13px; color: var(--sub); margin: 12px 0 4px; }
+.bigin {
+  width: 100%; min-height: var(--tap); padding: 10px 12px;
+  font-size: 17px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--text);
+}
+.carlist { max-height: 34dvh; overflow: auto; border: 1px solid var(--line);
+  border-radius: 10px; }
+.carlist .carrow { padding: 9px 12px; }
+.carlist .carrow[aria-pressed="true"] { background: var(--accent-bg); }
+.carlist .carrow[aria-pressed="true"] .t { color: var(--accent); }
+.calcrow { display: flex; gap: 12px; align-items: flex-end; }
+.freechk { display: flex; align-items: center; gap: 7px; min-height: var(--tap);
+  font-size: 15px; white-space: nowrap; }
+.freechk input { width: 22px; height: 22px; }
+.calcout {
+  display: flex; align-items: baseline; gap: 10px; margin: 16px 0 4px;
+  padding: 14px; border-radius: 12px; background: var(--accent-bg);
+}
+.calcout span { color: var(--sub); font-size: 14px; }
+.calcout b { flex: 1; text-align: right; font-size: 26px; color: var(--accent);
+  font-variant-numeric: tabular-nums; }

@@ -9,6 +9,8 @@ import * as store from "./store.js";
 import * as kbui from "./ui/kb.js";
 import * as cust from "./ui/customers.js";
 import * as docs from "./ui/docs.js";
+import * as agenda from "./ui/agenda.js";
+import * as calc from "./ui/calc.js";
 import * as about from "./ui/about.js";
 
 const BUILD_CHECK_MS = 5 * 60 * 1000;
@@ -26,6 +28,8 @@ paintState();
 router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
 router.on(/^\/kb$/, () => kbui.screen(null));
 router.on(/^\/about$/, () => about.screen());
+router.on(/^\/agenda$/, () => agenda.screen());
+router.on(/^\/calc$/, () => calc.screen());
 router.on(/^\/customers\/settings$/, () => cust.settingsScreen());
 router.on(/^\/customers\/(\d+)$/, (m) => cust.screen(m));
 router.on(/^\/customers$/, () => cust.screen(null));
@@ -47,6 +51,8 @@ router.on(/^\/docs$/, () => docs.screen(null));
     kbui.load();
     cust.load();
     docs.load();
+    agenda.load();
+    calc.load();
   }, 0);
 
   registerSW();

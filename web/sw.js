@@ -18,10 +18,12 @@ const PRECACHE = [
   "./css/app.css",
   "./js/boot.js", "./js/config.js", "./js/store.js", "./js/auth.js",
   "./js/sheets.js", "./js/hangul.js", "./js/fmt.js", "./js/kb.js",
-  "./js/customers.js", "./js/drive.js", "./js/router.js",
+  "./js/customers.js", "./js/drive.js", "./js/commission.js", "./js/gcal.js",
+  "./js/router.js",
   "./js/ui/dom.js", "./js/ui/chrome.js", "./js/ui/kb.js", "./js/ui/about.js",
   "./js/ui/customers.js", "./js/ui/docs.js",
   "./js/ui/split.js", "./js/ui/viewer.js",
+  "./js/ui/agenda.js", "./js/ui/calc.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-512-maskable.png",
 ];
 

@@ -75,7 +75,7 @@ let p = await page(ctx);
 const reqs = [];
 p.on("request", (r) => reqs.push(r.url()));
 await p.goto(s.url, { waitUntil: "networkidle" });
-ok("탭 네 개가 보인다", (await p.locator("nav.tabs a").count()) === 4);
+ok("탭 여섯 개가 보인다", (await p.locator("nav.tabs a").count()) === 6);
 ok("제목이 나온다", (await p.locator("header h1").textContent()).includes("일정관리기"));
 const b404 = reqs.filter((u) => u.startsWith("http://localhost") && !u.includes("gsi"));
 const statuses = await Promise.all(b404.map(async (u) => (await p.request.get(u)).status()));
@@ -126,7 +126,7 @@ await ctx.setOffline(true);
 await p.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
 await p.waitForTimeout(600);
 ok("오프라인에서 화면이 그려진다",
-   (await p.locator("nav.tabs a").count()) === 4);
+   (await p.locator("nav.tabs a").count()) === 6);
 await ctx.setOffline(false);
 
 console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌려 본다");
@@ -243,7 +243,7 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   ok("시트를 못 읽어도 캐시로 목록이 뜬다",
      (await p4.locator("#clist button.row").count()) === 3);
   ok("시트를 못 읽어도 빈 화면이 되지 않는다",
-     (await p4.locator("nav.tabs a").count()) === 4);
+     (await p4.locator("nav.tabs a").count()) === 6);
   await ctx3.close();
 }
 
@@ -567,6 +567,178 @@ console.log("\n[13] PDF — 한 장씩 그림으로 그려 아래로 이어 붙�
        (await p8.locator(".vscroll").evaluate((e) => getComputedStyle(e).touchAction)) === "auto");
     await ctx7.close();
   }
+}
+
+console.log("\n[14] 일정 / 할일");
+{
+  // ⚠️ 한국 시간으로 돌린다. 이 컨테이너는 UTC 라 그냥 두면 14:30(+09:00) 이
+  //    05:30 으로 보이고, 종일 일정이 전날로 밀리는지도 확인할 수 없다.
+  const ctx8 = await browser.newContext({
+    viewport: { width: 412, height: 900 },
+    timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await ctx8.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const p9 = await page(ctx8);
+  const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n);
+    return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
+  const patched = [];
+  await ctx8.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx8.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+  await ctx8.route("**/www.googleapis.com/calendar/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("calendarList")) return r.fulfill({ json: { items: [
+      { id: "primary", summary: "내 캘린더", primary: true },
+      { id: "bad@g", summary: "탈난 캘린더", selected: true }] } });
+    if (u.includes("calendars/bad%40g") || u.includes("calendars/bad@g")) {
+      return r.fulfill({ status: 500, json: { error: { message: "boom" } } });
+    }
+    return r.fulfill({ json: { items: [
+      // 종일 일정 — UTC 로 읽으면 한국에서 전날로 밀린다
+      { id: "e1", start: { date: d(0) }, summary: "오늘 종일건" },
+      { id: "e2", start: { dateTime: d(1) + "T14:30:00+09:00" }, summary: "내일 출고" },
+      { id: "e3", start: { dateTime: d(5) + "T09:00:00+09:00" }, summary: "다음주 계약" },
+    ] } });
+  });
+  await ctx8.route("**/tasks.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (r.request().method() === "PATCH") { patched.push(u); return r.fulfill({ json: {} }); }
+    if (u.includes("users/@me/lists")) return r.fulfill({ json: { items: [
+      { id: "L1", title: "업무" }] } });
+    return r.fulfill({ json: { items: [
+      { id: "t1", title: "심사서류 받기", notes: "김상현", due: d(1) + "T00:00:00.000Z" },
+      { id: "t2", title: "기한없는 할일" },
+    ] } });
+  });
+  await ctx8.route("**/www.googleapis.com/drive/v3/**", (r) => r.fulfill({ json: { files: [] } }));
+
+  await p9.goto(s.url + "#/agenda", { waitUntil: "networkidle" });
+  await p9.waitForSelector("#agevents .evrow", { timeout: 10000 });
+  const evs = await p9.locator("#agevents .evrow .t").allTextContents();
+  ok("일정이 날짜순으로 나온다",
+     JSON.stringify(evs) === '["오늘 종일건","내일 출고","다음주 계약"]', evs.join(", "));
+  ok("종일 일정은 '종일' 로 나온다",
+     (await p9.locator("#agevents .evtime").first().textContent()) === "종일");
+  ok("시각이 있는 일정은 시각이 나온다",
+     (await p9.locator("#agevents .evtime").nth(1).textContent()) === "14:30");
+
+  // ⚠️ 종일 일정을 new Date("2026-08-14") 로 읽으면 UTC 자정이라 한국에서 전날이 된다
+  const seps = await p9.locator("#agevents .daysep").allTextContents();
+  ok("종일 일정이 전날로 밀리지 않는다", seps[0].startsWith("오늘"), seps.join(" | "));
+  ok("오늘·내일을 말로 알려 준다",
+     seps[0].startsWith("오늘") && seps[1].startsWith("내일"), seps.join(" | "));
+
+  // 캘린더 하나가 탈났으면 조용히 넘어가면 안 된다
+  ok("못 불러온 캘린더가 있으면 알려 준다",
+     (await p9.locator("#agwarn .notice").textContent()).includes("탈난 캘린더"));
+
+  const tks = await p9.locator("#agtasks .taskbody .t").allTextContents();
+  ok("할일이 나온다 (기한 있는 것 먼저)",
+     JSON.stringify(tks) === '["심사서류 받기","기한없는 할일"]', tks.join(", "));
+  ok("기한을 '내일' 로 알려 준다",
+     (await p9.locator("#agtasks .tag").first().textContent()).startsWith("내일"));
+
+  // 체크 — 밖에서 엄지로 누르는 게 이 화면의 쓸모다
+  const h = await p9.locator(".tickbtn").first().evaluate((e) => e.getBoundingClientRect().height);
+  ok("체크 단추가 엄지로 누를 만큼 크다", h >= 40, Math.round(h) + "px");
+  await p9.locator(".tickbtn").first().click();
+  await p9.waitForTimeout(500);
+  ok("체크하면 목록에서 바로 빠진다",
+     (await p9.locator("#agtasks .taskbody .t").allTextContents()).length === 1);
+  ok("구글에 '했다' 고 보낸다", patched.length === 1, patched.length + "건");
+
+  // 껐다 켜도 캐시로 뜬다
+  await ctx8.route("**/www.googleapis.com/calendar/v3/**", (r) => r.abort());
+  await ctx8.route("**/tasks.googleapis.com/**", (r) => r.abort());
+  const p10 = await page(ctx8);
+  await p10.goto(s.url + "#/agenda");
+  await p10.waitForSelector("#agevents .evrow", { timeout: 10000 });
+  ok("구글이 안 되어도 캐시로 일정이 뜬다",
+     (await p10.locator("#agevents .evrow").count()) === 3);
+  await ctx8.close();
+}
+
+console.log("\n[15] 수당계산기");
+{
+  const ctx9 = await browser.newContext({
+    viewport: { width: 412, height: 900 },
+    timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await ctx9.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const p11 = await page(ctx9);
+  await ctx9.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx9.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctx9.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctx9.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("수당율")) return r.fulfill({ json: { values: [
+      ["브랜드", "차종", "수당율(%)", "화물차"],
+      ["현대", "쏘나타 / HEV", "6.0", "FALSE"],
+      ["현대", "GV80", "4.1", "FALSE"],
+      ["현대", "포터", "7.0", "TRUE"],
+      ["기아", "카니발", "6.0", "FALSE"],
+    ] } });
+    return r.fulfill({ json: { values: [] } });
+  });
+
+  await p11.goto(s.url + "#/calc", { waitUntil: "networkidle" });
+  await p11.waitForSelector("#ccars button.carrow", { timeout: 10000 });
+  ok("현대 차종이 나온다", (await p11.locator("#ccars .t").count()) === 3);
+
+  await p11.click('#cbrand button[data-b="kia"]');
+  await p11.waitForTimeout(200);
+  ok("기아로 바꾸면 기아 차종만 나온다",
+     JSON.stringify(await p11.locator("#ccars .t").allTextContents()) === '["카니발"]');
+  await p11.click('#cbrand button[data-b="hyundai"]');
+  await p11.waitForTimeout(200);
+
+  await p11.fill("#ccar", "ㅅㄴㅌ");
+  await p11.waitForTimeout(200);
+  ok("차종을 초성으로 찾는다",
+     JSON.stringify(await p11.locator("#ccars .t").allTextContents()) === '["쏘나타 / HEV"]');
+  await p11.fill("#ccar", "");
+  await p11.waitForTimeout(200);
+
+  // 차량가는 치는 동안 1,000 단위가 붙어야 한다
+  await p11.locator("#cprice").pressSequentially("57035000", { delay: 8 });
+  ok("차량가에 1,000 단위가 붙는다",
+     (await p11.locator("#cprice").inputValue()) === "57,035,000",
+     await p11.locator("#cprice").inputValue());
+
+  await p11.locator('#ccars button.carrow', { hasText: "GV80" }).click();
+  await p11.waitForTimeout(150);
+  // 파이썬 정답: calc(57035000, 4.1, False, 70, False) = 1,367,859
+  ok("PC 앱과 같은 금액이 나온다",
+     (await p11.locator("#cres").textContent()) === "₩ 1,367,859",
+     await p11.locator("#cres").textContent());
+  ok("적용한 수당율을 보여 준다",
+     (await p11.locator("#crate").textContent()).includes("4.1%"));
+
+  await p11.check("#cfree");
+  await p11.waitForTimeout(150);
+  // calc(57035000, 4.1, False, 70, True) = 1,298,641
+  ok("면세를 켜면 금액이 바뀐다",
+     (await p11.locator("#cres").textContent()) === "₩ 1,298,641",
+     await p11.locator("#cres").textContent());
+  await p11.uncheck("#cfree");
+
+  await p11.fill("#cpay", "100");
+  await p11.waitForTimeout(150);
+  const want100 = (57035000 / 1.1572) * 0.041 * 1.0 * 0.967;
+  ok("지급율을 바꾸면 반영된다",
+     (await p11.locator("#cres").textContent())
+     === "₩ " + Math.trunc(want100).toLocaleString("ko-KR"),
+     await p11.locator("#cres").textContent());
+
+  await p11.click("#creset");
+  await p11.waitForTimeout(200);
+  ok("초기화하면 0 으로 돌아온다", (await p11.locator("#cres").textContent()) === "₩ 0");
+  ok("초기화하면 지급율이 70 으로 돌아온다",
+     (await p11.locator("#cpay").inputValue()) === "70");
+  await ctx9.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

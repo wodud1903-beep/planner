@@ -20,6 +20,14 @@ export const SCOPES = [
   "email",
   "https://www.googleapis.com/auth/spreadsheets.readonly",
   "https://www.googleapis.com/auth/drive.readonly",
+  // 일정은 보기만 한다 — 폰에서 일정을 고칠 일은 PC 에서 하면 되고,
+  // 쓰기 권한을 들고 다니면 폰을 잃었을 때 잃을 것이 늘어난다.
+  "https://www.googleapis.com/auth/calendar.readonly",
+  // 할일은 **체크**까지 한다. 밖에서 '했다' 를 누르는 게 이 화면의 쓸모다.
+  "https://www.googleapis.com/auth/tasks",
 ].join(" ");
+
+export const CALENDAR_API = "https://www.googleapis.com/calendar/v3";
+export const TASKS_API = "https://tasks.googleapis.com/tasks/v1";
 
 export const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";

@@ -30,7 +30,7 @@ for name in ("planner.google_client", "planner.net"):
         mod.http = lambda: None
         sys.modules[name] = mod
 
-from planner import hangul, sheets  # noqa: E402
+from planner import commission, hangul, sheets  # noqa: E402
 
 HANGUL_CASES = [
     ("김상현", ["ㄱㅅㅎ", "김상", "김", "ㄱㅅㅎㅇ", "상현", "", "ㅅㅎ"]),
@@ -86,6 +86,77 @@ PARSE_CASES = [
 ]
 
 
+# 수당 계산 — 돈이 나오므로 1원도 어긋나면 안 된다.
+# 반올림 경계, 면세, 화물차, 지급율 변형, 잘못된 입력을 두루 넣었다.
+CALC_CASES = [
+    (57035000, 4.1, False, 70.0, False),
+    (57035000, 4.1, False, 70.0, True),      # 면세
+    (30000000, 7.0, True, 70.0, False),      # 화물차
+    (30000000, 7.0, True, 70.0, True),
+    (52000000, 3.3, False, 100.0, False),    # 지급율 100
+    (52000000, 3.3, False, 0.0, False),      # 지급율 0
+    (1, 7.5, False, 70.0, False),            # 1원 — 버림이 드러난다
+    (999, 7.5, False, 70.0, False),
+    (1000, 5.0, False, 70.0, False),
+    (0, 5.0, False, 70.0, False),            # 0원
+    (-1000, 5.0, False, 70.0, False),        # 음수
+    (12345678, 0.0, False, 70.0, False),     # 수당율 0
+    (12345678, 7.5, False, 70.0, False),
+    (12345678, 7.5, True, 70.0, True),
+    (100000000, 2.3, False, 70.0, False),
+    (45000000, 5.5, True, 85.5, False),      # 지급율에 소수점
+    (33333333, 3.7, True, 70.0, True),
+]
+
+RATE_ROWS = [
+    [["브랜드", "차종", "수당율(%)", "화물차"],
+     ["현대", "쏘나타 / HEV", "6.0", "FALSE"],
+     ["현대", "포터", "7", "TRUE"],
+     ["기아", "카니발", "6.0", ""],
+     ["기아", "봉고1톤", "7.0", "예"],
+     ["기아", "타스만", "5.5", "Y"],
+     ["현대", "스타리아", "6.0", "O"],
+     ["현대", "넥쏘 수소", "2.3", "1"]],
+    # 퍼센트 기호·공백·빈 이름·모자란 칸·모르는 브랜드
+    [["현대", " GV80 ", " 4.1% ", " true "],
+     ["현대", "", "5.0", "FALSE"],
+     ["기아", "K5"],
+     ["르노", "XM3", "5.0", "FALSE"],
+     ["hyundai", "아반떼 / HEV", "7.0", "FALSE"],
+     ["기아", "EV6", "abc", "FALSE"]],
+    [],                                      # 빈 탭 → None
+    [["브랜드", "차종", "수당율(%)", "화물차"]],   # 머리글만 → None
+]
+
+
+def _parse_rates(rows):
+    """sheets.read_rates 의 '푸는 부분' 만 그대로 옮긴 것.
+    그쪽은 통신에 묶여 있어 직접 못 부른다 — 규칙이 갈라지지 않게 여기서 한 번만 적는다."""
+    out = {"hyundai": [], "kia": []}
+    for row in rows:
+        if not row or len(row) < 3:
+            continue
+        brand = str(row[0]).strip()
+        if brand in ("브랜드", ""):
+            continue
+        key = sheets._KO_BRAND.get(brand, brand.strip().lower())
+        if key not in out:
+            continue
+        name = str(row[1]).strip()
+        if not name:
+            continue
+        try:
+            rate = float(str(row[2]).replace("%", "").strip())
+        except Exception:
+            continue
+        truck = str(row[3]).strip().upper() in ("TRUE", "Y", "예", "1", "O") \
+            if len(row) > 3 else False
+        out[key].append([name, rate, truck])
+    if not (out["hyundai"] or out["kia"]):
+        return None
+    return out
+
+
 def main() -> int:
     out = {
         "_설명": "파이썬이 만든 정답표. JS 포팅이 이걸 맞혀야 한다. "
@@ -98,6 +169,8 @@ def main() -> int:
         "parse_date": [],
         "contract_months": [],
         "parse_rows": [],
+        "commission_calc": [],
+        "parse_rates": [],
     }
     for item, queries in HANGUL_CASES:
         out["hangul_chosung"].append([item, hangul.chosung(item)])
@@ -126,6 +199,15 @@ def main() -> int:
         except Exception as e:
             ans = {"error": type(e).__name__}
         out["parse_rows"].append([name, left, right, ans])
+
+    for price, rate, truck, pay, free in CALC_CASES:
+        out["commission_calc"].append(
+            [price, rate, truck, pay, free,
+             commission.calc(price, rate, truck, pay, free)])
+
+    for rows in RATE_ROWS:
+        got = sheets.read_rates.__wrapped__ if False else None   # (통신 함수라 직접 안 쓴다)
+        out["parse_rates"].append([rows, _parse_rates(rows)])
 
     dest = ROOT / "web" / "verify" / "vectors.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
