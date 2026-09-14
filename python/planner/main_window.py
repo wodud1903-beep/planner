@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, backup_dialog, config, contacts, customer_docs,
+    alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
     fax_watch, fax_window, followup,
     google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
@@ -748,6 +748,12 @@ class MainWindow(QMainWindow):
         self.lbl_account = QLabel("")
         tl.addWidget(self.lbl_account)
         tl.addStretch()
+        # 버전을 눌러 변경 이력을 연다 — 업데이트하고 '뭐가 바뀌었나' 를 바로 보게
+        self.btn_ver = QPushButton(f"v{config.APP_VERSION}")
+        self.btn_ver.setToolTip("이 버전과 지난 버전에서 무엇이 바뀌었는지 봅니다")
+        self.btn_ver.setFlat(True)
+        self.btn_ver.clicked.connect(self.open_changelog)
+        tl.addWidget(self.btn_ver)
         self.chk_startup = QCheckBox("PC 시작 시 실행")
         self.chk_startup.toggled.connect(lambda on: _set_startup(on))
         tl.addWidget(self.chk_startup)
@@ -1959,6 +1965,7 @@ class MainWindow(QMainWindow):
             ("받은 팩스", self.open_fax),
             ("지금 백업", lambda: self._backup(manual=True)),
             ("업데이트 확인", lambda: self.check_update(manual=True)),
+            ("변경 이력", self.open_changelog),
             (None, None),
             ("종료", self.quit_app),
         ]
@@ -3298,6 +3305,10 @@ class MainWindow(QMainWindow):
     def open_fax(self, pick: str = ""):
         """받은 팩스 창을 연다."""
         fax_window.show_for(self.settings.fax_dir, pick or "", self)
+
+    def open_changelog(self):
+        """변경 이력 창을 연다."""
+        changelog.show_for(self)
 
     # ------------------------------------------------------------ 트레이/종료
     def _toast(self, title: str, text: str):

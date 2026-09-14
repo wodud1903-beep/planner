@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - 'python/**'
+      - 'CHANGELOG.md'          # exe 안에 들어가므로 바뀌면 다시 빌드한다
       - '.github/workflows/build-exe.yml'
     tags:
       - 'v*'
@@ -76,10 +77,20 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
+      # 릴리스 본문을 CHANGELOG.md 에서 뽑는다.
+      # 예전엔 본문을 안 넣어서 릴리스가 비어 있었고, 앱의 [업데이트 확인] 도
+      # 보여 줄 내용이 없었다. 절이 없으면 여기서 실패하므로, 변경 이력에 안 적힌
+      # 버전은 배포되지 않는다.
+      - name: 릴리스 본문 준비 (CHANGELOG.md 에서)
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        shell: bash
+        run: python tools/extract_release_notes.py "${{ inputs.release_tag || github.ref_name }}" > RELEASE_NOTES.md
+
       - name: 릴리스 배포 (태그 push / release / 수동입력 태그)
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag || github.ref_name }}
           name: ${{ inputs.release_tag || github.ref_name }}
+          body_path: RELEASE_NOTES.md
           files: python/dist/일정관리기.exe

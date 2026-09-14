@@ -12,7 +12,9 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('planner.ico', '.')],
+    # CHANGELOG.md 는 저장소 맨 위에 있다. 이 spec 은 python/ 에서 돌므로 ../ 다.
+    # 앱의 [변경 이력] 창이 exe 안에서 이걸 읽는다(planner/changelog.py).
+    datas=[('planner.ico', '.'), ('../CHANGELOG.md', '.')],
     hiddenimports=_hidden,
     hookspath=[],
     hooksconfig={},
