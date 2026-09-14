@@ -246,6 +246,131 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   await ctx3.close();
 }
 
+console.log("\n[10] 탭 이름이 틀렸을 때 — 400 을 사람이 고칠 수 있게 알려 주나");
+{
+  const ctx4 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await ctx4.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const p5 = await page(ctx4);
+  await ctx4.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx4.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    // 구글이 실제로 돌려주는 모양 그대로
+    if (u.includes("batchGet")) return r.fulfill({ status: 400, json: { error: {
+      code: 400, status: "INVALID_ARGUMENT",
+      message: "Unable to parse range: '미출고차량'!A1:Q" } } });
+    if (u.includes("fields=properties.title")) return r.fulfill({ json: {
+      properties: { title: "고객관리리스트" },
+      sheets: [{ properties: { title: "출고완료차량" } },
+               { properties: { title: "미출고차량(신)" } }] } });
+    return r.fulfill({ json: { values: [] } });
+  });
+  await p5.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await p5.waitForTimeout(1200);
+  const emptyTxt = await p5.locator("#clist .empty").textContent();
+  ok("400 을 그냥 'HTTP 400' 으로 흘리지 않는다", !/^시트를 읽지 못했습니다 \(HTTP 400\)$/.test(emptyTxt.trim()));
+  ok("탭 이름 문제라고 짚어 준다", emptyTxt.includes("탭"), emptyTxt.slice(0, 60));
+
+  // 설정 → 진짜 탭 목록을 받아 눌러 고른다
+  await p5.click("#cconf");
+  await p5.waitForSelector("#sload");
+  await p5.click("#sload");
+  await p5.waitForTimeout(800);
+  const tabs = await p5.locator("#stabs button").allTextContents();
+  ok("시트에 실제로 있는 탭 목록을 보여 준다",
+     JSON.stringify(tabs) === JSON.stringify(["출고완료차량", "미출고차량(신)"]), tabs.join("|"));
+  ok("스프레드시트 이름을 알려 준다",
+     (await p5.locator("#smsg").textContent()).includes("고객관리리스트"));
+  await ctx4.close();
+}
+
+console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 돌려 본다");
+{
+  const ctx5 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await ctx5.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const F = "application/vnd.google-apps.folder";
+  const TOP = [
+    { id: "f1", name: "김상현", mimeType: F, modifiedTime: "2026-08-01T00:00:00Z" },
+    { id: "f2", name: "박영희", mimeType: F, modifiedTime: "2026-08-02T00:00:00Z" },
+    { id: "f3", name: "쏘나타 견적", mimeType: F, modifiedTime: "2026-08-03T00:00:00Z" },
+  ];
+  const INSIDE = [
+    { id: "d1", name: "계약서.pdf", mimeType: "application/pdf", size: "204800" },
+    { id: "d2", name: "신분증.jpg", mimeType: "image/jpeg", size: "51200" },
+    { id: "d3", name: "팩스.tif", mimeType: "image/tiff", size: "102400" },
+  ];
+  // 1x1 PNG
+  const PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64");
+  const p6 = await page(ctx5);
+  const dl = [];
+  await ctx5.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx5.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("alt=media")) { dl.push(u); return r.fulfill({ body: PNG, contentType: "image/png" }); }
+    if (/files\/1AbCdEfGhIjKlMnOpQrStUvWxYz01234\?/.test(u)) return r.fulfill({ json: { id: "1AbCdEfGhIjKlMnOpQrStUvWxYz01234", mimeType: F } });
+    if (u.includes("'1AbCdEfGhIjKlMnOpQrStUvWxYz01234' in parents")) return r.fulfill({ json: { files: TOP } });
+    if (u.includes("'f1' in parents")) return r.fulfill({ json: { files: INSIDE } });
+    if (u.includes("in parents")) return r.fulfill({ json: { files: [] } });
+    if (u.includes("name=")) return r.fulfill({ json: { files: [{ id: "1AbCdEfGhIjKlMnOpQrStUvWxYz01234", name: "고객정보" }] } });
+    return r.fulfill({ json: { files: [] } });
+  });
+  await ctx5.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+
+  await p6.goto(s.url + "#/docs", { waitUntil: "networkidle" });
+  await p6.waitForSelector("#dsave", { timeout: 8000 });
+  ok("폴더를 안 정했으면 정하는 화면부터 나온다", true);
+
+  // 주소를 붙여넣어도 알아들어야 한다 — 폰에서 긴 id 를 손으로 치는 건 무리다
+  await p6.fill("#dref", "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz01234?usp=sharing");
+  await p6.click("#dsave");
+  await p6.waitForSelector("#dlist button.row", { timeout: 8000 });
+  const names = await p6.locator("#dlist .t").allTextContents();
+  ok("드라이브 링크를 붙여넣어도 폴더를 찾는다", names.length === 3, names.join(", "));
+
+  await p6.fill("#dq", "ㅂㅇㅎ");
+  await p6.waitForTimeout(300);
+  ok("고객 폴더를 초성으로 찾는다",
+     (await p6.locator("#dlist .t").allTextContents()).join("").includes("박영희"));
+  await p6.fill("#dq", "");
+  await p6.waitForTimeout(300);
+
+  await p6.locator("#dlist button.row").first().click();
+  await p6.waitForSelector("#dlist button.row", { timeout: 8000 });
+  await p6.waitForTimeout(400);
+  const files = await p6.locator("#dlist .t").allTextContents();
+  ok("폴더에 들어가면 파일이 보인다", files.length === 3, files.join(", "));
+
+  // 그림 보기
+  await p6.locator('#dlist button.row', { hasText: "신분증" }).click();
+  await p6.waitForSelector(".vimg", { timeout: 8000 });
+  ok("그림을 앱 안에서 연다", (await p6.locator(".vimg").getAttribute("src")).startsWith("blob:"));
+  ok("파일 내용을 실제로 받아 온다", dl.length === 1, dl.length + "건");
+  ok("두 손가락 확대를 막지 않는다",
+     (await p6.locator(".vimg").evaluate((e) => getComputedStyle(e).touchAction)) === "pinch-zoom");
+
+  // TIFF — 브라우저가 못 그린다. 팩스가 이 형식으로 오므로 안내가 정확해야 한다.
+  await p6.locator('#dlist button.row', { hasText: "팩스" }).click();
+  await p6.waitForTimeout(400);
+  const tifTxt = await p6.locator("#dview").innerText();
+  ok("TIFF 는 못 그린다고 정확히 말하고 드라이브로 넘긴다",
+     tifTxt.includes("TIF") && tifTxt.includes("드라이브"), tifTxt.slice(0, 70));
+  ok("TIFF 는 내려받지 않는다", dl.length === 1, dl.length + "건");
+
+  // 최근 본 고객
+  await p6.goto(s.url + "#/docs", { waitUntil: "networkidle" });
+  await p6.waitForSelector("#drecent button", { timeout: 8000 });
+  ok("최근 본 고객이 위에 남는다",
+     (await p6.locator("#drecent button").allTextContents()).includes("김상현"));
+  await ctx5.close();
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');

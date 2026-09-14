@@ -5,6 +5,23 @@ import { token, setOffline, STATE } from "./auth.js";
 export class NeedSignIn extends Error {}
 export class WrongAccount extends Error {}
 export class Offline extends Error {}
+/** 시트/탭 이름이 틀렸을 때. 화면이 '탭 고르기' 를 띄울 수 있게 따로 둔다. */
+export class BadRange extends Error {}
+
+/** 구글이 돌려준 진짜 메시지를 뽑는다.
+ *
+ * ⚠️ 이걸 버리면 안 된다. 'HTTP 400' 만 보여 주면 시트 주소가 틀린 건지,
+ *    탭 이름이 틀린 건지, 범위가 격자 밖인지 알 길이 없다 —
+ *    실제로 그것 때문에 한 번 막혔다. */
+async function detail(r) {
+  try {
+    const j = await r.clone().json();
+    const e = j && j.error;
+    if (!e) return "";
+    if (typeof e === "string") return e;
+    return e.message || "";
+  } catch (x) { return ""; }
+}
 
 const rng = (tab, a1) => encodeURIComponent(`'${tab}'!${a1}`);
 
@@ -28,7 +45,17 @@ async function call(url) {
   }
   // 403 은 토큰 문제가 아니라 '이 계정으로는 못 연다' 는 뜻이다. 다시 로그인해도 소용없다.
   if (r.status === 403) throw new WrongAccount();
-  if (!r.ok) throw new Error(`시트를 읽지 못했습니다 (HTTP ${r.status})`);
+  if (!r.ok) {
+    const msg = await detail(r);
+    // 400 + 'Unable to parse range' 는 거의 언제나 **탭 이름이 다른 것**이다.
+    if (r.status === 400 && /unable to parse range|파싱|parse range/i.test(msg)) {
+      throw new BadRange(msg);
+    }
+    if (r.status === 404) throw new BadRange(msg || "그 스프레드시트를 찾지 못했습니다.");
+    throw new Error(msg
+      ? `시트를 읽지 못했습니다 (HTTP ${r.status})\n${msg}`
+      : `시트를 읽지 못했습니다 (HTTP ${r.status})`);
+  }
   return r.json();
 }
 
@@ -89,4 +116,14 @@ export async function readMent(sheetId, tab, row) {
     if (e instanceof NeedSignIn || e instanceof WrongAccount) throw e;
     return "";
   }
+}
+
+/** 이 스프레드시트에 실제로 있는 탭 이름들. 탭 이름이 틀렸을 때 골라 쓰게 한다. */
+export async function tabNames(sheetId) {
+  const j = await call(`${SHEETS_API}/${sheetId}`
+    + `?fields=${encodeURIComponent("properties.title,sheets.properties.title")}`);
+  return {
+    title: (j.properties && j.properties.title) || "",
+    tabs: (j.sheets || []).map((x) => x.properties && x.properties.title).filter(Boolean),
+  };
 }

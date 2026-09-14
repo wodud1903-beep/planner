@@ -2,13 +2,13 @@
 //
 // 순서가 중요하다: **캐시로 먼저 그리고**, 그 다음에 조용히 새로 받는다.
 // 로그인이나 네트워크를 기다리며 빈 화면을 보여 주지 않는다.
-import { shell, paintState, markTab, setBody } from "./ui/chrome.js";
-import { html } from "./ui/dom.js";
+import { shell, paintState } from "./ui/chrome.js";
 import * as router from "./router.js";
 import * as auth from "./auth.js";
 import * as store from "./store.js";
 import * as kbui from "./ui/kb.js";
 import * as cust from "./ui/customers.js";
+import * as docs from "./ui/docs.js";
 import * as about from "./ui/about.js";
 
 const BUILD_CHECK_MS = 5 * 60 * 1000;
@@ -26,19 +26,15 @@ paintState();
 router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
 router.on(/^\/kb$/, () => kbui.screen(null));
 router.on(/^\/about$/, () => about.screen());
+router.on(/^\/customers\/settings$/, () => cust.settingsScreen());
 router.on(/^\/customers\/(\d+)$/, (m) => cust.screen(m));
 router.on(/^\/customers$/, () => cust.screen(null));
-router.on(/^\/docs$/, () => notYet("고객정보 서류",
-  "아직 만드는 중입니다. 다음 판에 들어갑니다."));
+router.on(/^\/docs\/([^/]+)$/, (m) => docs.screen(m));
+router.on(/^\/docs$/, () => docs.screen(null));
 
-function notYet(title, why) {
-  markTab(location.hash.slice(1));
-  setBody(html`<div class="pane"><div class="empty">
-    <p style="font-size:17px;font-weight:600;color:var(--text)">${title}</p>
-    <p>${why}</p></div></div>`);
-}
 
 (async function start() {
+  await cust.loadSettings();          // 시트 주소·탭은 라우팅 전에 읽어 둔다
   const ui = await store.ui();
   if (!location.hash && ui.route) location.hash = ui.route;
   router.start();
@@ -50,6 +46,7 @@ function notYet(title, why) {
     paintState();
     kbui.load();
     cust.load();
+    docs.load();
   }, 0);
 
   registerSW();

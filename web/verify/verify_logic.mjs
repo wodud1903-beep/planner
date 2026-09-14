@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import * as H from "../js/hangul.js";
 import * as F from "../js/fmt.js";
 import * as C from "../js/customers.js";
+import * as D from "../js/drive.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -64,6 +65,28 @@ for (const [name, left, right, want] of V.parse_rows) {
   eq(`parseRows: ${name}`, got, want);
 }
 console.log(`  ${V.parse_rows.length}개 대조`);
+
+console.log("\n[7] 드라이브 폴더 지정 (파이썬에 짝이 없는 순수 계산이라 직접 적는다)");
+// 폰에서 44자 id 를 손으로 치는 건 무리라 '링크 복사' 를 붙여넣게 했다.
+// 붙여넣기 모양이 여러 가지라 여기서 못 박아 둔다.
+for (const [input, kind, value] of [
+  ["https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz01234", "id", "1AbCdEfGhIjKlMnOpQrStUvWxYz01234"],
+  ["https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz01234?usp=sharing", "id", "1AbCdEfGhIjKlMnOpQrStUvWxYz01234"],
+  ["https://drive.google.com/drive/u/0/folders/1AbCdEf_-Xyz", "id", "1AbCdEf_-Xyz"],
+  ["https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUvWxYz01234", "id", "1AbCdEfGhIjKlMnOpQrStUvWxYz01234"],
+  ["1AbCdEfGhIjKlMnOpQrStUvWxYz01234", "id", "1AbCdEfGhIjKlMnOpQrStUvWxYz01234"],
+  ["고객정보", "name", "고객정보"],
+  ["고객 서류 2026", "name", "고객 서류 2026"],
+  ["  고객정보  ", "name", "고객정보"],
+  // 파일 링크를 붙여넣으면 폴더가 아니다. 이름으로 오해하면 엉뚱한 걸 찾는다.
+  ["https://drive.google.com/file/d/1AbCdEf/view", "bad", "https://drive.google.com/file/d/1AbCdEf/view"],
+  ["https://example.com", "bad", "https://example.com"],
+  ["", "none", ""],
+  ["   ", "none", ""],
+]) {
+  eq(`parseFolderRef(${JSON.stringify(input)})`, D.parseFolderRef(input), { kind, value });
+}
+console.log("  12개 대조");
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);
