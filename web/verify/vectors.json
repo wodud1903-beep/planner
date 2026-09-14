@@ -1635,5 +1635,413 @@
    ],
    null
   ]
- ]
+ ],
+ "doc_url": [
+  [
+   "=IMAGE(\"https://drive.google.com/uc?export=view&id=1AbCdEf_-Xyz\", 1)",
+   "https://drive.google.com/uc?export=view&id=1AbCdEf_-Xyz"
+  ],
+  [
+   "=image(\"https://drive.google.com/uc?export=view&id=1AbCdEf\", 4)",
+   "https://drive.google.com/uc?export=view&id=1AbCdEf"
+  ],
+  [
+   "= IMAGE ( \"https://example.com/a.png\" , 1 )",
+   "https://example.com/a.png"
+  ],
+  [
+   "https://drive.google.com/uc?export=view&id=1AbCdEf",
+   "https://drive.google.com/uc?export=view&id=1AbCdEf"
+  ],
+  [
+   "https://example.com/a.png  설명",
+   "https://example.com/a.png"
+  ],
+  [
+   "=IMAGE(\"\")",
+   ""
+  ],
+  [
+   "",
+   ""
+  ],
+  [
+   "   ",
+   ""
+  ],
+  [
+   "견적서 있음",
+   ""
+  ],
+  [
+   "=HYPERLINK(\"https://example.com\",\"보기\")",
+   ""
+  ]
+ ],
+ "default_rates": {
+  "hyundai": [
+   [
+    "아반떼 / HEV",
+    7.0,
+    false
+   ],
+   [
+    "ST1",
+    3.7,
+    true
+   ],
+   [
+    "아이오닉 5 / 6",
+    4.0,
+    false
+   ],
+   [
+    "쏘나타 / HEV",
+    6.0,
+    false
+   ],
+   [
+    "그랜저 가솔린",
+    5.0,
+    false
+   ],
+   [
+    "그랜저 HEV",
+    4.8,
+    false
+   ],
+   [
+    "신형 G90 3.5T",
+    3.5,
+    false
+   ],
+   [
+    "신형 G90 3.5T LWB",
+    3.2,
+    false
+   ],
+   [
+    "G80 ev",
+    3.0,
+    false
+   ],
+   [
+    "G80",
+    4.3,
+    false
+   ],
+   [
+    "G70 2.0 / 2.2",
+    4.6,
+    false
+   ],
+   [
+    "GV70",
+    4.3,
+    false
+   ],
+   [
+    "GV80",
+    4.1,
+    false
+   ],
+   [
+    "아이오닉 9",
+    3.3,
+    false
+   ],
+   [
+    "투싼",
+    5.5,
+    false
+   ],
+   [
+    "베뉴",
+    6.8,
+    false
+   ],
+   [
+    "넥쏘 수소",
+    2.3,
+    false
+   ],
+   [
+    "코나 / 코나 HEV",
+    5.8,
+    false
+   ],
+   [
+    "코나 EV",
+    4.2,
+    false
+   ],
+   [
+    "싼타페",
+    5.3,
+    false
+   ],
+   [
+    "싼타페 HEV",
+    5.1,
+    false
+   ],
+   [
+    "팰리세이드",
+    4.8,
+    false
+   ],
+   [
+    "팰리세이드 HEV",
+    4.6,
+    false
+   ],
+   [
+    "GV70 ev",
+    3.0,
+    false
+   ],
+   [
+    "GV60 ev",
+    3.0,
+    false
+   ],
+   [
+    "포터",
+    7.0,
+    true
+   ],
+   [
+    "포터 EV",
+    3.5,
+    false
+   ],
+   [
+    "포터 캠핑카",
+    3.3,
+    true
+   ],
+   [
+    "스타리아",
+    6.0,
+    true
+   ],
+   [
+    "스타리아 라운지",
+    5.5,
+    false
+   ],
+   [
+    "스타리아 카고 EV",
+    4.0,
+    true
+   ],
+   [
+    "스타리아 투어러 EV",
+    3.8,
+    true
+   ],
+   [
+    "스타리아 라운지 EV",
+    4.0,
+    false
+   ],
+   [
+    "스타리아 리무진 EV",
+    3.3,
+    false
+   ],
+   [
+    "스타리아 HEV",
+    5.3,
+    true
+   ],
+   [
+    "쏠라티",
+    4.0,
+    true
+   ],
+   [
+    "파비스",
+    3.6,
+    true
+   ],
+   [
+    "카운티",
+    5.0,
+    true
+   ],
+   [
+    "카운티 EV",
+    1.8,
+    true
+   ],
+   [
+    "에어로타운",
+    5.0,
+    true
+   ],
+   [
+    "유니버스",
+    3.5,
+    true
+   ],
+   [
+    "마이티,메가트럭",
+    5.0,
+    true
+   ]
+  ],
+  "kia": [
+   [
+    "모닝",
+    7.5,
+    false
+   ],
+   [
+    "레이",
+    7.5,
+    false
+   ],
+   [
+    "레이EV(라이트)",
+    4.8,
+    false
+   ],
+   [
+    "레이EV(에어)",
+    5.0,
+    false
+   ],
+   [
+    "K3",
+    7.0,
+    false
+   ],
+   [
+    "K5",
+    6.0,
+    false
+   ],
+   [
+    "K5 HEV",
+    6.0,
+    false
+   ],
+   [
+    "K8",
+    5.0,
+    false
+   ],
+   [
+    "K9",
+    4.3,
+    false
+   ],
+   [
+    "K9 (퀀텀)",
+    4.0,
+    false
+   ],
+   [
+    "니로",
+    6.0,
+    false
+   ],
+   [
+    "니로 EV",
+    5.0,
+    false
+   ],
+   [
+    "셀토스",
+    5.5,
+    false
+   ],
+   [
+    "EV6",
+    3.3,
+    false
+   ],
+   [
+    "EV3",
+    4.2,
+    false
+   ],
+   [
+    "카니발",
+    6.0,
+    false
+   ],
+   [
+    "스포티지",
+    5.5,
+    false
+   ],
+   [
+    "쏘렌토",
+    5.5,
+    false
+   ],
+   [
+    "모하비",
+    5.0,
+    false
+   ],
+   [
+    "봉고1톤",
+    7.0,
+    true
+   ],
+   [
+    "봉고 1.2톤",
+    6.0,
+    true
+   ],
+   [
+    "봉고 EV",
+    3.8,
+    true
+   ],
+   [
+    "대형버스",
+    3.0,
+    true
+   ],
+   [
+    "EV9_에어",
+    2.8,
+    false
+   ],
+   [
+    "EV9_어스",
+    3.1,
+    false
+   ],
+   [
+    "EV9_GT-line",
+    3.2,
+    false
+   ],
+   [
+    "EV9_GT",
+    3.5,
+    false
+   ],
+   [
+    "타스만",
+    5.5,
+    true
+   ],
+   [
+    "EV4 / EV5",
+    4.2,
+    false
+   ],
+   [
+    "PV5",
+    4.5,
+    true
+   ]
+  ]
+ }
 }

@@ -51,3 +51,91 @@ export function parseRates(rows) {
   }
   return (out.hyundai.length || out.kia.length) ? out : null;
 }
+
+
+// 기본 수당율 표 — 공용 시트를 못 읽을 때 쓴다.
+//
+// PC 앱은 시트가 없어도 프로그램에 든 이 표로 계산한다. 폰만 못 쓰면 안 되므로
+// 같은 표를 여기에도 둔다. **시트를 읽으면 그쪽이 언제나 이긴다** —
+// 이건 어디까지나 없을 때의 대비다.
+//
+// ⚠️ planner/commission.py 의 DEFAULT_RATES 와 한 줄도 달라선 안 된다.
+//    정답표(vectors.json)에 파이썬 표가 들어 있고 검사가 통째로 대조한다.
+export const DEFAULT_RATES = {
+  hyundai: [
+    ["아반떼 / HEV", 7, false],
+    ["ST1", 3.7, true],
+    ["아이오닉 5 / 6", 4, false],
+    ["쏘나타 / HEV", 6, false],
+    ["그랜저 가솔린", 5, false],
+    ["그랜저 HEV", 4.8, false],
+    ["신형 G90 3.5T", 3.5, false],
+    ["신형 G90 3.5T LWB", 3.2, false],
+    ["G80 ev", 3, false],
+    ["G80", 4.3, false],
+    ["G70 2.0 / 2.2", 4.6, false],
+    ["GV70", 4.3, false],
+    ["GV80", 4.1, false],
+    ["아이오닉 9", 3.3, false],
+    ["투싼", 5.5, false],
+    ["베뉴", 6.8, false],
+    ["넥쏘 수소", 2.3, false],
+    ["코나 / 코나 HEV", 5.8, false],
+    ["코나 EV", 4.2, false],
+    ["싼타페", 5.3, false],
+    ["싼타페 HEV", 5.1, false],
+    ["팰리세이드", 4.8, false],
+    ["팰리세이드 HEV", 4.6, false],
+    ["GV70 ev", 3, false],
+    ["GV60 ev", 3, false],
+    ["포터", 7, true],
+    ["포터 EV", 3.5, false],
+    ["포터 캠핑카", 3.3, true],
+    ["스타리아", 6, true],
+    ["스타리아 라운지", 5.5, false],
+    ["스타리아 카고 EV", 4, true],
+    ["스타리아 투어러 EV", 3.8, true],
+    ["스타리아 라운지 EV", 4, false],
+    ["스타리아 리무진 EV", 3.3, false],
+    ["스타리아 HEV", 5.3, true],
+    ["쏠라티", 4, true],
+    ["파비스", 3.6, true],
+    ["카운티", 5, true],
+    ["카운티 EV", 1.8, true],
+    ["에어로타운", 5, true],
+    ["유니버스", 3.5, true],
+    ["마이티,메가트럭", 5, true],
+  ],
+  kia: [
+    ["모닝", 7.5, false],
+    ["레이", 7.5, false],
+    ["레이EV(라이트)", 4.8, false],
+    ["레이EV(에어)", 5, false],
+    ["K3", 7, false],
+    ["K5", 6, false],
+    ["K5 HEV", 6, false],
+    ["K8", 5, false],
+    ["K9", 4.3, false],
+    ["K9 (퀀텀)", 4, false],
+    ["니로", 6, false],
+    ["니로 EV", 5, false],
+    ["셀토스", 5.5, false],
+    ["EV6", 3.3, false],
+    ["EV3", 4.2, false],
+    ["카니발", 6, false],
+    ["스포티지", 5.5, false],
+    ["쏘렌토", 5.5, false],
+    ["모하비", 5, false],
+    ["봉고1톤", 7, true],
+    ["봉고 1.2톤", 6, true],
+    ["봉고 EV", 3.8, true],
+    ["대형버스", 3, true],
+    ["EV9_에어", 2.8, false],
+    ["EV9_어스", 3.1, false],
+    ["EV9_GT-line", 3.2, false],
+    ["EV9_GT", 3.5, false],
+    ["타스만", 5.5, true],
+    ["EV4 / EV5", 4.2, false],
+    ["PV5", 4.5, true],
+  ],
+};

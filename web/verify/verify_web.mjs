@@ -159,7 +159,19 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   ];
   const MENT = "김상현 고객님 안녕하세요.\n계약이 정상 접수되었습니다.\n감사합니다.";
   const seen = [];
+  const docDl = [];
+  const QPNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64");
   const p3 = await page(ctx3);
+  await ctx3.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("QUOTE1") && u.includes("alt=media")) {
+      docDl.push(u);
+      return r.fulfill({ body: QPNG, contentType: "image/png" });
+    }
+    return r.fulfill({ json: { files: [] } });
+  });
   await ctx3.route("**/accounts.google.com/**", (r) => r.abort());
   await ctx3.route("**/oauth2/v3/userinfo", (r) =>
     r.fulfill({ json: { email: "me@example.com" } }));
@@ -173,6 +185,12 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
       ] } });
     }
     if (/!R\d+:R\d+/.test(u)) return r.fulfill({ json: { values: [[MENT]] } });
+    // S열은 수식으로 물어봐야 =IMAGE(...) 가 온다
+    if (/!S\d+:S\d+/.test(u)) {
+      return r.fulfill({ json: { values: [[u.includes("FORMULA")
+        ? '=IMAGE("https://drive.google.com/uc?export=view&id=QUOTE1", 1)'
+        : ""]] } });
+    }
     if (u.includes("A1:F")) return r.fulfill({ json: { values: [
       ["심사서류", "KB캐피탈", "개인 심사서류", "서류", "■ 준비물\n· 신분증", "신분증"] ] } });
     return r.fulfill({ json: { values: [] } });
@@ -222,6 +240,16 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
      (await p3.locator("#cdetail .kv").first().innerText()).includes("35,000,000"));
   ok("멘트는 열 때 그 한 칸만 받는다",
      seen.filter((u) => /!R\d+:R\d+/.test(u)).length === 1);
+
+  // ⚠️ 견적서는 S열의 =IMAGE() **수식**이다. 표시값으로 읽으면 빈 문자열이라
+  //    '견적서 없음' 과 구분되지 않는다 — 폰에서 안 보이던 이유가 이것이었다.
+  await p3.waitForSelector("#cdoc .vimg", { timeout: 10000 });
+  ok("견적서를 수식으로 읽는다",
+     seen.some((u) => /!S\d+:S\d+/.test(u) && /FORMULA/.test(u)),
+     seen.filter((u) => /!S\d+:S/.test(u)).map((u) => u.slice(-40)).join(" "));
+  ok("견적서 이미지가 나온다",
+     (await p3.locator("#cdoc .vimg").getAttribute("src")).startsWith("blob:"));
+  ok("견적서를 드라이브 API 로 받아 온다", docDl.length === 1, docDl.length + "건");
   ok("멘트 본문이 그려진다", (await p3.locator("pre.ment").textContent()).includes("정상 접수"));
   const tels = await p3.locator("#cdetail a.tel").evaluateAll((a) => a.map((x) => x.href));
   ok("연락처가 눌러서 걸리는 tel: 링크다",
@@ -366,10 +394,17 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   ok("처음엔 100%", (await pctOf()) === "100%");
   await p6.locator("#vin").click();
   ok("＋ 로 확대된다", (await pctOf()) === "150%", await pctOf());
+  // ⚠️ 눌러서 확대되면 안 된다. 서류를 짚거나 스크롤하려고 손을 댈 때마다
+  //    확대돼서 오히려 방해가 됐다. 확대는 ＋ − 와 두 손가락으로만.
   await p6.locator(".vimg").click({ position: { x: 5, y: 5 } });
-  ok("그림을 눌러도 확대된다", (await pctOf()) === "200%", await pctOf());
+  await p6.waitForTimeout(200);
+  ok("그림을 눌러도 확대되지 않는다", (await pctOf()) === "150%", await pctOf());
+  await p6.locator(".vimg").dblclick({ position: { x: 5, y: 5 } });
+  await p6.waitForTimeout(200);
+  ok("두 번 눌러도 확대되지 않는다", (await pctOf()) === "150%", await pctOf());
   await p6.locator("#vout").click();
-  ok("− 로 축소된다", (await pctOf()) === "150%", await pctOf());
+  ok("− 로 축소된다", (await pctOf()) === "100%", await pctOf());
+  await p6.locator("#vin").click();
   ok("확대하면 그림 폭이 커진다",
      (await p6.locator(".vpages").evaluate((e) => e.style.width)) === "150%");
 
@@ -733,12 +768,52 @@ console.log("\n[15] 수당계산기");
      === "₩ " + Math.trunc(want100).toLocaleString("ko-KR"),
      await p11.locator("#cres").textContent());
 
+  // 시트에 '수당율' 탭이 없어도 앱에 든 기본 표로 계산돼야 한다 —
+  // PC 앱이 그렇게 동작한다. 폰만 못 쓰면 안 된다.
+  ok("어느 표로 계산하는지 알려 준다",
+     (await p11.locator("#csrc").textContent()).includes("공용 시트"),
+     await p11.locator("#csrc").textContent());
+
   await p11.click("#creset");
   await p11.waitForTimeout(200);
   ok("초기화하면 0 으로 돌아온다", (await p11.locator("#cres").textContent()) === "₩ 0");
   ok("초기화하면 지급율이 70 으로 돌아온다",
      (await p11.locator("#cpay").inputValue()) === "70");
   await ctx9.close();
+}
+
+console.log("\n[16] 수당율 탭이 없을 때 — 앱에 든 기본 표로 계산되나");
+{
+  const ctxA = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await ctxA.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const pA = await page(ctxA);
+  await ctxA.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxA.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctxA.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxA.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ status: 400, json: {
+    error: { code: 400, message: "Unable to parse range: '수당율'!A1:D" } } }));
+
+  await pA.goto(s.url + "#/calc", { waitUntil: "networkidle" });
+  await pA.waitForSelector("#ccars button.carrow", { timeout: 10000 });
+  const n = await pA.locator("#ccars .t").count();
+  ok("탭이 없어도 차종이 나온다", n === 42, n + "종");
+  ok("기본 표를 쓰고 있다고 알려 준다",
+     (await pA.locator("#csrc").textContent()).includes("기본"),
+     await pA.locator("#csrc").textContent());
+  ok("PC 앱에서 저장하라고 일러 준다",
+     (await pA.locator("#cerr").textContent()).includes("PC 앱"));
+
+  await pA.locator("#cprice").pressSequentially("57035000", { delay: 5 });
+  await pA.locator('#ccars button.carrow', { hasText: "GV80" }).first().click();
+  await pA.waitForTimeout(150);
+  ok("기본 표로도 PC 와 같은 금액이 나온다",
+     (await pA.locator("#cres").textContent()) === "₩ 1,367,859",
+     await pA.locator("#cres").textContent());
+  await ctxA.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

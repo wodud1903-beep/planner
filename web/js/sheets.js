@@ -115,6 +115,23 @@ export async function readCustomers(sheetId, tab) {
   return { left, right };
 }
 
+/** S열 한 칸을 **수식 그대로** 읽는다 — 견적서 이미지 주소를 되찾으려면 이것뿐이다.
+ *
+ * ⚠️ 셀 안 그림은 =IMAGE() 수식이라 표시값으로 읽으면 빈 문자열이 온다.
+ *    그래서 목록의 doc 칸만 보고는 '견적서가 없다' 와 구분되지 않는다.
+ *    (파이썬 쪽 read_docs 에 같은 사고 기록이 있다) */
+export async function readDocFormula(sheetId, tab, row) {
+  try {
+    const url = `${SHEETS_API}/${sheetId}/values/${rng(tab, `S${row}:S${row}`)}`
+              + `?valueRenderOption=FORMULA`;
+    const j = await call(url);
+    return String(((j.values || [])[0] || [])[0] || "").trim();
+  } catch (e) {
+    if (e instanceof NeedSignIn || e instanceof WrongAccount || e instanceof NeedScope) throw e;
+    return "";
+  }
+}
+
 /** R열 한 칸만 — 고객을 열 때 부른다. 실패하면 빈 문자열(멘트만 못 볼 뿐이다). */
 export async function readMent(sheetId, tab, row) {
   try {

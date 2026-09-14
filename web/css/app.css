@@ -215,7 +215,7 @@ pre.ment {
 }
 .vpages { width: 100%; }          /* 확대는 이 폭을 키워서 한다 */
 .vimg {
-  display: block; width: 100%; height: auto; cursor: zoom-in;
+  display: block; width: 100%; height: auto;
   background: #fff; border: 1px solid var(--line); border-radius: 6px;
 }
 .vpage + .vpage { margin-top: 8px; }   /* PDF 는 한 장씩 아래로 이어 붙인다 */
@@ -286,3 +286,4 @@ a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
 .calcout span { color: var(--sub); font-size: 14px; }
 .calcout b { flex: 1; text-align: right; font-size: 26px; color: var(--accent);
   font-variant-numeric: tabular-nums; }
+.warnsrc { color: var(--warn); }

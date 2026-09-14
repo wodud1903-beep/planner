@@ -71,13 +71,9 @@ export function mount(box, { blob, name, isPdf, driveUrl }) {
   $("#vin", box).onclick = () => step(1);
   $("#vout", box).onclick = () => step(-1);
 
-  // 눌러서 확대·축소. 맨 끝까지 갔으면 처음으로 돌아온다 —
-  // 계속 눌러도 반응이 없으면 고장으로 보인다.
-  pages.addEventListener("click", (e) => {
-    const at = { x: e.clientX, y: e.clientY };
-    applyScale(scale >= STEPS[STEPS.length - 1] ? STEPS[0]
-               : STEPS.find((v) => v > scale + 0.001) || STEPS[0], at);
-  });
+  // ⚠️ 눌러서 확대하지 않는다. 서류를 읽으려고 짚거나 스크롤하려고 손을 대면
+  //    그때마다 확대돼서 오히려 방해가 됐다. 확대는 ＋ − 단추와
+  //    두 손가락(핀치)으로만 한다 — 하려고 할 때만 된다.
 
   // ⚠️ 그냥 굴리면 **위아래로 넘어간다**. 확대는 Ctrl(또는 두 손가락)일 때만.
   //    예전엔 그림 위에서 굴려도 아무 일도 안 났는데, touch-action 이 한 손가락

@@ -8,7 +8,9 @@ import * as store from "../store.js";
 import * as sheets from "../sheets.js";
 import * as hangul from "../hangul.js";
 import * as fmt from "../fmt.js";
-import { parseRows, statuses, HeaderNotFound } from "../customers.js";
+import { parseRows, statuses, HeaderNotFound, docUrl, driveIdOf } from "../customers.js";
+import * as drive from "../drive.js";
+import * as viewer from "./viewer.js";
 import { DEF_SHEET_ID, DEF_SHEET_NAME } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
@@ -250,11 +252,16 @@ export async function showDetail(rowNo) {
         ${r.accident ? `<div class="k">사고접수</div><div class="v">${tel(r.accident)}</div>` : ""}
       </div>` : "")}
 
+    <p class="kbhead">견적서 / 계약서</p>
+    <div id="cdoc"><p class="empty">확인 중…</p></div>
+
     <p class="kbhead">고객 안내멘트</p>
     <div id="cment"><p class="empty">불러오는 중…</p></div>`);
 
   const back = $("#cback");
   if (back) back.onclick = () => { split.classList.remove("detail"); router.go("/customers"); };
+
+  loadDoc(r.row);
 
   // 멘트는 여기서만 받는다 — 목록에 넣으면 한 건당 20줄이라 폰에서 제일 큰 낭비다.
   const key = "ment:" + sheetId() + ":" + r.row;
@@ -286,6 +293,53 @@ function paintMent(text) {
   }).catch(() => { b.textContent = "복사 실패 — 길게 눌러 직접 복사하세요"; });
 }
 
+
+// ---------------------------------------------------------------- 견적서 이미지
+let _docView = null;
+
+async function loadDoc(row) {
+  const box = $("#cdoc");
+  if (!box) return;
+  if (_docView) { _docView.close(); _docView = null; }
+  let cell = "";
+  try {
+    cell = await sheets.readDocFormula(sheetId(), sheetTab(), row);
+  } catch (e) {
+    render(box, html`<p class="empty">${e instanceof sheets.NeedScope
+      ? "권한이 없습니다. 위 [다시 로그인] 을 눌러 주세요."
+      : "견적서를 확인하지 못했습니다."}</p>`);
+    return;
+  }
+  const url = docUrl(cell);
+  if (!url) { render(box, html`<p class="empty">올라온 견적서가 없습니다.</p>`); return; }
+
+  const id = driveIdOf(url);
+  if (!id) {
+    // 드라이브가 아닌 주소면 그냥 그대로 띄운다
+    render(box, html`<img class="vimg" src="${url}" alt="견적서">`);
+    return;
+  }
+  render(box, html`<p class="empty">견적서를 불러오는 중…</p>`);
+  try {
+    // 주소를 <img src> 에 바로 넣지 않는다. 드라이브의 uc?export=view 는
+    // 요즘 리다이렉트가 끼어 <img> 에서 자주 깨진다. 내 권한으로 받아서 띄운다.
+    const blob = await drive.download(id);
+    _docView = viewer.mount(box, {
+      blob, name: "견적서 / 계약서", isPdf: (blob.type || "").includes("pdf"),
+      driveUrl: drive.openInDrive(id),
+    });
+    _docView.onClose(() => {
+      if (_docView) { _docView.close(); _docView = null; }
+      render(box, html`<button class="chip" id="cdocopen">견적서 다시 보기</button>`);
+      const b = $("#cdocopen");
+      if (b) b.onclick = () => loadDoc(row);
+    });
+  } catch (e) {
+    render(box, html`<p class="empty">견적서를 열지 못했습니다.</p>
+      <p style="text-align:center"><a class="bigcopy" href="${drive.openInDrive(id)}"
+         target="_blank" rel="noopener">드라이브에서 열기</a></p>`);
+  }
+}
 
 // ---------------------------------------------------------------- 시트 설정
 // 탭 이름이 틀리면 구글은 그냥 400 을 돌려준다. 손으로 다시 치게 하지 말고

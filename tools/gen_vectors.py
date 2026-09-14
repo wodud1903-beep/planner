@@ -129,6 +129,21 @@ RATE_ROWS = [
 ]
 
 
+# S열(견적서/계약서)은 =IMAGE() 수식이다. 거기서 주소를 되찾는 규칙.
+DOC_CASES = [
+    '=IMAGE("https://drive.google.com/uc?export=view&id=1AbCdEf_-Xyz", 1)',
+    '=image("https://drive.google.com/uc?export=view&id=1AbCdEf", 4)',
+    '= IMAGE ( "https://example.com/a.png" , 1 )',
+    'https://drive.google.com/uc?export=view&id=1AbCdEf',
+    'https://example.com/a.png  설명',
+    '=IMAGE("")',
+    '',
+    '   ',
+    '견적서 있음',
+    '=HYPERLINK("https://example.com","보기")',
+]
+
+
 def _parse_rates(rows):
     """sheets.read_rates 의 '푸는 부분' 만 그대로 옮긴 것.
     그쪽은 통신에 묶여 있어 직접 못 부른다 — 규칙이 갈라지지 않게 여기서 한 번만 적는다."""
@@ -171,6 +186,8 @@ def main() -> int:
         "parse_rows": [],
         "commission_calc": [],
         "parse_rates": [],
+        "doc_url": [],
+        "default_rates": {},
     }
     for item, queries in HANGUL_CASES:
         out["hangul_chosung"].append([item, hangul.chosung(item)])
@@ -204,6 +221,12 @@ def main() -> int:
         out["commission_calc"].append(
             [price, rate, truck, pay, free,
              commission.calc(price, rate, truck, pay, free)])
+
+    out["default_rates"] = {b: [[n, r, t] for n, r, t in commission.DEFAULT_RATES[b]]
+                            for b in commission.BRANDS}
+
+    for cell in DOC_CASES:
+        out["doc_url"].append([cell, sheets.doc_url(cell)])
 
     for rows in RATE_ROWS:
         got = sheets.read_rates.__wrapped__ if False else None   # (통신 함수라 직접 안 쓴다)

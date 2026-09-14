@@ -97,3 +97,34 @@ export function statuses(rows) {
   }
   return [...seen.keys()].sort((a, b) => seen.get(b) - seen.get(a) || a.localeCompare(b, "ko"));
 }
+
+
+// ---------------------------------------------------------------- 견적서 이미지
+/** '=IMAGE("https://…", 1)' 에서 주소만 뽑는다. sheets.py 의 doc_url 과 같은 규칙.
+ *
+ * ⚠️ S열은 **수식**이라 표시값(FORMATTED_VALUE)으로 읽으면 빈 문자열이다.
+ *    그래서 목록에서는 '견적서 없음' 과 구분되지 않는다 — 따로 수식으로 읽어야 한다.
+ *    (폰에서 견적서가 안 보이던 이유가 이것이었다) */
+export function docUrl(cell) {
+  const t = String(cell || "").trim();
+  if (!t) return "";
+  const m = t.match(/=\s*IMAGE\s*\(\s*"([^"]+)"/i);
+  if (m) return m[1].trim();
+  if (t.toLowerCase().startsWith("http")) return t.split(/\s+/)[0];
+  return "";
+}
+
+/** 드라이브 주소에서 파일 id. 못 찾으면 "".
+ *
+ * 견적서는 드라이브에 올라가 있다. 주소를 <img src> 에 그냥 넣는 대신 id 를 뽑아
+ * **API 로 받아 온다** — 그러면 파일 공개 설정과 상관없이, 내 권한으로 열린다. */
+export function driveIdOf(url) {
+  const t = String(url || "");
+  let m = t.match(/[?&]id=([A-Za-z0-9_-]+)/);        // uc?export=view&id=…
+  if (m) return m[1];
+  m = t.match(/\/file\/d\/([A-Za-z0-9_-]+)/);        // /file/d/…/view
+  if (m) return m[1];
+  m = t.match(/\/d\/([A-Za-z0-9_-]+)/);
+  if (m) return m[1];
+  return "";
+}

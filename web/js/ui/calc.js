@@ -13,7 +13,10 @@ import { setBody, markTab, paintState } from "./chrome.js";
 
 const RATES_TAB = "수당율";
 
-let _rates = null;         // {hyundai:[[이름,율,화물]…], kia:[…]}
+// 시트를 못 읽어도 계산은 되어야 한다 — PC 앱이 그렇게 동작한다.
+// 시트를 읽으면 그쪽이 언제나 이긴다.
+let _rates = cm.DEFAULT_RATES;
+let _fromSheet = false;
 let _brand = "hyundai";
 let _pick = -1;            // 고른 차종 (지금 브랜드 안에서의 번호)
 let _price = "";
@@ -24,21 +27,24 @@ let _q = "";
 
 export async function load({ refresh = true } = {}) {
   const c = await store.get("data", "rates");
-  if (c && c.rates) { _rates = c.rates; repaint(); }
+  if (c && c.rates) { _rates = c.rates; _fromSheet = true; repaint(); }
   if (!refresh) return;
   try {
     const rows = await sheets.values(RATES_SHEET_ID, RATES_TAB, "A1:D");
     const got = cm.parseRates(rows);
     if (got) {
       _rates = got;
+      _fromSheet = true;
       _err = "";
       await store.put("data", "rates", { rates: got, at: Date.now() });
-    } else if (!_rates) {
-      _err = `공용 시트에 '${RATES_TAB}' 표가 아직 없습니다. PC 앱에서 한 번 올려 주세요.`;
+    } else if (!_fromSheet) {
+      _err = `공용 시트에 '${RATES_TAB}' 표가 아직 없어 앱에 든 기본 표로 계산합니다.`;
     }
   } catch (e) {
     if (e instanceof sheets.BadRange) {
-      _err = `공용 시트에 '${RATES_TAB}' 탭이 없습니다. PC 앱에서 한 번 올려 주세요.`;
+      _err = _fromSheet ? "" :
+        `공용 시트에 '${RATES_TAB}' 탭이 없어 앱에 든 기본 표로 계산합니다.\n`
+        + "PC 앱 [설정] → 수당율에서 한 번 저장하면 탭이 생깁니다.";
     } else if (e instanceof sheets.NeedScope) {
       _err = "시트 권한이 아직 없습니다. 위 [다시 로그인] 을 눌러 주세요.";
     } else if (!(e instanceof sheets.NeedSignIn || e instanceof sheets.Offline)) {
@@ -90,6 +96,7 @@ export async function screen() {
       </div>
       <p class="s" id="crate" style="color:var(--sub);text-align:right;margin:0 0 10px"></p>
       <button class="bigcopy" id="ccopy">결과 복사</button>
+      <p class="synced" id="csrc"></p>
       <p class="synced"><button class="linky" id="creset">초기화</button></p>
       <p class="empty" id="cerr"></p>
     </div>`);
@@ -138,6 +145,12 @@ function repaint() { paintCars(); recalc(); paintErr(); }
 function paintErr() {
   const e = $("#cerr");
   if (e) e.textContent = _err;
+  // 어느 표로 계산하고 있는지 늘 보이게 한다 — 금액만 보고는 알 수 없다.
+  const src = $("#csrc");
+  if (src) {
+    src.textContent = _fromSheet ? "공용 시트의 수당율" : "앱에 든 기본 수당율";
+    src.className = "synced" + (_fromSheet ? "" : " warnsrc");
+  }
 }
 
 function paintCars() {
@@ -145,7 +158,7 @@ function paintCars() {
   if (!el) return;
   const all = items();
   if (!all.length) {
-    render(el, html`<li class="empty">${_err ? "" : "수당율을 불러오는 중입니다…"}</li>`);
+    render(el, html`<li class="empty">차종이 없습니다.</li>`);
     return;
   }
   const q = (_q || "").trim();

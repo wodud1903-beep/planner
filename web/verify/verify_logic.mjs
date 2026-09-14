@@ -102,5 +102,24 @@ for (const [rows, want] of V.parse_rates) {
 }
 console.log(`  ${V.parse_rates.length}개 대조`);
 
+console.log("\n[10] 견적서 수식에서 주소 뽑기 (sheets.doc_url)");
+for (const [cell, want] of V.doc_url) eq(`docUrl(${JSON.stringify(cell)})`, C.docUrl(cell), want);
+console.log(`  ${V.doc_url.length}개 대조`);
+
+console.log("\n[11] 드라이브 주소에서 파일 id (파이썬에 짝이 없어 직접 적는다)");
+for (const [u, want] of [
+  ["https://drive.google.com/uc?export=view&id=1AbCdEf_-Xyz", "1AbCdEf_-Xyz"],
+  ["https://drive.google.com/file/d/1AbCdEf/view?usp=sharing", "1AbCdEf"],
+  ["https://drive.google.com/open?id=1AbCdEf", "1AbCdEf"],
+  ["https://lh3.googleusercontent.com/d/1AbCdEf", "1AbCdEf"],
+  ["https://example.com/a.png", ""],
+  ["", ""],
+]) eq(`driveIdOf(${JSON.stringify(u)})`, C.driveIdOf(u), want);
+console.log("  6개 대조");
+
+console.log("\n[12] 기본 수당율 표가 파이썬과 같은지 (시트를 못 읽을 때 쓰는 표)");
+eq("DEFAULT_RATES 전체", CM.DEFAULT_RATES, V.default_rates);
+console.log(`  현대 ${V.default_rates.hyundai.length}종 · 기아 ${V.default_rates.kia.length}종 대조`);
+
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);
