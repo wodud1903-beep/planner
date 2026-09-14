@@ -9,13 +9,18 @@
 const BUILD = "__BUILD_ID__";
 const CACHE = "app-" + BUILD;
 
+// ⚠️ 새 모듈을 만들면 **반드시 여기에도 적어야 한다.** 빌드 단계가 없어서
+//    이 목록은 손으로 관리한다. 빼먹으면 온라인에서는 멀쩡히 돌다가
+//    오프라인에서만 죽는다 — 제일 늦게 발견되는 종류의 고장이다.
+//    verify_web.mjs 의 [2] 가 web/ 의 파일과 이 목록을 대조해 막아 준다.
 const PRECACHE = [
   "./", "./index.html", "./manifest.webmanifest", "./CHANGELOG.md",
   "./css/app.css",
   "./js/boot.js", "./js/config.js", "./js/store.js", "./js/auth.js",
   "./js/sheets.js", "./js/hangul.js", "./js/fmt.js", "./js/kb.js",
-  "./js/router.js",
+  "./js/customers.js", "./js/router.js",
   "./js/ui/dom.js", "./js/ui/chrome.js", "./js/ui/kb.js", "./js/ui/about.js",
+  "./js/ui/customers.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-512-maskable.png",
 ];
 

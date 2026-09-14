@@ -128,6 +128,124 @@ ok("오프라인에서 화면이 그려진다",
    (await p.locator("nav.tabs a").count()) === 4);
 await ctx.setOffline(false);
 
+console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌려 본다");
+{
+  // 구글에 실제로 못 가므로 (a) 토큰을 미리 넣어 두고 (b) 시트 API 를 가로챈다.
+  // 그래야 목록 → 검색 → 상세 → 멘트 복사까지 진짜 코드로 확인할 수 있다.
+  const ctx3 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await ctx3.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      // ⚠️ 토큰은 반드시 ASCII 여야 한다. HTTP 헤더 값은 Latin-1 만 되므로
+      //    한글을 넣으면 fetch 가 요청을 보내기도 전에 예외를 던지고,
+      //    앱은 그걸 '오프라인' 으로 읽는다. 가짜 시트가 안 물려서 한참 헤맸다.
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3,
+      email: "me@example.com" }));
+  });
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  const SHEET = [
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", "이번달 대수", "3"],
+    HDR,
+    ["1", "김상현", "우리금융캐피탈", "쏘나타 디 엣지", "35,000,000", "300,000",
+     "200,000", "500,000", "대리점", "2026. 8. 1", "2026. 8. 20", "출고완료",
+     "60/2만", "메모1", "신차", "1588-1111", "1588-2222"],
+    ["2", "박영희", "KB캐피탈", "아이오닉5", "52,000,000", "", "", "", "특판",
+     "2026. 8. 5", "", "심사중", "48/3만", "", "신차", "1599-3333", "1599-4444"],
+    ["3", "", "", ""],                                    // 지운 줄 — 안 나와야 한다
+    ["4", "최민수", "BNK캐피탈", "쏘렌토", "45,000,000", "", "", "", "대리점",
+     "2026. 8. 9", "", "심사중", "", "", "신차", "", ""],
+  ];
+  const MENT = "김상현 고객님 안녕하세요.\n계약이 정상 접수되었습니다.\n감사합니다.";
+  const seen = [];
+  const p3 = await page(ctx3);
+  await ctx3.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx3.route("**/oauth2/v3/userinfo", (r) =>
+    r.fulfill({ json: { email: "me@example.com" } }));
+  await ctx3.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    seen.push(u);
+    if (u.includes("batchGet")) {
+      return r.fulfill({ json: { valueRanges: [
+        { values: SHEET.map((x) => x.slice(0, 17)) },
+        { values: SHEET.map(() => []) },
+      ] } });
+    }
+    if (/!R\d+:R\d+/.test(u)) return r.fulfill({ json: { values: [[MENT]] } });
+    if (u.includes("A1:F")) return r.fulfill({ json: { values: [
+      ["심사서류", "KB캐피탈", "개인 심사서류", "서류", "■ 준비물\n· 신분증", "신분증"] ] } });
+    return r.fulfill({ json: { values: [] } });
+  });
+
+  await p3.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await p3.waitForSelector("#clist button.row", { timeout: 10000 });
+  const names = await p3.locator("#clist .t").allTextContents();
+  ok("고객 목록이 그려진다", names.length === 3, names.join(", "));
+  ok("고객명 없는 줄(지운 행)은 안 나온다", !names.includes(""), names.join(", "));
+
+  // ⚠️ R열은 목록에서 받으면 안 된다 — 한 건당 20줄이라 폰에서 제일 큰 낭비다.
+  ok("목록을 받을 때 R열(안내멘트)은 안 받는다",
+     !seen.some((u) => /!R\d+:R\d+/.test(u)), seen.filter((u) => /!R/.test(u)).join(" "));
+  ok("목록을 받을 때 U열(고객ID)도 안 받는다",
+     !seen.some((u) => /!U/.test(u)));
+
+  const chips = await p3.locator("#cchips button").allTextContents();
+  ok("진행현황 칩을 시트 값에서 뽑는다",
+     JSON.stringify(chips) === JSON.stringify(["전체", "심사중", "출고완료"]), chips.join("|"));
+
+  // 초성 검색
+  await p3.fill("#cq", "ㄱㅅㅎ");
+  await p3.waitForTimeout(300);
+  ok("초성으로 걸러진다",
+     JSON.stringify(await p3.locator("#clist .t").allTextContents()) === '["김상현"]');
+  await p3.fill("#cq", "아이오닉");
+  await p3.waitForTimeout(300);
+  ok("차종으로도 걸러진다",
+     JSON.stringify(await p3.locator("#clist .t").allTextContents()) === '["박영희"]');
+  await p3.fill("#cq", "");
+  await p3.waitForTimeout(300);
+
+  // 칩으로 거르기
+  await p3.click('#cchips button[data-st="심사중"]');
+  await p3.waitForTimeout(200);
+  ok("진행현황 칩으로 걸러진다",
+     (await p3.locator("#clist button.row").count()) === 2);
+  await p3.click('#cchips button[data-st=""]');
+  await p3.waitForTimeout(200);
+
+  // 상세
+  await p3.locator("#clist button.row").first().click();
+  await p3.waitForSelector("#cment .bigcopy", { timeout: 10000 });
+  ok("상세에 이름이 나온다", (await p3.locator("#cdetail h2").textContent()) === "김상현");
+  ok("금액이 서식대로 나온다",
+     (await p3.locator("#cdetail .kv").first().innerText()).includes("35,000,000"));
+  ok("멘트는 열 때 그 한 칸만 받는다",
+     seen.filter((u) => /!R\d+:R\d+/.test(u)).length === 1);
+  ok("멘트 본문이 그려진다", (await p3.locator("pre.ment").textContent()).includes("정상 접수"));
+  const tels = await p3.locator("#cdetail a.tel").evaluateAll((a) => a.map((x) => x.href));
+  ok("연락처가 눌러서 걸리는 tel: 링크다",
+     tels.length === 2 && tels[0] === "tel:15881111" && tels[1] === "tel:15882222",
+     tels.join(" "));
+  const copyH = await p3.locator("#cmentcopy").evaluate((b) => b.getBoundingClientRect().height);
+  ok("복사 단추가 엄지로 누를 만큼 크다", copyH >= 48, Math.round(copyH) + "px");
+
+  // 뒤로 → 목록
+  await p3.click("#cback");
+  await p3.waitForTimeout(300);
+  ok("목록으로 돌아온다", (await p3.locator("#clist button.row").count()) === 3);
+
+  // 껐다 켜도 캐시로 바로 뜨는지 (시트를 아예 막아 둔다)
+  await ctx3.route("**/sheets.googleapis.com/**", (r) => r.abort());
+  const p4 = await page(ctx3);
+  await p4.goto(s.url + "#/customers");
+  await p4.waitForSelector("#clist button.row", { timeout: 10000 });
+  ok("시트를 못 읽어도 캐시로 목록이 뜬다",
+     (await p4.locator("#clist button.row").count()) === 3);
+  ok("시트를 못 읽어도 빈 화면이 되지 않는다",
+     (await p4.locator("nav.tabs a").count()) === 4);
+  await ctx3.close();
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');

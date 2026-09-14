@@ -66,3 +66,27 @@ export async function readKb(sheetId, tab) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- 고객관리
+// A1:Q + S1:T 두 범위를 한 번에 받는다.
+//
+// ⚠️ U열(고객ID)을 여기 넣으면 안 된다. 시트가 T 에서 끝나면 U 범위는 문법은
+//    맞아도 격자 밖이라 400 이 나고, **묶인 고객 목록까지 통째로 실패한다**
+//    (파이썬 쪽에 그 사고 기록이 있다 — sheets.py 의 read_uids 주석).
+// ⚠️ R열(고객안내멘트)도 뺀다. 한 건에 20줄 가까워서 폰에서 제일 큰 낭비다.
+//    고객을 열 때 그 한 칸만 readMent 로 받는다.
+export async function readCustomers(sheetId, tab) {
+  const [left, right] = await batch(sheetId, tab, ["A1:Q", "S1:T"]);
+  return { left, right };
+}
+
+/** R열 한 칸만 — 고객을 열 때 부른다. 실패하면 빈 문자열(멘트만 못 볼 뿐이다). */
+export async function readMent(sheetId, tab, row) {
+  try {
+    const v = await values(sheetId, tab, `R${row}:R${row}`);
+    return ((v[0] || [])[0] || "").replace(/\s+$/, "");
+  } catch (e) {
+    if (e instanceof NeedSignIn || e instanceof WrongAccount) throw e;
+    return "";
+  }
+}

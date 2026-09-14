@@ -8,6 +8,7 @@ import * as router from "./router.js";
 import * as auth from "./auth.js";
 import * as store from "./store.js";
 import * as kbui from "./ui/kb.js";
+import * as cust from "./ui/customers.js";
 import * as about from "./ui/about.js";
 
 const BUILD_CHECK_MS = 5 * 60 * 1000;
@@ -25,8 +26,10 @@ paintState();
 router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
 router.on(/^\/kb$/, () => kbui.screen(null));
 router.on(/^\/about$/, () => about.screen());
-router.on(/^\/docs$/, () => notYet("고객정보 서류", "구글 계정 연결 뒤에 만듭니다."));
-router.on(/^\/customers$/, () => notYet("고객관리 조회", "구글 계정 연결 뒤에 만듭니다."));
+router.on(/^\/customers\/(\d+)$/, (m) => cust.screen(m));
+router.on(/^\/customers$/, () => cust.screen(null));
+router.on(/^\/docs$/, () => notYet("고객정보 서류",
+  "아직 만드는 중입니다. 다음 판에 들어갑니다."));
 
 function notYet(title, why) {
   markTab(location.hash.slice(1));
@@ -46,6 +49,7 @@ function notYet(title, why) {
     await auth.token();                 // 조용한 시도 (실패해도 화면은 그대로)
     paintState();
     kbui.load();
+    cust.load();
   }, 0);
 
   registerSW();
@@ -53,10 +57,19 @@ function notYet(title, why) {
 
 // ---------------------------------------------------------------- 자동 갱신
 async function registerSW() {
-  if (!("serviceWorker" in navigator)) return;
+  // ⚠️ `"serviceWorker" in navigator` 만 보면 안 된다. 속성은 있는데 값이 undefined
+  //    이거나 손대면 예외가 나는 곳이 실제로 있다 — 카카오톡 인앱 브라우저,
+  //    삼성 인터넷 시크릿 모드, https 가 아닌 주소. 카톡으로 링크를 받아 여는 게
+  //    가장 흔한 경로라 여기서 죽으면 앱이 통째로 안 뜬다.
+  //    자동 갱신만 못 할 뿐 앱은 멀쩡히 돌아야 한다.
+  let swc;
+  try { swc = navigator.serviceWorker; } catch (e) { return; }
+  if (!swc || typeof swc.register !== "function") return;
+
   let reg;
-  try { reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" }); }
+  try { reg = await swc.register("./sw.js", { scope: "./" }); }
   catch (e) { return; }
+  if (!reg) return;
 
   const applyIfSafe = () => {
     const w = reg.waiting;
@@ -67,7 +80,7 @@ async function registerSW() {
       w.postMessage({ type: "SKIP_WAITING" });
     });
   };
-  navigator.serviceWorker.addEventListener("controllerchange", () => location.reload());
+  swc.addEventListener("controllerchange", () => location.reload());
   reg.addEventListener("updatefound", () => {
     const sw = reg.installing;
     if (sw) sw.addEventListener("statechange", () => {

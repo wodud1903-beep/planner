@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import * as H from "../js/hangul.js";
 import * as F from "../js/fmt.js";
+import * as C from "../js/customers.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -49,6 +50,20 @@ console.log(`  ${V.parse_date.length}개 대조`);
 console.log("\n[5] 계약조건에서 개월 (sheets.contract_months)");
 for (const [s, want] of V.contract_months) eq(`contractMonths(${JSON.stringify(s)})`, F.contractMonths(s), want);
 console.log(`  ${V.contract_months.length}개 대조`);
+
+console.log("\n[6] 시트 풀기 (sheets.parse_rows)");
+for (const [name, left, right, want] of V.parse_rows) {
+  let got;
+  try {
+    const r = C.parseRows(left, right, "미출고차량");
+    got = { headerRow: r.headerRow, rows: r.rows, summary: r.summary };
+  } catch (e) {
+    // 파이썬은 GoogleError 를 던지는데 여기선 이름이 다르다. '못 찾았다' 로 맞춘다.
+    got = { error: e instanceof C.HeaderNotFound ? "Exception" : e.constructor.name };
+  }
+  eq(`parseRows: ${name}`, got, want);
+}
+console.log(`  ${V.parse_rows.length}개 대조`);
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);

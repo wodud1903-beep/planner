@@ -54,6 +54,38 @@ TERMS_CASES = ["60개월 / 2만km / 무보증", "36 개 월", "선수금 30% 48�
                "999개월", "0개월", "개월", "", "12개월 24개월"]
 
 
+# 시트를 푸는 규칙 — 헤더 탐지, 빈 줄 판정, R열 자리 맞추기.
+# 실제로 사고가 났던 모양들을 일부러 넣었다.
+HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+       "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+       "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"]
+
+PARSE_CASES = [
+    # (이름, A~Q, S~T)
+    ("머리글이 첫 줄", [HDR, ["1", "김상현", "우리금융캐피탈", "쏘나타", "3,500,000"]], []),
+    ("위에 요약행이 세 줄", [
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "이번달 대수", "12"],
+        ["", "", "", "", "", "", "", "", "", "", "", "", "", "이번달 수당", "4,300,000"],
+        [""],
+        HDR,
+        ["1", "박영희", "KB캐피탈", "아이오닉5", "5,200,000", "300,000", "200,000",
+         "500,000", "대리점", "2026. 8. 1", "2026. 8. 20", "출고완료", "60/2만",
+         "메모", "신차", "1588-1111", "1588-2222"],
+    ], [["S값", "T값"]]),
+    # 지운 줄 — 순번(A)이 수식이라 값이 남지만 고객명이 없으면 건너뛴다
+    ("지운 줄은 건너뛴다", [HDR, ["3", "", "", ""], ["4", "최민수"]], []),
+    ("아주 빈 줄은 건너뛴다", [HDR, [], ["", "", ""], ["5", "정해나"]], []),
+    # S~T 가 A~Q 보다 길 때 — 열 번호가 밀리면 안 된다
+    ("S~T 가 더 길다", [HDR, ["1", "한지민"]], [[], ["견적서", "완료"], ["x", "y"]]),
+    ("A~Q 가 짧게 온다", [HDR, ["1", "이수현", "BNK캐피탈"]], []),
+    ("머리글이 없다", [["아무거나"], ["1", "김"]], []),
+    ("머리글이 31번째 줄이라 못 찾는다", [[""]] * 30 + [HDR, ["1", "늦은고객"]], []),
+    ("빈 시트", [], []),
+    ("공백이 붙은 머리글", [["  순번 ", " 고객명/사업자 "], ["1", " 띄어쓰기 "]], []),
+    ("멘트 자리(R)는 늘 비어 있다", [HDR, ["1", "멘트고객"] + [""] * 15], [["", ""]]),
+]
+
+
 def main() -> int:
     out = {
         "_설명": "파이썬이 만든 정답표. JS 포팅이 이걸 맞혀야 한다. "
@@ -65,6 +97,7 @@ def main() -> int:
         "fmt_money": [],
         "parse_date": [],
         "contract_months": [],
+        "parse_rows": [],
     }
     for item, queries in HANGUL_CASES:
         out["hangul_chosung"].append([item, hangul.chosung(item)])
@@ -79,6 +112,20 @@ def main() -> int:
         out["parse_date"].append([s, d.isoformat() if d else None])
     for s in TERMS_CASES:
         out["contract_months"].append([s, sheets.contract_months(s)])
+
+    for name, left, right in PARSE_CASES:
+        try:
+            hdr, rows, summary = sheets.parse_rows(left, right, "미출고차량")
+            ans = {
+                "headerRow": hdr,
+                "rows": [{"row": c.row, "seq": c.seq, "total": c.total,
+                          "ment": c.ment, "center": c.center, "accident": c.accident,
+                          "values": c.values} for c in rows],
+                "summary": [list(x) for x in summary],
+            }
+        except Exception as e:
+            ans = {"error": type(e).__name__}
+        out["parse_rows"].append([name, left, right, ans])
 
     dest = ROOT / "web" / "verify" / "vectors.json"
     dest.parent.mkdir(parents=True, exist_ok=True)

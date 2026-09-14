@@ -302,7 +302,17 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     ranges = (r.json() or {}).get("valueRanges", [])
     left = (ranges[0].get("values", []) if len(ranges) > 0 else [])    # A~Q
     right = (ranges[1].get("values", []) if len(ranges) > 1 else [])   # S~T
+    return parse_rows(left, right, sheet_name)
 
+
+def parse_rows(left: list, right: list, sheet_name: str = ""):
+    """받아 온 두 범위를 (헤더행번호, [CustomerRow], 요약) 으로 푼다.
+
+    통신에서 떼어 낸 순수 계산이다. 이유가 둘 있다.
+      · 모바일 웹앱이 같은 규칙을 JS 로 다시 쓰는데, 여기 답을 정답표로 뽑아
+        두 쪽이 조용히 어긋나지 않게 못 박는다(tools/gen_vectors.py).
+      · 헤더 탐지·빈 줄 판정 같은 까다로운 규칙을 시트 없이 시험할 수 있다.
+    """
     # A~Q 와 S~T 를 한 줄로 합친다 (R 자리는 빈칸으로 채워 열 번호를 맞춘다)
     values = []
     for i in range(max(len(left), len(right))):

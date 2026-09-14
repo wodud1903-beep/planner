@@ -119,3 +119,43 @@ nav.tabs .ico { display: block; font-size: 19px; line-height: 1.2; }
 }
 .backbtn { display: none; }
 @container (max-width: 639px) { .split.detail .backbtn { display: inline-block; } }
+
+/* ---- 고객관리 ---- */
+/* 한 줄에 이름·금융사/차종·진행현황·날짜가 들어간다. 밖에서 전화를 받았을 때
+   목록만 보고도 누구인지 알아야 해서 진행현황을 줄 안에 둔다. */
+.row .meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+.row .tag {
+  font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  background: var(--accent-bg); color: var(--accent); font-weight: 600;
+}
+.row .d { font-size: 12px; color: var(--sub); }
+.synced { font-size: 12px; color: var(--sub); text-align: center; margin: 14px 0 0; }
+
+/* 이름-값 표. 좁으면 위아래로, 넓으면 두 칸으로. */
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; align-items: baseline; }
+.kv .k { font-size: 13px; color: var(--sub); white-space: nowrap; }
+.kv .v { word-break: break-word; }
+@container (max-width: 419px) { .kv { grid-template-columns: 1fr; gap: 2px; }
+  .kv .v { margin-bottom: 8px; } }
+
+/* 눌러서 바로 거는 번호 */
+a.tel {
+  color: var(--accent); font-weight: 600; text-decoration: none;
+  display: inline-block; padding: 4px 0; min-height: 32px;
+}
+
+/* 안내멘트 — 카톡에 붙여 넣는 게 이 화면을 쓰는 가장 큰 이유라 단추를 크게 둔다 */
+.bigcopy {
+  display: block; width: 100%; min-height: var(--tap);
+  margin: 6px 0 10px; padding: 12px;
+  font-size: 16px; font-weight: 700; border: 0; border-radius: 12px;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
+.bigcopy.done { background: var(--ok); }
+pre.ment {
+  margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); white-space: pre-wrap; word-break: break-word;
+  font: inherit; font-size: 14px; line-height: 1.6;
+  /* 길어도 화면을 다 먹지 않게. 전체는 스크롤해서 본다. */
+  max-height: 50dvh; overflow: auto;
+}
