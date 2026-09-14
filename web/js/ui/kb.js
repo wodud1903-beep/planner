@@ -6,6 +6,7 @@ import * as kb from "../kb.js";
 import { RATES_SHEET_ID, KB_TAB } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
+import { attach } from "./split.js";
 
 let _items = [];
 let _idx = [];
@@ -58,6 +59,7 @@ export async function screen(m) {
       </div>
       <div class="right"><div class="pane" id="kbdetail"></div></div>
     </div>`);
+  attach($("#kbsplit"), "kb");
 
   const input = $("#kbq");
   const run = () => {

@@ -11,7 +11,8 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 import { serve } from "./serve.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), "..");
 let fails = 0;
@@ -352,8 +353,32 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   await p6.waitForSelector(".vimg", { timeout: 8000 });
   ok("그림을 앱 안에서 연다", (await p6.locator(".vimg").getAttribute("src")).startsWith("blob:"));
   ok("파일 내용을 실제로 받아 온다", dl.length === 1, dl.length + "건");
-  ok("두 손가락 확대를 막지 않는다",
-     (await p6.locator(".vimg").evaluate((e) => getComputedStyle(e).touchAction)) === "pinch-zoom");
+
+  // ⚠️ 예전엔 .vimg 에 touch-action:pinch-zoom 을 걸어 두어 **한 손가락 스크롤이
+  //    막혔다**. 그림 위에서 굴려도 아무 일도 안 나던 게 그 때문이다.
+  const ta = await p6.locator(".vscroll").evaluate((e) => getComputedStyle(e).touchAction);
+  ok("그림 위에서 스크롤을 막지 않는다", ta === "auto", ta);
+  ok("그림 칸이 스크롤된다",
+     (await p6.locator(".vscroll").evaluate((e) => getComputedStyle(e).overflow)) === "auto");
+
+  // 눌러서 확대 → 다시 누르면 더 확대 → 끝까지 가면 처음으로
+  const pctOf = () => p6.locator(".vpct").textContent();
+  ok("처음엔 100%", (await pctOf()) === "100%");
+  await p6.locator("#vin").click();
+  ok("＋ 로 확대된다", (await pctOf()) === "150%", await pctOf());
+  await p6.locator(".vimg").click({ position: { x: 5, y: 5 } });
+  ok("그림을 눌러도 확대된다", (await pctOf()) === "200%", await pctOf());
+  await p6.locator("#vout").click();
+  ok("− 로 축소된다", (await pctOf()) === "150%", await pctOf());
+  ok("확대하면 그림 폭이 커진다",
+     (await p6.locator(".vpages").evaluate((e) => e.style.width)) === "150%");
+
+  // 좁은 화면에서는 보는 동안 목록을 감춘다 — 412px 에 둘을 나란히 두면 둘 다 못 쓴다
+  ok("좁은 화면에서는 보는 동안 목록을 감춘다",
+     !(await p6.locator("#dlist").isVisible()));
+  await p6.click("#vclose");
+  await p6.waitForTimeout(300);
+  ok("닫으면 목록으로 돌아온다", await p6.locator("#dlist").isVisible());
 
   // TIFF — 브라우저가 못 그린다. 팩스가 이 형식으로 오므로 안내가 정확해야 한다.
   await p6.locator('#dlist button.row', { hasText: "팩스" }).click();
@@ -371,6 +396,179 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   await ctx5.close();
 }
 
+console.log("\n[12] 펼친 화면 — 머리말이 옆으로 서지 않는다 · 경계선을 끌 수 있다");
+{
+  const ctx6 = await browser.newContext({ viewport: { width: 1000, height: 1100 } });
+  await ctx6.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const p7 = await page(ctx6);
+  await ctx6.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx6.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+  await ctx6.route("**/www.googleapis.com/drive/v3/**", (r) => r.fulfill({ json: { files: [] } }));
+  await p7.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await p7.waitForSelector("#kbsplit .gutter", { timeout: 8000 });
+
+  // ⚠️ 이게 이번에 잡은 진짜 버그다. #app 을 flex row 로 눕히면 자식이 셋
+  //    (머리말·본문·탭) 이라 **머리말까지 오른쪽에 세로 띠로 선다.**
+  //    제목 '일정관리기' 가 오른쪽 절반을 먹고 본문이 눌려 있었다.
+  const box = await p7.evaluate(() => {
+    const g = (s) => { const r = document.querySelector(s).getBoundingClientRect();
+                       return { x: Math.round(r.x), w: Math.round(r.width), h: Math.round(r.height) }; };
+    return { app: g("#app"), head: g("header"), body: g("#body"), tabs: g("nav.tabs") };
+  });
+  ok("머리말이 본문 위에 가로로 눕는다", box.head.w > box.app.w * 0.7,
+     `머리말 ${box.head.w}px / 전체 ${box.app.w}px`);
+  ok("머리말이 오른쪽 세로 띠가 아니다", box.head.h < 120, box.head.h + "px");
+  ok("탭 레일은 맨 왼쪽에 세로로 선다",
+     box.tabs.x === 0 && box.tabs.w < 200, `x=${box.tabs.x} w=${box.tabs.w}`);
+  ok("본문이 레일 오른쪽을 다 쓴다",
+     box.body.x === box.tabs.w && box.body.w > box.app.w * 0.7,
+     `x=${box.body.x} w=${box.body.w}`);
+
+  // 경계선 끌기
+  const w0 = await p7.locator("#kbsplit > .left").evaluate((e) => e.getBoundingClientRect().width);
+  const g = await p7.locator("#kbsplit > .gutter").boundingBox();
+  await p7.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await p7.mouse.down();
+  await p7.mouse.move(g.x + g.width / 2 + 140, g.y + g.height / 2, { steps: 8 });
+  await p7.mouse.up();
+  const w1 = await p7.locator("#kbsplit > .left").evaluate((e) => e.getBoundingClientRect().width);
+  ok("경계선을 끌면 목록이 넓어진다", Math.abs(w1 - (w0 + 140)) < 12, `${Math.round(w0)} → ${Math.round(w1)}`);
+
+  // 너무 좁히면 이름이 잘려 쓸모가 없다 → 하한이 있어야 한다
+  await p7.mouse.move(g.x + g.width / 2 + 140, g.y + g.height / 2);
+  await p7.mouse.down();
+  await p7.mouse.move(10, g.y + g.height / 2, { steps: 8 });
+  await p7.mouse.up();
+  const w2 = await p7.locator("#kbsplit > .left").evaluate((e) => e.getBoundingClientRect().width);
+  ok("아무리 좁혀도 하한을 지킨다", w2 >= 219, Math.round(w2) + "px");
+
+  // 정한 너비는 기억한다 — 탭마다 따로.
+  // 저장은 손을 뗀 뒤에 하므로 새로고침 전에 잠깐 기다린다. (실제로 쓸 때는
+  // 탭만 옮기지 새로고침을 하지 않아서 문제가 안 된다)
+  await p7.waitForTimeout(400);
+  await p7.reload({ waitUntil: "networkidle" });
+  await p7.waitForSelector("#kbsplit .gutter");
+  await p7.waitForTimeout(300);
+  const w3 = await p7.locator("#kbsplit > .left").evaluate((e) => e.getBoundingClientRect().width);
+  ok("다시 열어도 그 너비를 기억한다", Math.abs(w3 - w2) < 3, `${Math.round(w2)} → ${Math.round(w3)}`);
+
+  await p7.click('nav.tabs a[data-tab="/customers"]');
+  await p7.waitForSelector("#csplit .gutter", { timeout: 8000 });
+  const wc = await p7.locator("#csplit > .left").evaluate((e) => e.getBoundingClientRect().width);
+  ok("탭마다 너비를 따로 기억한다", Math.abs(wc - 340) < 3, Math.round(wc) + "px");
+
+  // 세 탭 모두에 경계선이 있어야 한다
+  // 서류는 폴더를 정해야 목록이 나온다
+  await ctx6.unroute("**/www.googleapis.com/drive/v3/**");
+  await ctx6.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("files/1AbCdEfGhIjKlMnOpQrStUvWxYz01234?")) {
+      return r.fulfill({ json: { id: "1AbCdEfGhIjKlMnOpQrStUvWxYz01234",
+        mimeType: "application/vnd.google-apps.folder" } });
+    }
+    return r.fulfill({ json: { files: [] } });
+  });
+  await p7.click('nav.tabs a[data-tab="/docs"]');
+  await p7.waitForSelector("#dsave", { timeout: 8000 });
+  await p7.fill("#dref", "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz01234");
+  await p7.click("#dsave");
+  await p7.waitForSelector("#dsplit .gutter", { timeout: 8000 });
+  ok("서류 탭에도 경계선이 있다", (await p7.locator("#dsplit .gutter").count()) === 1);
+  ok("서류 탭 경계선도 끌리는 모양이다",
+     (await p7.locator("#dsplit .gutter").evaluate((e) => getComputedStyle(e).cursor))
+     === "col-resize");
+  await ctx6.close();
+}
+
+console.log("\n[13] PDF — 한 장씩 그림으로 그려 아래로 이어 붙이는지");
+{
+  // pdf.js 는 CDN 에서 받는다. 이 컨테이너의 크로미움은 바깥으로 TLS 를 못 맺으므로
+  // 미리 받아 둔 같은 파일을 물려서 **진짜 pdf.js 로** 그려 본다.
+  // (없으면 이 묶음은 건너뛴다 — 검사가 통신에 매달리면 안 된다)
+  // 두 장짜리 PDF 는 저장소에 넣어 뒀다(844바이트). pdf.js 는 없으면 한 번 받아
+  // 옆에 둔다 — 그다음부터는 통신 없이 돈다.
+  const PDF = process.env.TEST_PDF || join(WEB, "verify", "fixtures", "two.pdf");
+  const CDN = process.env.PDFJS_DIR || join(WEB, "verify", ".pdfjs");
+  if (!existsSync(join(CDN, "pdf.min.mjs"))) {
+    try {
+      mkdirSync(CDN, { recursive: true });
+      for (const f of ["pdf.min.mjs", "pdf.worker.min.mjs"]) {
+        execFileSync("curl", ["-sS", "-f", "-o", join(CDN, f),
+          `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/${f}`]);
+      }
+    } catch (e) { /* 통신이 안 되면 아래에서 건너뛴다 */ }
+  }
+  if (!existsSync(join(CDN, "pdf.min.mjs")) || !existsSync(PDF)) {
+    console.log("  (건너뜀) pdf.js 를 받지 못했다 — 통신이 되는 곳에서 다시 돌려 주세요");
+  } else {
+    const F = "application/vnd.google-apps.folder";
+    const ctx7 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+    await ctx7.addInitScript(() => {
+      sessionStorage.setItem("planner.tok", JSON.stringify({
+        token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+    });
+    const p8 = await page(ctx7);
+    await ctx7.route("**/accounts.google.com/**", (r) => r.abort());
+    await ctx7.route("**/cdnjs.cloudflare.com/**", (r) => {
+      const f = r.request().url().split("/").pop();
+      const file = join(CDN, f);
+      if (!existsSync(file)) return r.abort();
+      return r.fulfill({ body: readFileSync(file),
+                         contentType: "text/javascript; charset=utf-8" });
+    });
+    await ctx7.route("**/www.googleapis.com/drive/v3/**", (r) => {
+      const u = decodeURIComponent(r.request().url());
+      if (u.includes("alt=media")) {
+        return r.fulfill({ body: readFileSync(PDF), contentType: "application/pdf" });
+      }
+      if (u.includes("files/PDFROOT0000000000000000000000?")) {
+        return r.fulfill({ json: { id: "PDFROOT0000000000000000000000", mimeType: F } });
+      }
+      if (u.includes("in parents")) {
+        return r.fulfill({ json: { files: [
+          { id: "pp", name: "계약서.pdf", mimeType: "application/pdf", size: "844" }] } });
+      }
+      return r.fulfill({ json: { files: [] } });
+    });
+    await ctx7.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+
+    await p8.goto(s.url + "#/docs", { waitUntil: "networkidle" });
+    await p8.waitForSelector("#dsave", { timeout: 8000 });
+    await p8.fill("#dref",
+      "https://drive.google.com/drive/folders/PDFROOT0000000000000000000000");
+    await p8.click("#dsave");
+    await p8.waitForSelector("#dlist button.row", { timeout: 8000 });
+    await p8.locator('#dlist button.row', { hasText: "계약서" }).click();
+
+    // ⚠️ 여기가 핵심이다. 예전엔 <iframe> 에 맡겼는데 안드로이드에서는 내장 뷰어가
+    //    있기도 없기도 해서 빈 칸이 나왔다. 이제 장마다 <img> 로 그린다.
+    await p8.waitForSelector(".vpage", { timeout: 30000 });
+    await p8.waitForFunction(() => document.querySelectorAll(".vpage").length >= 2,
+                             null, { timeout: 30000 });
+    const n = await p8.locator(".vpage").count();
+    ok("두 장짜리 PDF 가 두 장으로 그려진다", n === 2, n + "장");
+    ok("iframe 을 쓰지 않는다", (await p8.locator("iframe").count()) === 0);
+    ok("장마다 그림이다", (await p8.locator(".vpage").first().getAttribute("src")).startsWith("blob:"));
+
+    // 아래로 이어 붙었는지 — 둘째 장이 첫 장 아래에 있어야 한다
+    const ys = await p8.locator(".vpage").evaluateAll(
+      (els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    ok("장이 아래로 이어 붙는다", ys[1] > ys[0], ys.join(" → "));
+    const w = await p8.locator(".vpage").first().evaluate((e) => e.getBoundingClientRect().width);
+    ok("장이 화면 폭에 맞는다", w > 300 && w <= 412, Math.round(w) + "px");
+
+    // 그림과 똑같이 확대·스크롤된다 — 조작이 하나여야 한다
+    await p8.locator("#vin").click();
+    ok("PDF 도 확대된다", (await p8.locator(".vpct").textContent()) === "150%");
+    ok("PDF 칸도 스크롤을 막지 않는다",
+       (await p8.locator(".vscroll").evaluate((e) => getComputedStyle(e).touchAction)) === "auto");
+    await ctx7.close();
+  }
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');
@@ -380,14 +578,21 @@ const narrow = await p.evaluate(() =>
 ok("좁으면 세로로 쌓인다(아래 탭바)", narrow === "column", narrow);
 await p.setViewportSize({ width: 880, height: 1100 });
 await p.waitForTimeout(300);
-const wide = await p.evaluate(() =>
-  getComputedStyle(document.querySelector("#app")).flexDirection);
-ok("넓으면 옆으로 눕는다(왼쪽 레일)", wide === "row-reverse", wide);
-const rail = await p.evaluate(() => {
-  const r = document.querySelector("nav.tabs").getBoundingClientRect();
-  const b = document.querySelector("#body").getBoundingClientRect();
-  return { w: r.width, x: r.x, bodyX: b.x };
+// 펼치면 격자로 바뀐다 — 왼쪽 한 줄은 탭 레일이 통째로 쓰고,
+// 오른쪽은 위에 머리말, 아래에 본문이다.
+// (예전엔 flex row 로 눕혔는데, 그러면 머리말까지 오른쪽에 세로 띠로 섰다 —
+//  제목 '일정관리기' 가 화면 절반을 먹던 그 버그다. 자세한 건 [12] 에서 본다)
+const wide = await p.evaluate(() => {
+  const cs = getComputedStyle(document.querySelector("#app"));
+  const g = (sel) => { const r = document.querySelector(sel).getBoundingClientRect();
+                       return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+  return { display: cs.display, head: g("header"), body: g("#body"), tabs: g("nav.tabs") };
 });
+ok("넓으면 격자로 바뀐다", wide.display === "grid", wide.display);
+ok("머리말은 가로로 눕고 본문 위에 있다",
+   wide.head.w > 600 && wide.head.h < 120 && wide.head.y < wide.body.y,
+   `머리말 ${Math.round(wide.head.w)}x${Math.round(wide.head.h)}`);
+const rail = { w: wide.tabs.w, x: wide.tabs.x, bodyX: wide.body.x };
 ok("레일이 세로로 선다", rail.w < 200, Math.round(rail.w) + "px");
 // 세로로 서 있기만 보면 #app 이 안 눕는 버그를 놓친다(실제로 놓쳤다).
 // 레일이 본문 **왼쪽**에 있는지까지 봐야 잡힌다.

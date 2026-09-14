@@ -12,6 +12,7 @@ import { parseRows, statuses, HeaderNotFound } from "../customers.js";
 import { DEF_SHEET_ID, DEF_SHEET_NAME } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
+import { attach } from "./split.js";
 
 let _rows = [];
 let _prep = [];          // 미리 다듬어 둔 검색 재료 (칠 때마다 다시 만들지 않는다)
@@ -108,6 +109,7 @@ export async function screen(m) {
       </div>
       <div class="right"><div class="pane" id="cdetail"></div></div>
     </div>`);
+  attach($("#csplit"), "customers");
 
   const input = $("#cq");
   const run = () => { _q = input.value; store.ui({ cQuery: _q }); paintList(); };

@@ -11,6 +11,8 @@ import * as sheets from "../sheets.js";
 import * as hangul from "../hangul.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
+import * as viewer from "./viewer.js";
+import { attach } from "./split.js";
 
 let _rootId = "";
 let _top = [];           // 맨 윗 겹 (대개 고객 폴더들)
@@ -18,7 +20,7 @@ let _prep = [];
 let _q = "";
 let _err = "";
 let _timer = 0;
-let _blob = "";          // 지금 보고 있는 파일의 blob 주소 (반드시 되돌려준다)
+let _view = null;        // 지금 띄운 보기 (닫을 때 blob 주소를 되돌려준다)
 const SEARCH_DELAY = 130;
 const RECENT_MAX = 8;
 
@@ -78,7 +80,7 @@ async function touch(id, name) {
 // ---------------------------------------------------------------- 화면
 export async function screen(m) {
   markTab("/docs");
-  freeBlob();
+  closeView();
   const path = router.current() ? router.current().path : "/docs";
   const ref = await folderRef();
   if (!ref) return setupScreen();
@@ -87,15 +89,19 @@ export async function screen(m) {
   const ui = await store.ui();
   _q = ui.dQuery || "";
   setBody(html`
-    <div class="pane">
-      <div class="searchbar">
-        <input id="dq" type="search" value="${_q}" autocomplete="off" enterkeyhint="search"
-               placeholder="고객 폴더 검색 (초성도 됩니다)">
-      </div>
-      <div id="drecent"></div>
-      <ul class="list" id="dlist"></ul>
-      <p class="synced"><button class="linky" id="dsetup">서류 폴더 바꾸기</button></p>
+    <div class="split" id="dsplit">
+      <div class="left"><div class="pane">
+        <div class="searchbar">
+          <input id="dq" type="search" value="${_q}" autocomplete="off" enterkeyhint="search"
+                 placeholder="고객 폴더 검색 (초성도 됩니다)">
+        </div>
+        <div id="drecent"></div>
+        <ul class="list" id="dlist"></ul>
+        <p class="synced"><button class="linky" id="dsetup">서류 폴더 바꾸기</button></p>
+      </div></div>
+      <div class="right"><div class="pane" id="dview"></div></div>
     </div>`);
+  attach($("#dsplit"), "docs");
   const input = $("#dq");
   const run = () => { _q = input.value; store.ui({ dQuery: _q }); paintList(); };
   input.addEventListener("input", () => {
@@ -210,12 +216,15 @@ function wireRows(el) {
 // ---------------------------------------------------------------- 폴더 안
 async function folderScreen(id, name) {
   setBody(html`
-    <div class="pane">
-      <button class="chip backbtn2" id="dback">← 뒤로</button>
-      <h2 id="dtitle" style="margin:10px 0 8px">${name || "폴더"}</h2>
-      <ul class="list" id="dlist"><li class="empty">읽는 중입니다…</li></ul>
-      <div id="dview"></div>
+    <div class="split" id="dsplit">
+      <div class="left"><div class="pane">
+        <button class="chip backbtn2" id="dback">← 뒤로</button>
+        <h2 id="dtitle" style="margin:10px 0 8px">${name || "폴더"}</h2>
+        <ul class="list" id="dlist"><li class="empty">읽는 중입니다…</li></ul>
+      </div></div>
+      <div class="right"><div class="pane" id="dview"></div></div>
     </div>`);
+  attach($("#dsplit"), "docs");
   $("#dback").onclick = () => history.length > 1 ? history.back() : router.go("/docs");
   const key = "folder:" + id;
   const cached = await store.get("data", key);
@@ -245,49 +254,49 @@ function drawFolder(items, name) {
 }
 
 // ---------------------------------------------------------------- 파일 보기
-function freeBlob() {
-  if (_blob) { URL.revokeObjectURL(_blob); _blob = ""; }
+function closeView() {
+  if (_view) { _view.close(); _view = null; }
 }
 
 async function openFile(id, name) {
   const box = $("#dview");
+  const split = $("#dsplit");
   if (!box) return;
-  freeBlob();
+  closeView();
+  // 좁은 화면(접힌 커버)에서는 목록을 숨기고 보기만 남긴다
+  if (split) split.classList.add("detail");
+  const back = () => {
+    closeView();
+    render(box, "");
+    if (split) split.classList.remove("detail");
+  };
+
+  const bail = (msgHtml) => {
+    render(box, html`<button class="chip backbtn" id="vback">← 목록</button>
+      <p class="empty">${raw(msgHtml)}</p>
+      <p style="text-align:center"><a class="bigcopy" href="${drive.openInDrive(id)}"
+         target="_blank" rel="noopener">드라이브 앱에서 열기</a></p>`);
+    const b = $("#vback");
+    if (b) b.onclick = back;
+    box.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+
   if (drive.needsDriveApp(name)) {
-    // 브라우저는 TIFF 를 못 그린다. 팩스가 이 형식으로 오므로 안내를 정확히 한다.
-    render(box, html`<div class="viewer">
-      <p class="empty">이 형식(${drive.ext(name).toUpperCase()})은 브라우저가 그리지 못합니다.</p>
-      <a class="bigcopy" href="${drive.openInDrive(id)}" target="_blank"
-         rel="noopener">드라이브 앱에서 열기</a></div>`);
-    box.scrollIntoView({ block: "start", behavior: "smooth" });
-    return;
+    // 브라우저는 TIFF 를 못 그린다. 팩스가 이 형식으로 오므로 얼버무리지 않는다.
+    return bail(`이 형식(${esc(drive.ext(name).toUpperCase())})은 브라우저가 그리지 못합니다.`);
   }
-  if (!drive.canPreview(name)) {
-    render(box, html`<div class="viewer">
-      <p class="empty">앱 안에서 볼 수 없는 형식입니다.</p>
-      <a class="bigcopy" href="${drive.openInDrive(id)}" target="_blank"
-         rel="noopener">드라이브 앱에서 열기</a></div>`);
-    box.scrollIntoView({ block: "start", behavior: "smooth" });
-    return;
-  }
-  render(box, html`<div class="viewer"><p class="empty">불러오는 중…</p></div>`);
+  if (!drive.canPreview(name)) return bail("앱 안에서 볼 수 없는 형식입니다.");
+
+  render(box, html`<p class="empty">불러오는 중…</p>`);
   box.scrollIntoView({ block: "start", behavior: "smooth" });
   try {
     const blob = await drive.download(id);
-    _blob = URL.createObjectURL(blob);
-    render(box, html`<div class="viewer">
-      <div class="vhead"><b>${name}</b>
-        <a class="chip" href="${drive.openInDrive(id)}" target="_blank" rel="noopener">드라이브에서</a>
-        <button class="chip" id="dclose">닫기</button></div>
-      ${raw(drive.isPdf(name)
-        ? `<iframe class="vpdf" src="${esc(_blob)}" title="${esc(name)}"></iframe>`
-        : `<img class="vimg" src="${esc(_blob)}" alt="${esc(name)}">`)}</div>`);
-    $("#dclose").onclick = () => { freeBlob(); render(box, ""); };
+    _view = viewer.mount(box, {
+      blob, name, isPdf: drive.isPdf(name), driveUrl: drive.openInDrive(id),
+    });
+    _view.onClose(back);
   } catch (e) {
-    render(box, html`<div class="viewer"><p class="empty">${
-      e instanceof sheets.NeedSignIn ? "구글 로그인이 필요합니다."
-        : (e.message || "파일을 열지 못했습니다.")}</p>
-      <a class="bigcopy" href="${drive.openInDrive(id)}" target="_blank"
-         rel="noopener">드라이브 앱에서 열기</a></div>`);
+    bail(esc(e instanceof sheets.NeedSignIn ? "구글 로그인이 필요합니다."
+      : (e.message || "파일을 열지 못했습니다.")));
   }
 }
