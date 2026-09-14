@@ -84,7 +84,9 @@ jobs:
       - name: 릴리스 본문 준비 (CHANGELOG.md 에서)
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         shell: bash
-        run: python tools/extract_release_notes.py "${{ inputs.release_tag || github.ref_name }}" > RELEASE_NOTES.md
+        # 파일 이름을 넘겨 UTF-8 로 직접 쓰게 한다. `>` 로 받으면 윈도 파이썬이
+          # 화면 출력을 cp1252 로 잡아 한글 ■ 에서 죽는다(v1.12.0 이 이걸로 실패했다).
+          run: python tools/extract_release_notes.py "${{ inputs.release_tag || github.ref_name }}" RELEASE_NOTES.md
 
       - name: 릴리스 배포 (태그 push / release / 수동입력 태그)
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
