@@ -29,6 +29,10 @@ export const SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",
   // 할일은 **체크**까지 한다. 밖에서 '했다' 를 누르는 게 이 화면의 쓸모다.
   "https://www.googleapis.com/auth/tasks",
+  // 앱 전용 숨김 폴더 — 시트 주소·서류 폴더를 **계정에 붙여** 보관한다.
+  // 브라우저에 두면 기기마다 다시 입력해야 하고, 기기를 바꾸면 사라진다.
+  // PC 앱이 이미 여기에 설정을 올리고 있어서 그것도 그대로 읽어 온다.
+  "https://www.googleapis.com/auth/drive.appdata",
 ].join(" ");
 
 export const CALENDAR_API = "https://www.googleapis.com/calendar/v3";

@@ -12,6 +12,7 @@ import * as hangul from "../hangul.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
 import * as viewer from "./viewer.js";
+import * as appdata from "../appdata.js";
 import { attach } from "./split.js";
 
 let _rootId = "";
@@ -25,7 +26,13 @@ const SEARCH_DELAY = 130;
 const RECENT_MAX = 8;
 
 // ---------------------------------------------------------------- 설정·목록
-const setFolderRef = (v) => store.put("meta", "driveFolder", v);
+async function setFolderRef(v) {
+  await store.put("meta", "driveFolder", v);
+  // 계정에도 남긴다 — 기기를 바꿔도 따라온다.
+  // ⚠️ 기다리지 않는다. 이 기기에는 이미 저장됐고, 이건 덤이다.
+  //    기다리면 통신이 느릴 때 사람이 그만큼 멍하니 서 있게 된다.
+  appdata.saveSettings({ driveFolder: v }).catch(() => {});
+}
 const folderRef = () => store.get("meta", "driveFolder").then((v) => v || "");
 
 export async function load({ refresh = true } = {}) {

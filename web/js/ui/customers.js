@@ -10,6 +10,7 @@ import * as hangul from "../hangul.js";
 import * as fmt from "../fmt.js";
 import { parseRows, statuses, HeaderNotFound, docUrl, driveIdOf } from "../customers.js";
 import * as drive from "../drive.js";
+import * as appdata from "../appdata.js";
 import * as viewer from "./viewer.js";
 import { DEF_SHEET_ID, DEF_SHEET_NAME } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
@@ -44,6 +45,9 @@ async function saveSettings(id, tab) {
   await store.put("meta", "sheet", { id: _sheetId, tab: _sheetTab });
   await store.del("data", "customers");
   _rows = []; _prep = []; _syncedAt = 0;
+  // 계정에도 남긴다 — 다른 기기에서 로그인해도 다시 넣지 않게.
+  // ⚠️ 기다리지 않는다. 이 기기에는 이미 저장됐고, 이건 덤이다.
+  appdata.saveSettings({ sheetId: _sheetId, sheetTab: _sheetTab }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- 자료 받기

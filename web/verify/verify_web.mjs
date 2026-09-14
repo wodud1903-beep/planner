@@ -308,6 +308,10 @@ console.log("\n[10] 탭 이름이 틀렸을 때 — 400 을 사람이 고칠 수
   });
   const p5 = await page(ctx4);
   await ctx4.route("**/accounts.google.com/**", (r) => r.abort());
+  // 설정을 계정에서 읽으므로 드라이브도 막아 둬야 한다. 안 막으면 진짜 구글로
+  // 나가려다 networkidle 이 영영 안 온다.
+  await ctx4.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctx4.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
   await ctx4.route("**/sheets.googleapis.com/**", (r) => {
     const u = decodeURIComponent(r.request().url());
     // 구글이 실제로 돌려주는 모양 그대로
@@ -364,8 +368,13 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   const p6 = await page(ctx5);
   const dl = [];
   await ctx5.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx5.route("**/upload/drive/v3/**", (r) => r.fulfill({ json: { id: "W" } }));
+  await ctx5.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
   await ctx5.route("**/www.googleapis.com/drive/v3/**", (r) => {
     const u = decodeURIComponent(r.request().url());
+    // 앱 전용 폴더(설정 보관소) 조회는 서류 조회와 갈라 둔다. 안 그러면
+    // 아래 name= 가지에 걸려 설정 파일을 서류인 줄 알고 내려받는다.
+    if (u.includes("appDataFolder")) return r.fulfill({ json: { files: [] } });
     if (u.includes("alt=media")) { dl.push(u); return r.fulfill({ body: PNG, contentType: "image/png" }); }
     if (/files\/1AbCdEfGhIjKlMnOpQrStUvWxYz01234\?/.test(u)) return r.fulfill({ json: { id: "1AbCdEfGhIjKlMnOpQrStUvWxYz01234", mimeType: F } });
     if (u.includes("'1AbCdEfGhIjKlMnOpQrStUvWxYz01234' in parents")) return r.fulfill({ json: { files: TOP } });
@@ -466,6 +475,7 @@ console.log("\n[12] 펼친 화면 — 머리말이 옆으로 서지 않는다 ·
   await ctx6.route("**/accounts.google.com/**", (r) => r.abort());
   await ctx6.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
   await ctx6.route("**/www.googleapis.com/drive/v3/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctx6.route("**/upload/drive/v3/**", (r) => r.fulfill({ json: { id: "W" } }));
   await p7.goto(s.url + "#/kb", { waitUntil: "networkidle" });
   await p7.waitForSelector("#kbsplit .gutter", { timeout: 8000 });
 
@@ -571,6 +581,7 @@ console.log("\n[13] PDF — 한 장씩 그림으로 그려 아래로 이어 붙�
     });
     const p8 = await page(ctx7);
     await ctx7.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctx7.route("**/upload/drive/v3/**", (r) => r.fulfill({ json: { id: "W" } }));
     await ctx7.route("**/cdnjs.cloudflare.com/**", (r) => {
       const f = r.request().url().split("/").pop();
       const file = join(CDN, f);
@@ -940,6 +951,7 @@ console.log("\n[18] 넓은 화면에서 서류가 지나치게 커지지 않는�
     "base64");
   const pD = await page(ctxD);
   await ctxD.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxD.route("**/upload/drive/v3/**", (r) => r.fulfill({ json: { id: "W" } }));
   await ctxD.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
   await ctxD.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
   await ctxD.route("**/www.googleapis.com/calendar/v3/**", (r) => r.fulfill({ json: { items: [] } }));
@@ -972,6 +984,82 @@ console.log("\n[18] 넓은 화면에서 서류가 지나치게 커지지 않는�
      Math.abs((box.imgX - box.paneX) - (box.pane - box.img) / 2) < 3,
      `img x=${box.imgX} pane x=${box.paneX}`);
   await ctxD.close();
+}
+
+console.log("\n[19] 설정이 계정을 따라다니는지 (드라이브 앱 전용 폴더)");
+{
+  // 이 기기에는 아무것도 없다. 그런데 PC 앱이 올려 둔 설정이 계정에 있다.
+  // → 폰에서 아무것도 입력하지 않아도 그대로 쓸 수 있어야 한다.
+  const ctxE = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await ctxE.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const pE = await page(ctxE);
+  const PCCFG = JSON.stringify({ sheetId: "PCSHEET123", sheetName: "미출고차량(PC)",
+                                 filesDriveFolder: "PC 서류함" });
+  const wrote = [];
+  await ctxE.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxE.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxE.route("**/www.googleapis.com/calendar/v3/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxE.route("**/upload/drive/v3/**", async (r) => {
+    wrote.push(r.request().postData() || "");
+    return r.fulfill({ json: { id: "W1" } });
+  });
+  await ctxE.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("appDataFolder") && u.includes("planner_web.json")) {
+      return r.fulfill({ json: { files: [] } });          // 웹앱 파일은 아직 없다
+    }
+    if (u.includes("appDataFolder") && u.includes("planner_sync.json")) {
+      return r.fulfill({ json: { files: [{ id: "SYNC1", name: "planner_sync.json" }] } });
+    }
+    if (u.includes("files/SYNC1") && u.includes("alt=media")) {
+      return r.fulfill({ body: JSON.stringify({ files: { "plan_cfg.json": PCCFG } }),
+                         contentType: "application/json" });
+    }
+    return r.fulfill({ json: { files: [] } });
+  });
+  const asked = [];
+  await ctxE.route("**/sheets.googleapis.com/**", (r) => {
+    asked.push(decodeURIComponent(r.request().url()));
+    return r.fulfill({ json: { values: [] } });
+  });
+
+  await pE.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pE.waitForTimeout(2000);
+  // ⚠️ 이게 핵심이다. 폰에서 시트 주소를 한 번도 넣지 않았는데, PC 에 넣어 둔
+  //    값을 계정에서 물려받아 바로 조회해야 한다.
+  ok("PC 에 넣어 둔 시트를 그대로 물려받는다",
+     asked.some((u) => u.includes("PCSHEET123")),
+     asked.filter((u) => u.includes("spreadsheets/")).map((u) => u.slice(46, 60)).join(" "));
+  ok("탭 이름도 물려받는다",
+     asked.some((u) => u.includes("미출고차량(PC)")),
+     asked.filter((u) => u.includes("!A1:Q")).map((u) => u.slice(-60)).join(" "));
+
+  await pE.click('nav.tabs a[data-tab="/docs"]');
+  await pE.waitForTimeout(800);
+  ok("서류 폴더도 물려받아 설정 화면이 안 뜬다",
+     (await pE.locator("#dsave").count()) === 0);
+
+  // 폰에서 바꾸면 계정에도 올라가야 한다 — 다음에 PC 나 다른 기기에서 쓰게
+  await pE.click('nav.tabs a[data-tab="/customers"]');
+  await pE.waitForSelector("#cconf", { timeout: 8000 });
+  await pE.click("#cconf");
+  await pE.waitForSelector("#sid");
+  await pE.fill("#sid", "PHONESHEET9");
+  await ctxE.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    asked.push(u);
+    if (u.includes("fields=properties.title")) return r.fulfill({ json: {
+      properties: { title: "폰에서 바꾼 시트" }, sheets: [{ properties: { title: "미출고차량" } }] } });
+    return r.fulfill({ json: { values: [] } });
+  });
+  await pE.click("#sload");
+  await pE.waitForTimeout(900);
+  ok("폰에서 바꾼 설정을 계정에 올린다",
+     wrote.some((b) => b.includes("PHONESHEET9")), wrote.join(" | ").slice(0, 120));
+  await ctxE.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

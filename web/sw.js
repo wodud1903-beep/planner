@@ -18,7 +18,7 @@ const PRECACHE = [
   "./css/app.css",
   "./js/boot.js", "./js/config.js", "./js/store.js", "./js/auth.js",
   "./js/sheets.js", "./js/hangul.js", "./js/fmt.js", "./js/kb.js",
-  "./js/customers.js", "./js/drive.js", "./js/commission.js", "./js/gcal.js",
+  "./js/customers.js", "./js/drive.js", "./js/commission.js", "./js/gcal.js", "./js/appdata.js",
   "./js/router.js",
   "./js/ui/dom.js", "./js/ui/chrome.js", "./js/ui/kb.js", "./js/ui/about.js",
   "./js/ui/customers.js", "./js/ui/docs.js",

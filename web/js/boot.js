@@ -6,6 +6,7 @@ import { shell, paintState } from "./ui/chrome.js";
 import * as router from "./router.js";
 import * as auth from "./auth.js";
 import * as store from "./store.js";
+import * as appdata from "./appdata.js";
 import * as kbui from "./ui/kb.js";
 import * as cust from "./ui/customers.js";
 import * as docs from "./ui/docs.js";
@@ -60,6 +61,11 @@ router.on(/^\/docs$/, () => docs.screen(null));
     if (who) await store.useAccount(who);
   } catch (e) { /* 못 알아내면 마지막 사람으로 본다 */ }
 
+  // 이 기기에 아직 없는 설정은 **계정에 저장된 것**으로 채운다.
+  // PC 앱이 올려 둔 것도 그대로 읽으므로, PC 에서 쓰시던 분은 폰에서
+  // 시트 주소나 서류 폴더를 따로 넣을 일이 없다.
+  await pullSettings();
+
   await cust.loadSettings();          // 시트 주소·탭은 라우팅 전에 읽어 둔다
   const ui = await store.ui();
   if (!location.hash && ui.route) location.hash = ui.route;
@@ -79,6 +85,24 @@ router.on(/^\/docs$/, () => docs.screen(null));
 
   registerSW();
 })();
+
+async function pullSettings() {
+  try {
+    const have = await store.get("meta", "sheet");
+    const folder = await store.get("meta", "driveFolder");
+    if (have && have.id && folder) return;      // 이 기기에 이미 다 있다
+    const got = await appdata.loadSettings();
+    if (!got) return;
+    if ((!have || !have.id) && got.sheetId) {
+      await store.put("meta", "sheet",
+                      { id: got.sheetId, tab: got.sheetTab || "미출고차량" });
+    }
+    if (!folder && got.driveFolder) await store.put("meta", "driveFolder", got.driveFolder);
+  } catch (e) {
+    // 권한이 아직 없거나(다시 로그인 전) 통신이 안 되면 그냥 넘어간다.
+    // 이 기기에 저장된 값이 있으면 그것으로 계속 쓴다.
+  }
+}
 
 // ---------------------------------------------------------------- 자동 갱신
 async function registerSW() {
