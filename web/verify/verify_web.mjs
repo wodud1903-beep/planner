@@ -63,6 +63,24 @@ ok("모든 파일이 프리캐시에 올라 있다", notPre.length === 0, notPre
 const s = await serve(WEB, { port: 8123, build: "A" });
 const browser = await chromium.launch();
 
+// 앱이 뜨기 전에 IndexedDB 에 미리 넣어 둔다(시트 주소·서류 폴더·계정).
+// 기본 시트 주소를 없앴으므로 검사도 '정해 둔 상태' 를 만들어야 한다.
+function seed(ctx, rec) {
+  return ctx.addInitScript((r) => {
+    const req = indexedDB.open("planner", 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
+      if (!db.objectStoreNames.contains("data")) db.createObjectStore("data");
+      if (!db.objectStoreNames.contains("recent")) db.createObjectStore("recent", { keyPath: "uid" });
+    };
+    req.onsuccess = () => {
+      const t = req.result.transaction("meta", "readwrite").objectStore("meta");
+      for (const [k, v] of Object.entries(r)) t.put(v, k);
+    };
+  }, rec);
+}
+
 async function page(ctx) {
   const p = await ctx.newPage();
   p.on("pageerror", (e) => { console.log("  ** 페이지 오류 **", e.message); fails++; });
@@ -134,6 +152,9 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   // 구글에 실제로 못 가므로 (a) 토큰을 미리 넣어 두고 (b) 시트 API 를 가로챈다.
   // 그래야 목록 → 검색 → 상세 → 멘트 복사까지 진짜 코드로 확인할 수 있다.
   const ctx3 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await seed(ctx3, { account: "me@example.com",
+                     sheet: { id: "1L6UwkuywIEAffPvQX9GWwsP8Ix_6fP8uakNFfV1iAm8",
+                              tab: "미출고차량" } });
   await ctx3.addInitScript(() => {
     sessionStorage.setItem("planner.tok", JSON.stringify({
       // ⚠️ 토큰은 반드시 ASCII 여야 한다. HTTP 헤더 값은 Latin-1 만 되므로
@@ -278,6 +299,9 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
 console.log("\n[10] 탭 이름이 틀렸을 때 — 400 을 사람이 고칠 수 있게 알려 주나");
 {
   const ctx4 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await seed(ctx4, { account: "me@example.com",
+                     sheet: { id: "1L6UwkuywIEAffPvQX9GWwsP8Ix_6fP8uakNFfV1iAm8",
+                              tab: "미출고차량" } });
   await ctx4.addInitScript(() => {
     sessionStorage.setItem("planner.tok", JSON.stringify({
       token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
@@ -814,6 +838,140 @@ console.log("\n[16] 수당율 탭이 없을 때 — 앱에 든 기본 표로 계
      (await pA.locator("#cres").textContent()) === "₩ 1,367,859",
      await pA.locator("#cres").textContent());
   await ctxA.close();
+}
+
+console.log("\n[17] 시트 주소를 안 정했을 때 · 계정이 바뀌었을 때");
+{
+  // (가) 기본 주소를 없앴으므로, 아무것도 안 정한 상태면 넣으라고 해야 한다.
+  //      예전엔 여기에 특정인의 시트 주소가 박혀 있어서, 다른 직원이 자기
+  //      계정으로 로그인해도 남의 고객 목록이 그대로 열렸다.
+  const ctxB = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await ctxB.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const pB = await page(ctxB);
+  const asked = [];
+  await ctxB.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxB.route("**/oauth2/v3/userinfo", (r) => r.fulfill({ json: { email: "me@example.com" } }));
+  await ctxB.route("**/sheets.googleapis.com/**", (r) => {
+    asked.push(decodeURIComponent(r.request().url()));
+    return r.fulfill({ json: { values: [] } });
+  });
+  await ctxB.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctxB.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+
+  await pB.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pB.waitForTimeout(1200);
+  const msg = await pB.locator("#clist .empty").textContent();
+  ok("시트를 안 정했으면 정하라고 한다", msg.includes("시트 설정"), msg.slice(0, 40));
+  // ⚠️ 남의 시트 주소가 박혀 있으면 안 된다 — 안 정했는데 조회를 시도하면 그 뜻이다
+  ok("정하지 않았으면 고객 시트를 아예 조회하지 않는다",
+     !asked.some((u) => u.includes("미출고차량")), asked.join(" "));
+  ok("로그인한 계정을 화면에 보여 준다",
+     (await pB.locator("#whochip").textContent()) === "me@example.com");
+  await ctxB.close();
+
+  // (나) 계정이 바뀌면 앞사람 자료가 남으면 안 된다.
+  const ctxC = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await seed(ctxC, {
+    account: "앞사람@example.com",
+    sheet: { id: "SECRETSHEET", tab: "미출고차량" },
+    driveFolder: "앞사람 서류함",
+    "split:kb": 300,
+  });
+  await ctxC.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "" }));
+  });
+  const pC = await page(ctxC);
+  const touched = [];
+  await ctxC.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxC.route("**/oauth2/v3/userinfo", (r) =>
+    r.fulfill({ json: { email: "새사람@example.com" } }));
+  await ctxC.route("**/sheets.googleapis.com/**", (r) => {
+    touched.push(decodeURIComponent(r.request().url()));
+    return r.fulfill({ json: { values: [] } });
+  });
+  await ctxC.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    touched.push(decodeURIComponent(r.request().url()));
+    return r.fulfill({ json: { files: [] } });
+  });
+  await ctxC.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxC.route("**/www.googleapis.com/calendar/v3/**", (r) => r.fulfill({ json: { items: [] } }));
+
+  await pC.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pC.waitForTimeout(2000);
+  const left = await pC.evaluate(() => new Promise((res) => {
+    const q = indexedDB.open("planner", 1);
+    q.onsuccess = () => {
+      const t = q.result.transaction("meta", "readonly").objectStore("meta");
+      const a = t.getAllKeys();
+      a.onsuccess = () => {
+        const g = q.result.transaction("meta", "readonly").objectStore("meta").get("account");
+        g.onsuccess = () => res({ keys: a.result, account: g.result });
+      };
+    };
+  }));
+  ok("계정이 바뀌면 앞사람 계정을 새 계정으로 바꾼다",
+     left.account === "새사람@example.com", String(left.account));
+  ok("앞사람의 시트 주소를 지운다", !left.keys.includes("sheet"), left.keys.join(","));
+  ok("앞사람의 서류 폴더도 지운다", !left.keys.includes("driveFolder"), left.keys.join(","));
+  ok("화면 설정(목록 너비)은 남긴다", left.keys.includes("split:kb"), left.keys.join(","));
+  ok("앞사람 시트를 조회하지 않는다",
+     !touched.some((u) => u.includes("SECRETSHEET")),
+     touched.filter((u) => u.includes("SECRET")).join(" "));
+  const m2 = await pC.locator("#clist .empty").textContent();
+  ok("새 계정에는 시트를 다시 정하라고 한다", m2.includes("시트 설정"), m2.slice(0, 40));
+  await ctxC.close();
+}
+
+console.log("\n[18] 넓은 화면에서 서류가 지나치게 커지지 않는다");
+{
+  const ctxD = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+  await seed(ctxD, { account: "me@example.com", driveFolder: "1AbCdEfGhIjKlMnOpQrStUvWxYz01234" });
+  await ctxD.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const F = "application/vnd.google-apps.folder";
+  const PNG2 = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64");
+  const pD = await page(ctxD);
+  await ctxD.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxD.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+  await ctxD.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxD.route("**/www.googleapis.com/calendar/v3/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxD.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("alt=media")) return r.fulfill({ body: PNG2, contentType: "image/png" });
+    if (u.includes("files/1AbCdEfGhIjKlMnOpQrStUvWxYz01234?")) {
+      return r.fulfill({ json: { id: "1AbCdEfGhIjKlMnOpQrStUvWxYz01234", mimeType: F } });
+    }
+    if (u.includes("in parents")) return r.fulfill({ json: { files: [
+      { id: "z1", name: "계약서.jpg", mimeType: "image/jpeg", size: "1000" }] } });
+    return r.fulfill({ json: { files: [] } });
+  });
+
+  await pD.goto(s.url + "#/docs", { waitUntil: "networkidle" });
+  await pD.waitForSelector("#dlist button.row", { timeout: 10000 });
+  await pD.locator("#dlist button.row").first().click();
+  await pD.waitForSelector(".vimg", { timeout: 10000 });
+  const box = await pD.evaluate(() => {
+    const i = document.querySelector(".vimg").getBoundingClientRect();
+    const v = document.querySelector(".vscroll").getBoundingClientRect();
+    return { img: Math.round(i.width), imgX: Math.round(i.x),
+             pane: Math.round(v.width), paneX: Math.round(v.x) };
+  });
+  // ⚠️ PC 처럼 넓은 화면에서 width:100% 만 두면 서류 한 장이 화면 전체로 늘어나
+  //    오히려 읽기 어렵다. 종이가 편히 읽히는 폭까지만 키운다.
+  ok("넓은 화면에서 서류가 화면 전체로 늘어나지 않는다",
+     box.img <= 820, box.img + "px (칸 " + box.pane + "px)");
+  ok("서류가 가운데에 온다",
+     Math.abs((box.imgX - box.paneX) - (box.pane - box.img) / 2) < 3,
+     `img x=${box.imgX} pane x=${box.paneX}`);
+  await ctxD.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

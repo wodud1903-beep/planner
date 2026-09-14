@@ -13,6 +13,7 @@ const KEY = "planner.tok";
 let _tok = null;          // {token, expiresAt, email}
 let _client = null;
 let _listeners = [];
+let _emailFns = [];
 
 export const STATE = {
   UNKNOWN: "unknown", AUTHED: "authed", NEED: "needsSignIn", OFFLINE: "offline",
@@ -22,6 +23,11 @@ let _state = STATE.UNKNOWN;
 export function state() { return _state; }
 export function email() { return _tok && _tok.email || ""; }
 export function onChange(fn) { _listeners.push(fn); }
+/** 로그인 계정(이메일)을 알게 됐을 때 부른다. 계정이 바뀌었는지 판단하는 쪽에서 쓴다. */
+export function onEmail(fn) { _emailFns.push(fn); }
+function tellEmail(e) {
+  for (const fn of _emailFns) { try { fn(e); } catch (x) { /* 하나가 탈나도 계속 */ } }
+}
 function setState(s) {
   if (s === _state) return;
   _state = s;
@@ -78,7 +84,9 @@ export function acquire({ interactive = false, timeoutMs = 4000 } = {}) {
       };
       save(t);
       finish(t);
-      fetchEmail(t);                  // 계정 이름은 뒤에서 채운다
+      // ⚠️ 계정 이름은 '있으면 좋은 것' 이 아니다. 누구로 로그인했는지 모르면
+      //    앞사람 자료가 남아 있어도 걸러낼 수 없다(실제로 그렇게 새어 나갔다).
+      fetchEmail(t);
     };
     // 조용한 시도는 답이 없을 수 있다 → 기다리다 포기한다
     if (!interactive) setTimeout(() => finish(null), timeoutMs);
@@ -93,10 +101,36 @@ async function fetchEmail(t) {
     const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
       headers: { Authorization: "Bearer " + t.token },
     });
-    if (!r.ok) return;
+    if (!r.ok) return "";
     const j = await r.json();
-    if (j.email) { t.email = j.email; save(t); setState(STATE.AUTHED); }
-  } catch (e) { /* 계정 이름은 없어도 그만 */ }
+    if (j.email) {
+      t.email = j.email; save(t); setState(STATE.AUTHED); tellEmail(j.email);
+      return j.email;
+    }
+  } catch (e) { /* 못 물어보면 빈 값 */ }
+  return "";
+}
+
+/** 지금 로그인한 계정을 **확실히** 알아낸다.
+ *
+ * ⚠️ 이건 '있으면 좋은 것' 이 아니다. 누구로 로그인했는지 모르는 채로 화면을
+ *    그리면 **앞사람 자료를 그대로 보여 준다.** 실제로 다른 계정으로 로그인했는데
+ *    앞사람의 일정과 고객 목록이 나왔고, 앞사람 시트를 조회하기까지 했다.
+ *    그래서 켤 때 이걸 먼저 기다린다.
+ *    통신이 안 되면 빈 값을 돌려준다 — 그때는 이 기기의 마지막 사람으로 본다.
+ */
+export async function ensureEmail({ timeoutMs = 4000 } = {}) {
+  if (_tok && _tok.email) return _tok.email;
+  if (!_tok) {
+    const t = await acquire({ interactive: false, timeoutMs });
+    if (!t) return "";
+  }
+  if (_tok && _tok.email) return _tok.email;
+  if (!_tok) return "";
+  return Promise.race([
+    fetchEmail(_tok),
+    new Promise((r) => setTimeout(() => r(""), timeoutMs)),
+  ]);
 }
 
 export async function token({ interactive = false } = {}) {
@@ -117,7 +151,11 @@ export function signOut() {
 
 export function init() {
   const cached = load();
-  if (cached) { _tok = cached; setState(STATE.AUTHED); }
+  if (cached) {
+    _tok = cached;
+    setState(STATE.AUTHED);
+    if (cached.email) tellEmail(cached.email);
+  }
   // 만료 5분 전에 미리 갈아 끼운다. 폰은 대부분 뒤에 가 있어서 타이머가 굼뜨므로
   // 화면이 앞으로 올 때도 한 번 본다.
   setInterval(() => { if (_tok && _tok.expiresAt - Date.now() < 5 * 60 * 1000) token(); },

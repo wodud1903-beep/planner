@@ -28,6 +28,7 @@ let _q = "";
 export async function load({ refresh = true } = {}) {
   const c = await store.get("data", "rates");
   if (c && c.rates) { _rates = c.rates; _fromSheet = true; repaint(); }
+  else if (!refresh) { _rates = cm.DEFAULT_RATES; _fromSheet = false; _pick = -1; repaint(); }
   if (!refresh) return;
   try {
     const rows = await sheets.values(RATES_SHEET_ID, RATES_TAB, "A1:D");

@@ -17,6 +17,7 @@ export function shell() {
   return html`
     <header>
       <h1>일정관리기</h1>
+      <span class="who" id="whochip"></span>
       <span class="grow"></span>
       <button class="chip" id="statechip" hidden></button>
     </header>
@@ -38,6 +39,10 @@ export function markTab(path) {
 // 상태 알약 — 로그인이 필요하거나 오프라인일 때만 보인다.
 // ⚠️ 모달도 빈 화면도 띄우지 않는다. 캐시가 있으면 화면은 그대로 쓰인다.
 export function paintState() {
+  // 누구로 로그인했는지 늘 보이게 한다. 계정을 바꿔 가며 쓰는 자리라
+  // 지금 보고 있는 게 누구 자료인지 헷갈리면 안 된다.
+  const who = $("#whochip");
+  if (who) who.textContent = auth.email() || "";
   const el = $("#statechip");
   if (!el) return;
   const s = auth.state();

@@ -11,8 +11,12 @@ export const CLIENT_ID =
 export const RATES_SHEET_ID = "1PSjqA7wvIBHusjYHFfD9cLKP-EbtdFrCkNqlZHz2jm0";
 export const KB_TAB = "업무자료";
 
-// 고객관리 시트 기본값 — 설정에서 바꿀 수 있게 할 예정
-export const DEF_SHEET_ID = "1L6UwkuywIEAffPvQX9GWwsP8Ix_6fP8uakNFfV1iAm8";
+// 고객관리 시트 — **기본값을 두지 않는다.**
+//
+// ⚠️ 예전에는 실제 시트 주소가 박혀 있었다. 그래서 다른 직원이 자기 계정으로
+//    로그인해도 그 주소가 그대로 들어가 있어 남의 고객 목록이 열렸다.
+//    쓰는 사람이 [시트 설정] 에서 직접 넣는다.
+export const DEF_SHEET_ID = "";
 export const DEF_SHEET_NAME = "미출고차량";
 
 export const SCOPES = [

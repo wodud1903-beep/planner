@@ -19,6 +19,7 @@ const SEARCH_DELAY = 130;   // 타자가 멎으면 찾는다. 한 자마다 훑�
 export async function load({ refresh = true } = {}) {
   const cached = await store.get("data", "kb");
   if (cached && cached.length) setItems(cached);
+  else if (!refresh) setItems([]);      // 계정이 바뀌어 지운 뒤 — 앞사람 것을 남기지 않는다
   if (!refresh) return;
   try {
     const got = await sheets.readKb(RATES_SHEET_ID, KB_TAB);

@@ -100,8 +100,14 @@ SHEETS_BATCH_GET_URL = SHEETS_BASE_URL + "/values:batchGet"
 SHEETS_BATCH_UPDATE_VALUES_URL = SHEETS_BASE_URL + "/values:batchUpdate"
 SHEETS_BATCH_UPDATE_URL = SHEETS_BASE_URL + ":batchUpdate"
 
-# 기본 고객관리 시트 (설정에서 변경 가능)
-DEF_SHEET_ID = "1L6UwkuywIEAffPvQX9GWwsP8Ix_6fP8uakNFfV1iAm8"
+# 고객관리 시트 — **기본값을 두지 않는다.**
+#
+# ⚠️ 예전에는 여기에 실제 시트 주소가 박혀 있었다. 그런데 이 저장소는 공개고,
+#    무엇보다 **다른 직원이 자기 계정으로 로그인해도 이 주소가 그대로 들어가
+#    있어서** 남의 고객 목록을 바로 열 수 있었다(실제로 그렇게 드러났다).
+#    시트 주소는 쓰는 사람이 [설정] 에서 직접 넣는다.
+#    탭 이름은 주소가 아니라 그냥 이름이라 기본값을 둬도 된다.
+DEF_SHEET_ID = ""
 DEF_SHEET_NAME = "미출고차량"
 
 # 차종별 수당율 전용 스프레드시트 — **고정**.

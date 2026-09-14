@@ -22,6 +22,7 @@ let _done = new Set();       // 방금 체크한 것 (서버 응답을 기다리
 export async function load({ refresh = true } = {}) {
   const c = await store.get("data", "agenda");
   if (c) { _ev = revive(c.events || []); _tk = reviveT(c.tasks || []); _at = c.at || 0; paint(); }
+  else if (!refresh) { _ev = []; _tk = []; _at = 0; _done = new Set(); paint(); }
   if (!refresh) return;
   try {
     const [e, t] = await Promise.all([gcal.events({ forwardDays: FORWARD }), gcal.tasks()]);

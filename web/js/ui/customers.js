@@ -50,7 +50,15 @@ async function saveSettings(id, tab) {
 export async function load({ refresh = true } = {}) {
   const cached = await store.get("data", "customers");
   if (cached && cached.rows) setRows(cached.rows, cached.at || 0);
+  else if (!refresh) { await loadSettings(); setRows([], 0); }   // 계정이 바뀌어 지운 뒤
   if (!refresh) return;
+  if (!sheetId()) {
+    // 기본 주소를 없앴다 — 쓰는 사람이 자기 시트를 넣어야 한다.
+    _err = "고객관리 시트를 아직 정하지 않았습니다.\n아래 [시트 설정] 에서 "
+         + "스프레드시트 주소를 넣어 주세요.";
+    paintList();
+    return false;
+  }
   try {
     const { left, right } = await sheets.readCustomers(sheetId(), sheetTab());
     const { rows } = parseRows(left, right, sheetTab());
@@ -350,8 +358,9 @@ export function settingsScreen() {
     <div class="pane">
       <button class="chip backbtn2" id="sback">← 뒤로</button>
       <h2 style="margin:10px 0 8px">고객관리 시트</h2>
-      <p style="color:var(--sub);margin:0 0 8px">PC 앱에서 쓰는 시트와 같아야 합니다.
-        스프레드시트 주소를 붙여넣어도 됩니다.</p>
+      <p style="color:var(--sub);margin:0 0 8px">PC 앱 [설정] 에 넣으신 것과 같은
+        시트여야 합니다. 브라우저에서 그 시트를 열고 <b>주소창을 통째로 복사</b>해
+        붙여넣는 게 가장 쉽습니다.</p>
       <div class="searchbar"><input id="sid" type="text" value="${sheetId()}"
         placeholder="스프레드시트 ID 또는 주소" autocomplete="off"></div>
       <p class="kbhead">탭</p>

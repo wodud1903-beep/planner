@@ -31,6 +31,7 @@ const folderRef = () => store.get("meta", "driveFolder").then((v) => v || "");
 export async function load({ refresh = true } = {}) {
   const cached = await store.get("data", "driveTop");
   if (cached && cached.items) { _rootId = cached.rootId; setTop(cached.items); }
+  else if (!refresh) { _rootId = ""; setTop([]); }              // 계정이 바뀌어 지운 뒤
   if (!refresh) return;
   const ref = await folderRef();
   if (!ref) return;

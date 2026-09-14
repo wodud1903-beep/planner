@@ -55,3 +55,40 @@ export async function ui(patch) {
   await put("meta", "ui", next);
   return next;
 }
+
+
+// ---------------------------------------------------------------- 계정 갈이
+//
+// ⚠️ 저장한 것은 **브라우저(기기)에 딸린 것이지 계정에 딸린 것이 아니다.**
+//    그래서 다른 계정으로 로그인해도 앞사람의 고객 목록·일정·서류 폴더·시트
+//    주소가 그대로 남아 보였다. 실제로 그렇게 드러났다.
+//    PC 앱은 계정마다 폴더를 따로 쓰는데(config.data_dir), 웹에는 그 장치가
+//    없었다. 계정이 바뀌면 앞사람 것을 지운다.
+//
+// 지우지 않는 것: 목록 너비(split:*) 처럼 누구 것이라도 상관없는 화면 설정.
+const KEEP_META = (k) => String(k).startsWith("split:");
+
+/** 지금 로그인한 계정을 알린다. 앞사람과 다르면 남은 것을 지운다.
+ *  돌려주는 값이 true 면 지웠다는 뜻 — 화면을 다시 그려야 한다. */
+export async function useAccount(email) {
+  const who = (email || "").trim().toLowerCase();
+  if (!who) return false;                       // 아직 누군지 모른다 — 건드리지 않는다
+  const had = ((await get("meta", "account")) || "").trim().toLowerCase();
+  if (had === who) return false;
+  if (had) await wipe();                        // 처음 로그인이면 지울 것이 없다
+  await put("meta", "account", who);
+  return !!had;
+}
+
+/** 계정에 딸린 것을 모두 지운다. */
+export async function wipe() {
+  await tx("data", "readwrite", (s) => s.clear());
+  await tx("recent", "readwrite", (s) => s.clear());
+  const keys = await tx("meta", "readonly", (s) => s.getAllKeys());
+  for (const k of keys || []) {
+    if (k === "account" || KEEP_META(k)) continue;
+    await del("meta", k);                       // 시트 주소·서류 폴더·멘트·검색어까지
+  }
+}
+
+export const account = () => get("meta", "account");

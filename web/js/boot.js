@@ -23,6 +23,20 @@ addEventListener("keydown", () => { _touched = true; }, { once: true, capture: t
 
 auth.init();
 auth.onChange(paintState);
+// 계정이 바뀌면 앞사람 자료를 지우고 화면을 다시 그린다.
+// (저장한 것은 기기에 딸린 것이라 계정이 바뀌어도 그냥 남는다 — 그게 새어 나갔다)
+auth.onEmail(async (mail) => {
+  if (await store.useAccount(mail)) {
+    for (const m of [kbui, cust, docs, agenda, calc]) {
+      try { await m.load({ refresh: false }); } catch (e) { /* 지운 뒤라 비어 있다 */ }
+    }
+    router.handle();                 // 지금 화면을 다시 그린다
+    for (const m of [kbui, cust, docs, agenda, calc]) {
+      try { m.load(); } catch (e) { /* 새 계정으로 다시 받는다 */ }
+    }
+  }
+  paintState();
+});
 paintState();
 
 router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
@@ -38,6 +52,14 @@ router.on(/^\/docs$/, () => docs.screen(null));
 
 
 (async function start() {
+  // ⚠️ 누구로 로그인했는지 **먼저** 알아낸다. 모르는 채로 그리면 앞사람 자료를
+  //    그대로 보여 주고, 앞사람 시트를 조회하기까지 한다(실제로 그랬다).
+  //    통신이 늦으면 4초에 포기하고 이 기기의 마지막 사람으로 본다.
+  try {
+    const who = await auth.ensureEmail({ timeoutMs: 4000 });
+    if (who) await store.useAccount(who);
+  } catch (e) { /* 못 알아내면 마지막 사람으로 본다 */ }
+
   await cust.loadSettings();          // 시트 주소·탭은 라우팅 전에 읽어 둔다
   const ui = await store.ui();
   if (!location.hash && ui.route) location.hash = ui.route;
