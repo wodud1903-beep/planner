@@ -246,6 +246,8 @@ class AppSettings:
     follow_to_calendar: bool = False
     # 출고일이 정해지면 구글 캘린더에 자동 등록 (제목 "<고객> 출고")
     deliver_to_calendar: bool = True
+    # 캘린더 창 오른쪽 일정 목록의 폭(px) — 사람이 끌어 정한 값
+    cal_side_w: int = 340
     # 전역 단축키
     hot_on: bool = True
     hot_ctrl: bool = True
@@ -294,6 +296,7 @@ class AppSettings:
         return {
             "autoFetch": self.auto_fetch,
             "deliverToCalendar": self.deliver_to_calendar,
+            "calSideW": self.cal_side_w,
             "followOn": self.follow_on,
             "followKeyword": self.follow_keyword,
             "followMonths": self.follow_months,
@@ -345,6 +348,7 @@ class AppSettings:
         s.auto_fetch = bool(o.get("autoFetch", False))
         s.follow_on = bool(o.get("followOn", True))
         s.deliver_to_calendar = bool(o.get("deliverToCalendar", True))
+        s.cal_side_w = int(o.get("calSideW", 340) or 340)
         s.follow_keyword = o.get("followKeyword", "출고")
         s.follow_months = int(o.get("followMonths", 1) or 1)
         s.follow_alarm = bool(o.get("followAlarm", True))

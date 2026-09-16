@@ -17,11 +17,12 @@ from PySide6.QtCore import QDate, QRect, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPushButton, QSizePolicy, QTimeEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+    QMessageBox, QPushButton, QSizePolicy, QSplitter, QTimeEdit, QVBoxLayout,
+    QWidget,
 )
 
-from . import config, google_client, holiday, searchcombo, theme
+from . import config, followup, google_client, holiday, searchcombo, theme
 
 
 class EventCalendar(QCalendarWidget):
@@ -226,11 +227,13 @@ class CalendarWindow(QWidget):
         self._epoch = 0
 
         self.setWindowTitle("구글 캘린더")
-        # 메인 프로그램과 동일한 크기로 열어 칸을 크게(내용이 잘리지 않게)
+        # 오른쪽에 일정 목록이 한 열 붙으므로 그만큼 넓게 연다.
+        # 부모 크기를 그대로 따르면 달력이 눌려 칸 안의 일정명이 잘린다.
+        SIDE = 340                       # 오른쪽 목록이 쓸 만한 최소 폭
         if parent is not None:
-            self.resize(parent.width(), parent.height())
+            self.resize(max(parent.width() + SIDE, 1380), parent.height())
         else:
-            self.resize(1040, 880)
+            self.resize(1380, 880)
         self.setWindowIcon(parent.windowIcon() if parent else self.windowIcon())
         # 뒤 창이 비치지 않도록 불투명 배경 + 스타일 배경 적용
         self.setObjectName("calwin")
@@ -267,17 +270,38 @@ class CalendarWindow(QWidget):
         self.cal = EventCalendar()
         self.cal.clicked.connect(self._on_day_selected)
         self.cal.activated.connect(lambda _d: self._add_for_selected())
-        v.addWidget(self.cal, 1)   # 남는 공간을 달력이 모두 차지 → 중간 빈칸 없음
 
-        self.lbl_day = QLabel("날짜를 선택하면 아래에 그 날의 일정이 보입니다")
+        # 그 날의 일정은 **오른쪽 한 열**에 세운다.
+        # 예전엔 달력 아래에 높이 120px 로 눕혀 뒀는데, 그러면 세 건만 넘어도
+        # 스크롤해야 했고 고객 이름이 긴 건(주식회사 …)은 옆으로 잘렸다.
+        side = QWidget()
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(8, 0, 0, 0)
+        sv.setSpacing(4)
+        self.lbl_day = QLabel("날짜를 선택하면 그 날의 일정이 여기에 보입니다")
         # 배경색과 글자색이 겹쳐 안 보이는 문제 방지 → 색을 명시적으로 지정
         self.lbl_day.setStyleSheet(
             f"font-weight:bold;background:transparent;color:{theme.c('text')};")
-        v.addWidget(self.lbl_day)
+        self.lbl_day.setWordWrap(True)
+        sv.addWidget(self.lbl_day)
         self.lst = QListWidget()
-        self.lst.setFixedHeight(120)   # 하단 상세 목록은 고정 높이(달력이 대부분 차지)
+        # 아래 좁은 칸이 아니라 오른쪽 한 열이 됐으니 줄을 띄워 읽기 좋게 한다
+        self.lst.setSpacing(2)
+        self.lst.setWordWrap(True)
         self.lst.itemDoubleClicked.connect(lambda _i: self._edit_selected())
-        v.addWidget(self.lst)
+        self.lst.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.lst.customContextMenuRequested.connect(self._list_menu)
+        sv.addWidget(self.lst, 1)
+
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.addWidget(self.cal)
+        self.split.addWidget(side)
+        self.split.setStretchFactor(0, 1)    # 넓어지면 달력이 가져간다
+        self.split.setStretchFactor(1, 0)
+        self.split.setChildrenCollapsible(False)   # 끌어서 아예 없애지는 못하게
+        v.addWidget(self.split, 1)
+        # 사람이 끌어 정한 폭을 기억한다. 값이 없으면 오른쪽 340px.
+        QTimer.singleShot(0, self._restore_split)
 
         self.sig_events.connect(self._on_events)
         self.sig_cals.connect(self._on_cals)
@@ -293,6 +317,79 @@ class CalendarWindow(QWidget):
 
         # 창이 먼저 뜨고 나서(다음 이벤트 루프 틱) 백그라운드 로딩 → 여는 순간 멈춤 방지
         QTimer.singleShot(0, self.reload)
+
+    # ---- 좌우 폭 기억 ----
+    def _restore_split(self):
+        """정해 둔 좌우 폭을 되살린다. 없으면 오른쪽 340px."""
+        want = 0
+        try:
+            want = int(getattr(self.parent(), "settings", None).cal_side_w or 0)
+        except Exception:
+            want = 0
+        total = max(self.split.width(), 600)
+        side = want if 240 <= want <= total - 400 else 340
+        self.split.setSizes([total - side, side])
+        self.split.splitterMoved.connect(lambda *_a: self._remember_split())
+
+    def _remember_split(self):
+        st = getattr(self.parent(), "settings", None)
+        if st is None:
+            return
+        sizes = self.split.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            st.cal_side_w = int(sizes[1])
+            try:
+                st.save()
+            except Exception:
+                pass
+
+    # ---- 오른쪽 목록 우클릭 ----
+    def _list_menu(self, pos):
+        item = self.lst.itemAt(pos)
+        if item is not None:
+            self.lst.setCurrentItem(item)
+        ev = item.data(Qt.UserRole) if item else None
+        menu = QMenu(self)
+        act_edit = menu.addAction("일정 수정")
+        act_go = menu.addAction("해당 일정으로 이동")
+        act_edit.setEnabled(ev is not None)
+        # 고객과 이어지는 일정일 때만 켠다 — 눌러 놓고 '아무 일도 안 난다' 가
+        # 제일 나쁘다.
+        act_go.setEnabled(bool(ev) and bool(self._customer_name_of(ev)))
+        picked = menu.exec(self.lst.viewport().mapToGlobal(pos))
+        if picked is act_edit:
+            self._edit_selected()
+        elif picked is act_go:
+            self._goto_customer(ev)
+
+    def _customer_name_of(self, ev) -> str:
+        """일정 제목에서 고객명. 고객과 안 이어진 일정이면 ''.
+
+        두 가지를 본다 — 둘 다 followup 이 만들거나 읽는 모양이다.
+          "[출고 1개월] 홍길동"   팔로업 할일이 캘린더에 올라간 것
+          "홍길동 출고"           출고일을 정할 때 자동으로 만든 것
+        """
+        title = getattr(ev, "summary", "") or ""
+        name = followup.followup_name(title)
+        if name:
+            return name
+        keyword = "출고"
+        st = getattr(self.parent(), "settings", None)
+        if st is not None:
+            keyword = (getattr(st, "follow_keyword", "") or "출고").strip() or "출고"
+        return followup.extract_customer_name(title, keyword)
+
+    def _goto_customer(self, ev):
+        """그 고객의 출고정보(고객 수정 창)를 연다."""
+        name = self._customer_name_of(ev)
+        parent = self.parent()
+        if not name or parent is None or not hasattr(parent, "open_customer_by_name"):
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "이 일정은 고객과 이어져 있지 않습니다.\n"
+                "'<고객명> 출고' 나 '[출고 1개월] <고객명>' 형태의 일정에서만 됩니다.")
+            return
+        parent.open_customer_by_name(name, self)
 
     def goto_date(self, d: date):
         """그 날짜로 달력을 옮기고 아래에 그 날 일정을 펼친다."""
@@ -382,9 +479,15 @@ class CalendarWindow(QWidget):
 
     def _on_day_selected(self, qd: QDate):
         d = date(qd.year(), qd.month(), qd.day())
-        self.lbl_day.setText(d.strftime("%Y-%m-%d (%a) 일정"))
+        # 요일은 한국어로. strftime("%a") 는 로캘을 타서 'Sun' 이 나온다
+        # (한국어 프로그램에 영어 요일이 섞여 보였다).
+        # config.DAY_NAMES 는 1=일 … 7=토 이고, isoweekday() 는 월=1 … 일=7 이라
+        # %7+1 로 자리를 맞춘다.
+        dow = config.DAY_NAMES[d.isoweekday() % 7 + 1]
+        day_evs = sorted([e for e in self.events if e.start.date() == d],
+                         key=lambda e: e.start)
+        self.lbl_day.setText(f"{d:%Y-%m-%d} ({dow}) 일정  {len(day_evs)}건")
         self.lst.clear()
-        day_evs = sorted([e for e in self.events if e.start.date() == d], key=lambda e: e.start)
         if not day_evs:
             self.lst.addItem("(일정 없음) — 더블클릭하거나 [이 날짜에 일정 추가]")
             return

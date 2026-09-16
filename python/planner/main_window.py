@@ -774,7 +774,10 @@ class MainWindow(QMainWindow):
         self.tabs.tabBar().setToolTip("탭을 끌어서 순서를 바꿀 수 있습니다")
         outer.addWidget(self.tabs)
         self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
-        self.tabs.addTab(self._build_customer_tab(), "고객관리")
+        # 탭 순서를 사람이 바꿀 수 있으므로(setMovable) 번호로 찾으면 안 된다.
+        # 캘린더에서 '해당 일정으로 이동' 할 때 이 위젯으로 찾는다.
+        self.tab_cust = self._build_customer_tab()
+        self.tabs.addTab(self.tab_cust, "고객관리")
         # 고객별 서류 — 고객관리 바로 옆에 둔다(같은 고객을 두고 오가므로).
         # 폴더가 크면 훑는 데 몇 초 걸리므로, 켤 때가 아니라 탭을 처음 열 때 읽는다.
         self.tab_files = CustomerFilesTab(self.settings, self.gauth)
@@ -1762,6 +1765,80 @@ class MainWindow(QMainWindow):
                 "[수정] 에서 이미지를 붙여넣어 등록할 수 있습니다.")
             return
         DocViewer.show_for(cr.get("customer"), url, self.gauth, self)
+
+    # ------------------------------------------------- 캘린더 → 고객으로 이동
+    def _rows_named(self, name: str) -> list:
+        """고객 칸이 이 이름을 가리키는 줄들.
+
+        ⚠️ 시트의 고객 칸은 "박성일 / 박가네 백년약초" 처럼 슬래시로 여러 조각이다.
+           캘린더 제목에서 뽑히는 것은 그중 한 조각(사람 이름)뿐이라
+           **통째로 비교하면 못 찾는다.** 조각으로 갈라 견준다.
+        """
+        want = (name or "").strip()
+        if not want:
+            return []
+        out = []
+        for cr in self._visible_sheet_rows():
+            cell = (cr.get("customer") or "").strip()
+            if not cell:
+                continue
+            parts = [p.strip() for p in cell.split("/") if p.strip()]
+            if cell == want or want in parts:
+                out.append(cr)
+        return out
+
+    def open_customer_by_name(self, name: str, parent=None):
+        """캘린더에서 넘어온 이름으로 그 고객의 출고정보를 연다."""
+        parent = parent or self
+        if not self._sheet_ready(quiet=True):
+            QMessageBox.information(
+                parent, config.APP_NAME,
+                "고객관리 시트가 연결돼 있지 않습니다.\n"
+                "[설정] 에서 시트를 지정하고 [불러오기] 해 주세요.")
+            return
+        found = self._rows_named(name)
+        if not found:
+            QMessageBox.information(
+                parent, config.APP_NAME,
+                f"'{name}' 고객을 고객관리에서 찾지 못했습니다.\n"
+                "이름이 바뀌었거나 다른 시트에 있을 수 있습니다.")
+            return
+        if len(found) > 1:
+            # ⚠️ 말없이 첫 번째를 열지 않는다. 동명이인이 있는데 남의 고객 창을
+            #    열어 고치면 조용한 사고가 된다.
+            items = [f"{cr.get('customer')}  ·  {cr.get('model') or ''}"
+                     f"  ·  {cr.get('deliver_date') or '출고일 미정'}" for cr in found]
+            from PySide6.QtWidgets import QInputDialog
+            pick, okd = QInputDialog.getItem(
+                parent, config.APP_NAME,
+                f"'{name}' 으로 찾은 고객이 {len(found)}명입니다. 누구를 열까요?",
+                items, 0, False)
+            if not okd:
+                return
+            cr = found[items.index(pick)]
+        else:
+            cr = found[0]
+
+        # 고객관리 탭으로 옮기고 그 줄을 고른 뒤 수정 창을 연다
+        tab = getattr(self, "tab_cust", None)
+        if tab is not None:
+            i = self.tabs.indexOf(tab)
+            if i >= 0:
+                self.tabs.setCurrentIndex(i)
+        self._select_customer_row(cr)
+        self.raise_()
+        self.activateWindow()
+        self.on_customer_edit()
+
+    def _select_customer_row(self, cr) -> bool:
+        """고객표에서 그 줄을 골라 보이게 한다."""
+        for r in range(self.tbl_cust.rowCount()):
+            it = self.tbl_cust.item(r, 0)
+            if it is not None and it.data(Qt.UserRole) == cr.row:
+                self.tbl_cust.selectRow(r)
+                self.tbl_cust.scrollToItem(it)
+                return True
+        return False
 
     # ------------------------------------------------- 출고일 → 구글 캘린더
     def _sync_deliver_event(self, cr, old_values: dict, new_values: dict) -> None:
