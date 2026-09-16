@@ -10,6 +10,7 @@ import * as F from "../js/fmt.js";
 import * as C from "../js/customers.js";
 import * as D from "../js/drive.js";
 import * as CM from "../js/commission.js";
+import * as WK from "../js/weekly.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -120,6 +121,16 @@ console.log("  6개 대조");
 console.log("\n[12] 기본 수당율 표가 파이썬과 같은지 (시트를 못 읽을 때 쓰는 표)");
 eq("DEFAULT_RATES 전체", CM.DEFAULT_RATES, V.default_rates);
 console.log(`  현대 ${V.default_rates.hyundai.length}종 · 기아 ${V.default_rates.kia.length}종 대조`);
+
+console.log("\n[13] 주간 요약 (weekly.sections)");
+// 고객 줄을 파이썬이 만든 그대로 되살린다 (CustomerRow 흉내)
+const wrows = V.weekly_rows.map((r) => ({ total: r.total, values: r.values }));
+for (const [day, title, want] of V.weekly_sections) {
+  const today = new Date(day + "T00:00:00");
+  eq(`titleLine(${day})`, WK.titleLine(today), title);
+  eq(`sections(${day})`, WK.sections(wrows, today), want);
+}
+console.log(`  ${V.weekly_sections.length}일치 대조`);
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);

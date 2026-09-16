@@ -1062,6 +1062,80 @@ console.log("\n[19] 설정이 계정을 따라다니는지 (드라이브 앱 전
   await ctxE.close();
 }
 
+console.log("\n[20] 주간 요약 — 폰에서");
+{
+  const ctxF = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await seed(ctxF, { account: "me@example.com",
+                     sheet: { id: "WKSHEET", tab: "미출고차량" } });
+  await ctxF.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const pF = await page(ctxF);
+  // 오늘을 기준으로 이번 주 안의 날짜를 만든다(실행하는 날에 따라 안 흔들리게)
+  const now = new Date();
+  const wd = (now.getDay() + 6) % 7;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - wd);
+  const fmt = (d) => `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`;
+  const plus = (n) => { const x = new Date(monday); x.setDate(x.getDate() + n); return x; };
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  const SHEET = [
+    HDR,
+    ["1", "김상현", "우리금융캐피탈", "쏘나타", "", "", "", "500,000", "",
+     fmt(plus(0)), fmt(plus(2)), "출고완료", "60개월", "", "", "", ""],
+    ["2", "박영희", "KB캐피탈", "아이오닉5", "", "", "", "300,000", "",
+     fmt(plus(1)), "", "심사중", "48개월", "", "", "", ""],
+    ["3", "한지민", "IM캐피탈", "G70", "", "", "", "900,000", "",
+     fmt(plus(1)), fmt(plus(3)), "취소", "60개월", "", "", "", ""],
+  ];
+  await ctxF.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxF.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctxF.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxF.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("batchGet")) {
+      return r.fulfill({ json: { valueRanges: [
+        { values: SHEET.map((x) => x.slice(0, 17)) }, { values: SHEET.map(() => []) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+
+  await pF.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pF.waitForSelector("#clist button.row", { timeout: 10000 });
+  await pF.click("#cweek");
+  await pF.waitForSelector(".wksec", { timeout: 8000 });
+
+  const heads = await pF.locator(".wkhead").allTextContents();
+  ok("이번 주 출고·계약 칸이 있다",
+     heads.some((h) => h.includes("이번 주 출고")) && heads.some((h) => h.includes("이번 주 계약")),
+     heads.join(" | "));
+  const body = await pF.locator("#body").innerText();
+  const names = await pF.locator(".wkitem .t").allTextContents();
+  ok("이번 주 출고에 그 고객이 뜬다", names.includes("김상현"), names.join(", "));
+  // ⚠️ 취소 건은 실적에도 예정에도 들어가면 안 된다
+  ok("취소된 계약은 안 들어간다", !names.includes("한지민"), names.join(", "));
+  ok("수수료 합계를 적는다",
+     (await pF.locator(".wknote").first().textContent()).includes("수수료 합계"),
+     await pF.locator(".wknote").first().textContent());
+  ok("몇 명으로 계산했는지 알려 준다", body.includes("명으로 계산"));
+
+  // 고객을 누르면 그 고객 상세로
+  await pF.locator(".wkitem").first().click();
+  await pF.waitForTimeout(600);
+  ok("고객을 누르면 상세로 간다",
+     (await pF.locator("#cdetail h2").count()) === 1
+     || (await pF.locator("#cment").count()) === 1,
+     await pF.evaluate(() => location.hash));
+
+  await pF.goBack();
+  await pF.waitForTimeout(400);
+  ok("뒤로 오면 주간 요약이 그대로", (await pF.locator(".wksec").count()) > 0);
+  await ctxF.close();
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');

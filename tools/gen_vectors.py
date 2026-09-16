@@ -30,7 +30,7 @@ for name in ("planner.google_client", "planner.net"):
         mod.http = lambda: None
         sys.modules[name] = mod
 
-from planner import commission, hangul, sheets  # noqa: E402
+from planner import commission, hangul, sheets, weekly  # noqa: E402
 
 HANGUL_CASES = [
     ("김상현", ["ㄱㅅㅎ", "김상", "김", "ㄱㅅㅎㅇ", "상현", "", "ㅅㅎ"]),
@@ -144,6 +144,35 @@ DOC_CASES = [
 ]
 
 
+# 주간 요약 — 주 경계(월요일 시작)·만기 계산·취소/보류 제외가 어긋나기 쉽다.
+# 고객 줄을 손으로 만들어 여러 '오늘' 로 돌려 본다.
+WEEKLY_ROWS = [
+    # (고객, 금융사, 차종, 계약일, 출고일, 진행현황, 계약조건, 합계)
+    ("김상현", "우리금융캐피탈", "쏘나타", "2026. 9. 15", "2026. 9. 17", "출고완료", "60개월", "500,000"),
+    ("박영희", "KB캐피탈", "아이오닉5", "2026. 9. 16", "", "심사중", "48개월", "300,000"),
+    ("최민수", "BNK캐피탈", "쏘렌토", "2026. 8. 1", "", "발주", "36개월", "200,000"),
+    ("정해나", "하나캐피탈", "GV80", "2026. 7. 1", "", "진행보류", "60개월", "400,000"),
+    ("한지민", "IM캐피탈", "G70", "2026. 6. 1", "", "취소", "60개월", "900,000"),
+    ("이수현", "농협캐피탈", "카니발", "2026. 9. 14", "2026. 9. 20", "출고", "36개월", "150,000"),
+    ("오지호", "MG캐피탈", "X6", "2021. 10. 5", "2021. 10. 20", "출고완료", "60개월", "700,000"),
+    ("서junk", "기타금융사", "X3", "2026. 9. 18", "", "", "", ""),
+    ("남기한", "오릭스캐피탈", "셀토스", "2026. 9. 19", "", "상담중", "개월표기없음", "0"),
+]
+
+WEEKLY_DAYS = ["2026-09-16", "2026-09-14", "2026-09-20", "2026-09-21", "2026-01-01"]
+
+
+def _weekly_rows():
+    out = []
+    for (cust, fin, model, cd, dd, st, terms, total) in WEEKLY_ROWS:
+        cr = sheets.CustomerRow(row=len(out) + 2, total=total)
+        cr.values = {"customer": cust, "finance": fin, "model": model,
+                     "contract_date": cd, "deliver_date": dd, "status": st,
+                     "terms": terms}
+        out.append(cr)
+    return out
+
+
 def _parse_rates(rows):
     """sheets.read_rates 의 '푸는 부분' 만 그대로 옮긴 것.
     그쪽은 통신에 묶여 있어 직접 못 부른다 — 규칙이 갈라지지 않게 여기서 한 번만 적는다."""
@@ -188,6 +217,8 @@ def main() -> int:
         "parse_rates": [],
         "doc_url": [],
         "default_rates": {},
+        "weekly_rows": [],
+        "weekly_sections": [],
     }
     for item, queries in HANGUL_CASES:
         out["hangul_chosung"].append([item, hangul.chosung(item)])
@@ -224,6 +255,14 @@ def main() -> int:
 
     out["default_rates"] = {b: [[n, r, t] for n, r, t in commission.DEFAULT_RATES[b]]
                             for b in commission.BRANDS}
+
+    import datetime as _dt
+    out["weekly_rows"] = [
+        {"total": cr.total, "values": cr.values} for cr in _weekly_rows()]
+    for day in WEEKLY_DAYS:
+        today = _dt.date.fromisoformat(day)
+        secs = weekly.sections(_weekly_rows(), today)
+        out["weekly_sections"].append([day, weekly.title_line(today), secs])
 
     for cell in DOC_CASES:
         out["doc_url"].append([cell, sheets.doc_url(cell)])

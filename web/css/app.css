@@ -296,3 +296,20 @@ a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
    화면 전체로 늘어나 오히려 읽기 어렵다. 종이 한 장이 편히 읽히는 폭까지만
    키우고 가운데에 둔다. 확대는 ＋ 로 그때 한다. */
 .vpages { margin: 0 auto; max-width: 820px; }
+
+/* ---- 주간 요약 ---- */
+.wksec { margin: 0 0 22px; }
+.wkhead { font-weight: 700; font-size: 15px; margin: 0 0 6px;
+  display: flex; align-items: center; gap: 8px; }
+.wkn { font-size: 12px; font-weight: 600; color: var(--sub);
+  background: var(--accent-bg); border-radius: 999px; padding: 2px 8px; }
+.wksec.green .wkhead { color: var(--ok); }
+.wksec.blue .wkhead { color: var(--accent); }
+.wksec.red .wkhead { color: var(--bad); }
+.wksec.violet .wkhead { color: #7a5bd0; }
+@media (prefers-color-scheme: dark) { .wksec.violet .wkhead { color: #a892ea; } }
+:root[data-theme="dark"] .wksec.violet .wkhead { color: #a892ea; }
+.wknote { font-size: 14px; font-weight: 600; text-align: right; margin: 6px 0 0; }
+.wkhint { font-size: 12px; color: var(--sub); margin: 6px 0 0; }
+.wksec .empty { padding: 14px 10px; }
+.wkitem .meta { margin: 0 0 2px; }

@@ -12,6 +12,7 @@ import { parseRows, statuses, HeaderNotFound, docUrl, driveIdOf } from "../custo
 import * as drive from "../drive.js";
 import * as appdata from "../appdata.js";
 import * as viewer from "./viewer.js";
+import * as weeklyui from "./weekly.js";
 import { DEF_SHEET_ID, DEF_SHEET_NAME } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
@@ -33,6 +34,9 @@ let _sheetId = DEF_SHEET_ID;
 let _sheetTab = DEF_SHEET_NAME;
 const sheetId = () => _sheetId;
 const sheetTab = () => _sheetTab;
+
+// 주간 요약은 고객 탭이 받아 둔 줄로 계산한다 — 새 통신이 없다
+weeklyui.useRows(() => _rows);
 
 export async function loadSettings() {
   const s = (await store.get("meta", "sheet")) || {};
@@ -118,7 +122,11 @@ export async function screen(m) {
           <div class="cats" id="cchips"></div>
           <ul class="list" id="clist"></ul>
           <p class="synced" id="csynced"></p>
-          <p class="synced"><button class="linky" id="cconf">시트 설정</button></p>
+          <p class="synced">
+            <button class="linky" id="cweek">주간 요약</button>
+            <span style="color:var(--line)"> · </span>
+            <button class="linky" id="cconf">시트 설정</button>
+          </p>
         </div>
       </div>
       <div class="right"><div class="pane" id="cdetail"></div></div>
@@ -135,6 +143,7 @@ export async function screen(m) {
   input.addEventListener("compositionend", () => { clearTimeout(_timer); run(); });
 
   $("#cconf").onclick = () => settingsScreen();
+  $("#cweek").onclick = () => router.go("/customers/week");
 
   paintChips();
   paintList();
