@@ -35,6 +35,29 @@ def make_title(name: str, keyword: str, months: int) -> str:
     return f"[{(keyword or '출고').strip()} {int(months)}개월] {str(name).strip()}"
 
 
+def deliver_title(customer: str, keyword: str = "출고") -> str:
+    """출고 일정 제목. 고객 칸을 그대로 앞에 두고 키워드를 붙인다.
+
+    "박성일 / 박가네 백년약초" → "박성일 / 박가네 백년약초 출고"
+
+    ⚠️ **이 모양이라야 한다.** extract_customer_name() 이 '키워드로 끝나는 제목'
+       에서 고객명을 뽑고, check_followups() 가 그걸로 [출고 1개월] 할일을 만든다.
+       즉 여기서 만든 일정에 팔로업이 저절로 따라붙는다 — 배관을 새로 놓지 않는다.
+    """
+    return f"{str(customer or '').strip()} {(keyword or '출고').strip()}"
+
+
+def deliver_ok(customer: str, keyword: str = "출고") -> bool:
+    """이 고객 이름으로 출고 일정을 만들어도 되나.
+
+    만든 제목을 **도로 읽어 본다.** extract_customer_name 은 공백 없는 한글
+    2~5자만 사람 이름으로 보기 때문에(_looks_like_name), 영문 상호나 긴 법인명은
+    되읽히지 않는다. 그런 건 일정을 만들지 않는다 —
+    만들어 봐야 팔로업이 안 걸리고, 캘린더에 뜻 모를 줄만 남는다.
+    """
+    return bool(extract_customer_name(deliver_title(customer, keyword), keyword))
+
+
 def followup_name(title: str) -> str:
     """팔로업 제목에서 고객명. 팔로업이 아니면 ''."""
     t = str(title or "")

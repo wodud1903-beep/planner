@@ -244,6 +244,8 @@ class AppSettings:
     follow_ment: str = config.DEF_FOLLOW_MENT
     # 팔로업을 구글 캘린더에도 등록
     follow_to_calendar: bool = False
+    # 출고일이 정해지면 구글 캘린더에 자동 등록 (제목 "<고객> 출고")
+    deliver_to_calendar: bool = True
     # 전역 단축키
     hot_on: bool = True
     hot_ctrl: bool = True
@@ -291,6 +293,7 @@ class AppSettings:
     def to_json(self) -> dict:
         return {
             "autoFetch": self.auto_fetch,
+            "deliverToCalendar": self.deliver_to_calendar,
             "followOn": self.follow_on,
             "followKeyword": self.follow_keyword,
             "followMonths": self.follow_months,
@@ -341,6 +344,7 @@ class AppSettings:
             return s
         s.auto_fetch = bool(o.get("autoFetch", False))
         s.follow_on = bool(o.get("followOn", True))
+        s.deliver_to_calendar = bool(o.get("deliverToCalendar", True))
         s.follow_keyword = o.get("followKeyword", "출고")
         s.follow_months = int(o.get("followMonths", 1) or 1)
         s.follow_alarm = bool(o.get("followAlarm", True))

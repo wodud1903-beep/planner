@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from . import (
     alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
-    fax_watch, fax_window, followup,
+    deliver_cal, fax_watch, fax_window, followup,
     google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
@@ -134,6 +134,10 @@ class MainWindow(QMainWindow):
     sig_events_done = Signal(object, str)
     sig_fetch_done = Signal()
     sig_toast = Signal(str, str)
+    # 출고 일정 처리 결과 (uid, cal_id, event_id, 날짜, 제목, 오류)
+    sig_deliver_cal = Signal(str, str, str, str, str, str)
+    # 방금 만든 출고 일정 (CalEvent) — 재조회 없이 목록에 얹는다
+    sig_deliver_new = Signal(object)
     sig_account = Signal(str)          # 로그인 계정 이메일 확인됨
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
@@ -264,6 +268,8 @@ class MainWindow(QMainWindow):
         self.sig_events_done.connect(self._on_events_done)
         self.sig_fetch_done.connect(self._on_fetch_done)
         self.sig_toast.connect(self._toast)
+        self.sig_deliver_cal.connect(self._on_deliver_cal)
+        self.sig_deliver_new.connect(self.add_optimistic_event)
         self.sig_account.connect(self._on_account_ready)
         self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
@@ -1650,6 +1656,9 @@ class MainWindow(QMainWindow):
         pend.values = dict(vals)
         self._sheet_pending.append(pend)
         self.refresh_customers()
+        # 등록하면서 출고일까지 넣었으면 그것도 캘린더에 올린다
+        # (새 고객이라 '예전 값' 은 빈 것으로 본다)
+        self._sync_deliver_event(pend, {}, dict(vals))
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
         name = (vals.get("customer") or "고객").replace("/", "_")[:40]
@@ -1721,6 +1730,7 @@ class MainWindow(QMainWindow):
             merged["doc"] = ""
         cr.values = merged              # 화면 먼저
         self.refresh_customers()
+        self._sync_deliver_event(cr, old, merged)
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
         name = (vals.get("customer") or "고객").replace("/", "_")[:40]
@@ -1752,6 +1762,81 @@ class MainWindow(QMainWindow):
                 "[수정] 에서 이미지를 붙여넣어 등록할 수 있습니다.")
             return
         DocViewer.show_for(cr.get("customer"), url, self.gauth, self)
+
+    # ------------------------------------------------- 출고일 → 구글 캘린더
+    def _sync_deliver_event(self, cr, old_values: dict, new_values: dict) -> None:
+        """출고일이 정해지거나 바뀌면 구글 캘린더에 맞춰 준다.
+
+        무엇을 할지는 deliver_cal.plan() 이 정한다(통신 없는 순수 계산).
+        여기서는 그 결정을 실제로 실행하기만 한다.
+
+        ⚠️ 시트 저장은 이미 끝난 뒤다. 여기서 실패해도 화면을 막지 않는다 —
+           캘린더에 못 올렸다고 고객 수정이 취소되면 안 된다.
+        """
+        if not getattr(self.settings, "deliver_to_calendar", True):
+            return
+        if not self.gauth.is_connected():
+            return
+
+        keyword = (self.settings.follow_keyword or "출고").strip() or "출고"
+        customer = (new_values.get("customer") or "").strip()
+        book = deliver_cal.load()
+        # uid 는 기록을 붙들어 두는 열쇠다. 없으면 여기서 발급한다.
+        uid = self._ensure_uid(cr)
+        if not uid:
+            return
+        act = deliver_cal.plan(uid, customer,
+                               old_values.get("deliver_date", ""),
+                               new_values.get("deliver_date", ""),
+                               book.get(uid), keyword)
+        if act[0] == "none":
+            return
+
+        rmin = self._reminder_minutes()
+
+        def worker():
+            try:
+                if act[0] == "create":
+                    _kind, title, when = act
+                    ev = google_client.insert_event(
+                        self.gauth, "primary", title, when, all_day=True,
+                        reminder_minutes=rmin)
+                    self.sig_deliver_new.emit(ev)     # 이번주 목록에 바로 얹는다
+                    self.sig_deliver_cal.emit(
+                        uid, ev.cal_id or "primary", ev.event_id or "",
+                        when.isoformat(), title, "")
+                elif act[0] in ("move", "rename"):
+                    _kind, cal_id, event_id, title, when = act
+                    google_client.update_event(self.gauth, cal_id, event_id,
+                                               title, when, all_day=True)
+                    self.sig_deliver_cal.emit(uid, cal_id, event_id,
+                                              when.isoformat(), title, "")
+                elif act[0] == "delete":
+                    _kind, cal_id, event_id = act
+                    google_client.delete_event(self.gauth, cal_id, event_id)
+                    self.sig_deliver_cal.emit(uid, "", "", "", "", "")
+            except Exception as e:
+                self.sig_deliver_cal.emit(uid, "", "", "", "",
+                                          str(e).splitlines()[0][:120])
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_deliver_cal(self, uid: str, cal_id: str, event_id: str,
+                        when: str, title: str, err: str) -> None:
+        """출고 일정 처리 결과 — 기록을 남기거나 지운다. (UI 실뜨개)"""
+        if err:
+            # 조용히 넘기지 않는다. 캘린더에 안 올라갔는데 올라간 줄 알면
+            # 출고 당일에야 알게 된다.
+            self.sig_toast.emit(config.APP_NAME,
+                                "출고 일정을 캘린더에 반영하지 못했습니다.\n" + err)
+            return
+        book = deliver_cal.load()
+        if event_id:
+            from datetime import date as _date
+            book = deliver_cal.remember(book, uid, cal_id, event_id,
+                                        _date.fromisoformat(when), title)
+        else:
+            book = deliver_cal.forget(book, uid)
+        deliver_cal.save(book)
 
     def _ensure_uid(self, cr) -> str:
         """고객의 불변 ID. 없으면 그 고객에게만 발급하고 시트에도 적는다.

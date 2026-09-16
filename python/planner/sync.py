@@ -31,7 +31,7 @@ _FILES = ["todos.json", "pcalarms.json", "taskalarms.json", "plan_cfg.json",
           "followups.json", "ment_copied.json", "customer_notes.json",
           "terms_presets.json", "commission_rates.json", "greetings.json",
           "kb_shared.json", "kb_mine.json", "customer_docs.json",
-          "fax_seen.json"]
+          "fax_seen.json", "deliver_events.json"]
 
 # 항목 단위로 합치는 파일 → (모양, 열쇠)
 #   list    : [{...}]        열쇠 값이 같으면 한 건으로 본다
