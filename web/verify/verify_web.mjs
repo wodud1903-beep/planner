@@ -1136,6 +1136,138 @@ console.log("\n[20] 주간 요약 — 폰에서");
   await ctxF.close();
 }
 
+console.log("\n[21] 폰에서 고객 고치기 — 시트를 망가뜨리지 않는지");
+{
+  const ctxG = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await seed(ctxG, { account: "me@example.com",
+                     sheet: { id: "EDSHEET", tab: "미출고차량" } });
+  await ctxG.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const pG = await page(ctxG);
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  // 머리글이 1행 → 김상현은 **2행**이다 (parseRows 의 row = i+1)
+  let SHEET = [
+    HDR,
+    ["1", "김상현", "우리금융캐피탈", "쏘나타", "35,000,000", "300,000", "200,000",
+     "500,000", "대리점", "2026. 8. 1", "2026. 8. 20", "심사중", "60/2만", "메모",
+     "신차", "1588-1111", "1588-2222"],
+  ];
+  const writes = [];
+  let rowNow = () => SHEET[1];
+  await ctxG.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxG.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  await ctxG.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxG.route("**/sheets.googleapis.com/**", async (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (r.request().method() === "POST" && u.includes("values:batchUpdate")) {
+      writes.push(JSON.parse(r.request().postData() || "{}"));
+      return r.fulfill({ json: { totalUpdatedCells: 1 } });
+    }
+    if (u.includes("batchGet")) {
+      // 한 줄만 묻는 경우(저장 직전 확인)와 전체 목록을 갈라 준다
+      const one = /!A\d+:Q\d+/.test(u);
+      const rows = one ? [rowNow()] : SHEET;
+      return r.fulfill({ json: { valueRanges: [
+        { values: rows.map((x) => x.slice(0, 17)) }, { values: rows.map(() => []) }] } });
+    }
+    if (/!S\d+:S\d+/.test(u)) return r.fulfill({ json: { values: [[""]] } });
+    return r.fulfill({ json: { values: [] } });
+  });
+
+  await pG.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pG.waitForSelector("#clist button.row", { timeout: 10000 });
+  await pG.locator("#clist button.row").first().click();
+  await pG.waitForSelector("#cedit", { timeout: 8000 });
+  await pG.click("#cedit");
+  await pG.waitForSelector("#esave", { timeout: 8000 });
+
+  ok("견적서 칸은 아예 없다", (await pG.locator("#e_doc").count()) === 0);
+  ok("고칠 수 있는 칸이 다 있다",
+     (await pG.locator("#e_customer").count()) === 1
+     && (await pG.locator("#e_status").count()) === 1
+     && (await pG.locator("#e_price").count()) === 1
+     && (await pG.locator("#e_contract_date").count()) === 1);
+  ok("금융사 후보를 시트 값에서 뽑는다",
+     (await pG.locator("#dl_finance option").first().getAttribute("value")) === "우리금융캐피탈");
+
+  // 안 고치고 저장 → 아무것도 안 보낸다
+  await pG.click("#esave");
+  await pG.waitForTimeout(400);
+  ok("바뀐 게 없으면 시트를 안 건드린다", writes.length === 0,
+     JSON.stringify(writes).slice(0, 80));
+  ok("바뀐 게 없다고 말해 준다",
+     (await pG.locator("#emsg").textContent()).includes("바뀐 것이 없"));
+
+  // 진행현황·금액·출고일을 고친다
+  await pG.fill("#e_status", "출고완료");
+  await pG.fill("#e_price", "36500000");
+  await pG.fill("#e_deliver_date", "2026-09-05");
+  await pG.click("#esave");
+  await pG.waitForTimeout(900);
+
+  ok("저장을 한 번 보낸다", writes.length === 1, writes.length);
+  const body = writes[0] || {};
+  const data = body.data || [];
+  const ranges = data.map((d) => d.range);
+  const val = (r) => (data.find((d) => d.range.endsWith("!" + r)) || {}).values?.[0]?.[0];
+
+  ok("USER_ENTERED 로 보낸다", body.valueInputOption === "USER_ENTERED",
+     body.valueInputOption);
+
+  // ⚠️ 이 검사가 이 판에서 제일 중요하다. 수식 칸이 값으로 덮이면 시트가 망가진다.
+  const FORMULA = ["A2", "H2", "P2", "Q2", "R2", "T2"];
+  const hit = FORMULA.filter((c) => ranges.some((r) => r.endsWith("!" + c)));
+  ok("수식 칸(A·H·P·Q·R·T)을 하나도 안 건드린다", hit.length === 0, hit.join(","));
+  ok("견적서(S열)도 안 건드린다", !ranges.some((r) => /!S\d+$/.test(r)), ranges.join(" "));
+
+  ok("고친 칸만 보낸다", data.length === 3, ranges.join(" "));
+  ok("진행현황은 L열", val("L2") === "출고완료", val("L2"));
+  // 금액은 콤마를 떼고 숫자로 — 안 그러면 시트 통화 서식이 깨진다
+  ok("금액에 콤마가 없다", val("E2") === "36500000", val("E2"));
+  // 날짜는 시트 서식으로, 0 을 안 채운다
+  ok("날짜가 시트 서식이다", val("K2") === "2026. 9. 5", val("K2"));
+
+  ok("저장하면 상세로 돌아간다",
+     (await pG.evaluate(() => location.hash)) === "#/customers/2",
+     await pG.evaluate(() => location.hash));
+  await pG.waitForTimeout(400);
+  ok("화면에도 바로 반영된다",
+     (await pG.locator("#cdetail").innerText()).includes("출고완료"));
+
+  // 미정으로 되돌리면 빈 문자열
+  writes.length = 0;
+  await pG.click("#cedit");
+  await pG.waitForSelector("#esave");
+  await pG.check("#u_deliver_date");
+  await pG.click("#esave");
+  await pG.waitForTimeout(800);
+  const d2 = (writes[0] || {}).data || [];
+  ok("'미정' 은 빈 문자열로 보낸다",
+     d2.length === 1 && d2[0].range.endsWith("!K2") && d2[0].values[0][0] === "",
+     JSON.stringify(d2));
+
+  // 그 사이 누가 고쳤으면 묻는다
+  writes.length = 0;
+  SHEET[1][11] = "다른곳에서바꿈";        // 시트 쪽 진행현황이 바뀌었다
+  rowNow = () => SHEET[1];
+  pG.once("dialog", (d) => d.dismiss());   // [취소] 를 누른다
+  await pG.click("#cedit");
+  await pG.waitForSelector("#esave");
+  await pG.fill("#e_status", "내가바꾼값");
+  await pG.click("#esave");
+  await pG.waitForTimeout(900);
+  ok("그 사이 바뀌었으면 묻고, 취소하면 안 쓴다", writes.length === 0, writes.length);
+  ok("왜 안 썼는지 말해 준다",
+     (await pG.locator("#emsg").textContent()).includes("저장하지 않았"),
+     await pG.locator("#emsg").textContent());
+  await ctxG.close();
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');

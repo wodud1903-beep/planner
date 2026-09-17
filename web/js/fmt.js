@@ -86,3 +86,22 @@ export function contractMonths(terms) {
   const n = parseInt(m[1], 10);
   return (n >= 1 && n <= 120) ? n : null;
 }
+
+
+/** 시트에 적을 날짜 서식 — sheets.fmt_date 와 같다.
+ *
+ * ⚠️ **0 을 채우지 않는다.** "2026. 8. 14" 이지 "2026. 08. 14" 가 아니다.
+ *    시트가 이 모양으로 서식을 잡고 있어서, 0 을 채워 보내면 그 칸만 서식이
+ *    달라 보인다. 날짜가 없으면 빈 문자열(= '미정').
+ */
+export function fmtSheetDate(d) {
+  if (!d) return "";
+  return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`;
+}
+
+/** <input type="date"> 가 쓰는 "2026-08-14". 날짜가 없으면 빈 문자열. */
+export function isoDate(d) {
+  if (!d) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}

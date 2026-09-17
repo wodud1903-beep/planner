@@ -88,14 +88,30 @@ export function parseRows(left, right, tab = "") {
   return { headerRow: headerIdx + 1, rows, summary };
 }
 
-/** 진행현황 칩 후보 — 하드코딩하지 않고 **시트에 실제로 있는 값**에서 뽑는다. */
-export function statuses(rows) {
-  const seen = new Map();
-  for (const r of rows) {
-    const v = (r.values.status || "").trim();
+/** 어떤 칸이든, 시트에 실제로 있는 값을 **자주 쓰는 순서**로 모은다.
+ *  sheets.choices() 와 같은 생각이다 — 후보를 하드코딩하지 않는다. */
+export function valuesOf(rows, key) {
+  const seen = new Map();                 // Map 은 넣은 순서를 지킨다 = 처음 나온 순서
+  for (const r of rows || []) {
+    const v = String((r.values || {})[key] || "").trim();
     if (v) seen.set(v, (seen.get(v) || 0) + 1);
   }
-  return [...seen.keys()].sort((a, b) => seen.get(b) - seen.get(a) || a.localeCompare(b, "ko"));
+  // ⚠️ 횟수가 같으면 **처음 나온 순서**를 지킨다. 파이썬 list.sort 가 안정 정렬이라
+  //    그렇게 동작한다. 가나다순으로 한 번 더 갈랐더니 후보 차례가 PC 와 달라졌다
+  //    (정답표가 잡아 줬다). JS 의 sort 도 안정 정렬이라 그냥 횟수만 본다.
+  return [...seen.keys()].sort((a, b) => seen.get(b) - seen.get(a));
+}
+
+/** 진행현황 칩 후보. */
+export const statuses = (rows) => valuesOf(rows, "status");
+
+/** 고르는 칸들의 후보 — 금융사·특판/대리점·진행현황·출고유형.
+ *  sheets.CHOICE_FIELDS 와 같은 목록이다. */
+export const CHOICE_FIELDS = ["finance", "channel", "status", "kind"];
+export function choices(rows) {
+  const out = {};
+  for (const k of CHOICE_FIELDS) out[k] = valuesOf(rows, k);
+  return out;
 }
 
 

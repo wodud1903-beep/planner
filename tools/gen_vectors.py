@@ -219,6 +219,8 @@ def main() -> int:
         "default_rates": {},
         "weekly_rows": [],
         "weekly_sections": [],
+        "fmt_sheet_date": [],
+        "choices": [],
     }
     for item, queries in HANGUL_CASES:
         out["hangul_chosung"].append([item, hangul.chosung(item)])
@@ -263,6 +265,17 @@ def main() -> int:
         today = _dt.date.fromisoformat(day)
         secs = weekly.sections(_weekly_rows(), today)
         out["weekly_sections"].append([day, weekly.title_line(today), secs])
+
+    # 시트에 적을 날짜 서식 — **0 을 안 채운다**("2026. 8. 14")
+    import datetime as _d2
+    for iso in ["2026-08-14", "2026-01-01", "2026-12-31", "2026-10-09", "2026-09-05"]:
+        d = _d2.date.fromisoformat(iso)
+        out["fmt_sheet_date"].append([iso, sheets.fmt_date(d)])
+    out["fmt_sheet_date"].append([None, sheets.fmt_date(None)])
+
+    # 고르는 칸 후보 — 자주 쓰는 값이 위로
+    _crows = _weekly_rows()
+    out["choices"] = sheets.choices(_crows)
 
     for cell in DOC_CASES:
         out["doc_url"].append([cell, sheets.doc_url(cell)])

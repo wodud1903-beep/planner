@@ -22,7 +22,10 @@ export const DEF_SHEET_NAME = "미출고차량";
 export const SCOPES = [
   "openid",
   "email",
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
+  // ⚠️ 읽기 전용이 아니다. 폰에서 고객 정보를 고칠 수 있게 되면서 쓰기가 필요해졌다.
+  //    이 줄을 바꾸면 기존 토큰에는 그 권한이 없어 403 이 오는데, 그건
+  //    NeedScope 로 잡아 '다시 로그인' 이라고 안내한다(sheets.js).
+  "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive.readonly",
   // 일정은 보기만 한다 — 폰에서 일정을 고칠 일은 PC 에서 하면 되고,
   // 쓰기 권한을 들고 다니면 폰을 잃었을 때 잃을 것이 늘어난다.

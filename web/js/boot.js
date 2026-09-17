@@ -48,6 +48,7 @@ router.on(/^\/agenda$/, () => agenda.screen());
 router.on(/^\/calc$/, () => calc.screen());
 router.on(/^\/customers\/settings$/, () => cust.settingsScreen());
 router.on(/^\/customers\/week$/, () => weeklyui.screen());
+router.on(/^\/customers\/(\d+)\/edit$/, (m) => cust.editScreen(m));
 router.on(/^\/customers\/(\d+)$/, (m) => cust.screen(m));
 router.on(/^\/customers$/, () => cust.screen(null));
 router.on(/^\/docs\/([^/]+)$/, (m) => docs.screen(m));

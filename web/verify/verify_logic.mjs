@@ -11,6 +11,7 @@ import * as C from "../js/customers.js";
 import * as D from "../js/drive.js";
 import * as CM from "../js/commission.js";
 import * as WK from "../js/weekly.js";
+import * as SH from "../js/sheets.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -131,6 +132,26 @@ for (const [day, title, want] of V.weekly_sections) {
   eq(`sections(${day})`, WK.sections(wrows, today), want);
 }
 console.log(`  ${V.weekly_sections.length}일치 대조`);
+
+console.log("\n[14] 시트에 적을 날짜 서식 (sheets.fmt_date)");
+// ⚠️ 0 을 안 채운다. "2026. 8. 14" 이지 "2026. 08. 14" 가 아니다.
+for (const [iso, want] of V.fmt_sheet_date) {
+  const d = iso ? new Date(iso + "T00:00:00") : null;
+  eq(`fmtSheetDate(${iso})`, F.fmtSheetDate(d), want);
+}
+console.log(`  ${V.fmt_sheet_date.length}개 대조`);
+
+console.log("\n[15] 고르는 칸 후보 (sheets.choices)");
+eq("choices(고객줄)", C.choices(wrows), V.choices);
+console.log(`  ${Object.keys(V.choices).length}칸 대조`);
+
+console.log("\n[16] 열 번호 → 글자 (sheets.col_letter)");
+for (const [i, want] of [[0, "A"], [1, "B"], [7, "H"], [15, "P"], [16, "Q"],
+                         [17, "R"], [18, "S"], [19, "T"], [20, "U"], [25, "Z"],
+                         [26, "AA"], [27, "AB"]]) {
+  eq(`colLetter(${i})`, SH.colLetter(i), want);
+}
+console.log("  12개 대조");
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);

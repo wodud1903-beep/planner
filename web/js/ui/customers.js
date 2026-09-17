@@ -8,7 +8,8 @@ import * as store from "../store.js";
 import * as sheets from "../sheets.js";
 import * as hangul from "../hangul.js";
 import * as fmt from "../fmt.js";
-import { parseRows, statuses, HeaderNotFound, docUrl, driveIdOf } from "../customers.js";
+import { parseRows, statuses, choices, FIELDS, HeaderNotFound, docUrl, driveIdOf }
+  from "../customers.js";
 import * as drive from "../drive.js";
 import * as appdata from "../appdata.js";
 import * as viewer from "./viewer.js";
@@ -273,6 +274,9 @@ export async function showDetail(rowNo) {
         ${r.accident ? `<div class="k">사고접수</div><div class="v">${tel(r.accident)}</div>` : ""}
       </div>` : "")}
 
+    <p style="margin:0 0 14px">
+      <button class="chip" id="cedit">고치기</button></p>
+
     <p class="kbhead">견적서 / 계약서</p>
     <div id="cdoc"><p class="empty">확인 중…</p></div>
 
@@ -281,6 +285,8 @@ export async function showDetail(rowNo) {
 
   const back = $("#cback");
   if (back) back.onclick = () => { split.classList.remove("detail"); router.go("/customers"); };
+  const ed = $("#cedit");
+  if (ed) ed.onclick = () => router.go(`/customers/${r.row}/edit`);
 
   loadDoc(r.row);
 
@@ -422,4 +428,200 @@ export function idFrom(s) {
   const t = String(s || "").trim();
   const m = t.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{10,})/);
   return m ? m[1] : t;
+}
+
+
+// ---------------------------------------------------------------- 고치기
+//
+// ⚠️ 이 앱이 시트에 **쓰는** 유일한 자리다. 규칙은 sheets.js 의 writeCells 에
+//    적어 두었다(수식 칸 보존·금액 콤마 제거·USER_ENTERED).
+//    여기서는 화면과 '저장 직전 확인' 만 맡는다.
+
+// 쓰지 않는 칸. 견적서(S열)는 =IMAGE() 수식이라 되돌려 쓰면 그림이 지워진다.
+const NO_WRITE = ["doc"];
+const MONEY_KEYS = ["price", "fee", "incentive"];
+const DATE_KEYS = ["contract_date", "deliver_date"];
+const AREA_KEYS = ["note"];
+const WRITABLE = FIELDS.filter(([, k]) => !NO_WRITE.includes(k));
+
+const LABEL = Object.fromEntries(FIELDS.map(([, k, l]) => [k, l]));
+
+export async function editScreen(m) {
+  markTab("/customers");
+  const rowNo = m && m[1] ? parseInt(m[1], 10) : 0;
+  const r = _rows.find((x) => x.row === rowNo);
+  if (!r) {
+    setBody(html`<div class="pane"><p class="empty">그 고객을 찾지 못했습니다.</p>
+      <button class="chip" onclick="location.hash='/customers'">← 목록</button></div>`);
+    return;
+  }
+  const before = { ...r.values };          // 불러왔을 때의 값 — 충돌 확인에 쓴다
+  const cand = choices(_rows);
+
+  const field = ([ci, key]) => {
+    const v = before[key] || "";
+    const lab = LABEL[key] || key;
+    if (DATE_KEYS.includes(key)) {
+      const d = fmt.parseDate(v);
+      return html`
+        <label class="flab" for="e_${key}">${lab}</label>
+        <div class="calcrow">
+          <input id="e_${key}" class="bigin" type="date" value="${fmt.isoDate(d)}"
+                 style="flex:1" ${raw(d ? "" : "disabled")}>
+          <label class="freechk"><input type="checkbox" id="u_${key}"
+            ${raw(d ? "" : "checked")}> 미정</label>
+        </div>`;
+    }
+    if (AREA_KEYS.includes(key)) {
+      return html`<label class="flab" for="e_${key}">${lab}</label>
+        <textarea id="e_${key}" class="bigin" rows="3">${v}</textarea>`;
+    }
+    const list = cand[key];
+    return html`
+      <label class="flab" for="e_${key}">${lab}</label>
+      <input id="e_${key}" class="bigin" type="text" value="${v}"
+             inputmode="${MONEY_KEYS.includes(key) ? "numeric" : "text"}"
+             ${raw(list ? `list="dl_${key}"` : "")}>
+      ${raw(list && list.length
+        ? `<datalist id="dl_${key}">${list.map((x) =>
+            `<option value="${esc(x)}"></option>`).join("")}</datalist>` : "")}`;
+  };
+
+  setBody(html`
+    <div class="pane">
+      <button class="chip backbtn2" id="ecancel">← 취소</button>
+      <h2 style="margin:10px 0 12px">${before.customer || "고객"} 고치기</h2>
+      ${raw(WRITABLE.map(field).join(""))}
+      <button class="bigcopy" id="esave" style="margin-top:18px">저장</button>
+      <p class="empty" id="emsg"></p>
+      <p class="synced">견적서는 폰에서 고칠 수 없습니다 — PC 에서 해 주세요.</p>
+    </div>`);
+
+  // 금액은 치는 동안 1,000 단위
+  for (const k of MONEY_KEYS) {
+    const el = $(`#e_${k}`);
+    if (!el) continue;
+    el.addEventListener("input", () => {
+      const atEnd = el.selectionStart >= el.value.length;
+      const shown = fmt.fmtMoney(el.value);
+      if (shown !== el.value) {
+        el.value = shown;
+        if (atEnd) el.setSelectionRange(shown.length, shown.length);
+      }
+    });
+  }
+  // '미정' 을 끄면 날짜 칸이 살아난다
+  for (const k of DATE_KEYS) {
+    const chk = $(`#u_${k}`), de = $(`#e_${k}`);
+    if (!chk || !de) continue;
+    chk.addEventListener("change", () => {
+      de.disabled = chk.checked;
+      if (!chk.checked && !de.value) de.value = fmt.isoDate(new Date());
+    });
+  }
+
+  $("#ecancel").onclick = () => router.go("/customers/" + r.row);
+  $("#esave").onclick = () => save(r, before);
+}
+
+/** 화면에서 읽어 **바뀐 칸만** 모은다. */
+function collect(before) {
+  const out = {};
+  for (const [, key] of WRITABLE) {
+    let v;
+    if (DATE_KEYS.includes(key)) {
+      const chk = $(`#u_${key}`), de = $(`#e_${key}`);
+      if (!chk || !de) continue;
+      v = chk.checked ? "" : fmt.fmtSheetDate(
+        de.value ? new Date(de.value + "T00:00:00") : null);
+    } else {
+      const el = $(`#e_${key}`);
+      if (!el) continue;
+      v = el.value.trim();
+    }
+    // 안 바뀐 칸은 아예 안 보낸다 — 건드릴 이유가 없다
+    const was = String(before[key] || "");
+    if (MONEY_KEYS.includes(key)) {
+      if (fmt.digitsOnly(v) === fmt.digitsOnly(was)) continue;
+    } else if (v === was) continue;
+    out[key] = v;
+  }
+  return out;
+}
+
+async function save(r, before) {
+  const msg = $("#emsg");
+  const btn = $("#esave");
+  const patch = collect(before);
+  if (!Object.keys(patch).length) {
+    msg.textContent = "바뀐 것이 없습니다.";
+    return;
+  }
+  btn.disabled = true;
+  msg.textContent = "저장하는 중…";
+  try {
+    // ⚠️ 폰은 저장해 둔 목록으로 그린다. 한 시간 전 것을 보고 있는데 그 사이
+    //    PC 에서 같은 고객을 고쳤다면, 그냥 쓰면 그 수정이 조용히 지워진다.
+    //    쓰기 직전에 그 줄만 다시 읽어, 내가 고치려는 칸이 그 사이 바뀌었으면 묻는다.
+    const clash = await conflicts(r, before, patch);
+    if (clash.length) {
+      const what = clash.map((k) => LABEL[k] || k).join(", ");
+      if (!confirm(`그 사이 다른 곳에서 이 고객을 고쳤습니다 (${what}).\n`
+                 + "덮어쓸까요?\n\n[취소] 를 누르면 저장하지 않습니다.")) {
+        msg.textContent = "저장하지 않았습니다. 뒤로 갔다 다시 열면 최신으로 보입니다.";
+        btn.disabled = false;
+        return;
+      }
+    }
+    await sheets.writeCells(sheetId(), sheetTab(), r.row, patch, WRITABLE, MONEY_KEYS);
+    // 화면과 저장해 둔 것에도 반영
+    r.values = { ...r.values, ...patch };
+    await store.put("data", "customers", { rows: _rows, at: _syncedAt });
+    setRows(_rows, _syncedAt);
+    router.go("/customers/" + r.row);
+  } catch (e) {
+    btn.disabled = false;
+    msg.textContent = e instanceof sheets.NeedScope
+      ? "고칠 권한이 아직 없습니다. 위 [다시 로그인] 을 한 번 눌러 주세요."
+      : e instanceof sheets.WrongAccount
+        ? "이 계정으로는 이 시트를 고칠 수 없습니다."
+        : e instanceof sheets.Offline
+          ? "인터넷이 안 됩니다. 연결되면 다시 눌러 주세요."
+          : (e.message || "저장하지 못했습니다.");
+    paintState();
+  }
+}
+
+/** 내가 고치려는 칸 중, 불러온 뒤 시트에서 바뀐 것들. */
+async function conflicts(r, before, patch) {
+  let now;
+  try {
+    now = await sheets.readRow(sheetId(), sheetTab(), r.row);
+  } catch (e) {
+    return [];              // 확인을 못 했다고 저장을 막지는 않는다
+  }
+  const { rows } = parseRowsOne(now, r.row);
+  if (!rows) return [];
+  const out = [];
+  for (const key of Object.keys(patch)) {
+    const nowV = String(rows[key] || "").trim();
+    const wasV = String(before[key] || "").trim();
+    if (nowV !== wasV) out.push(key);
+  }
+  return out;
+}
+
+/** 한 줄짜리 응답을 필드로 편다 (머리글 탐지 없이). */
+function parseRowsOne(got, rowNo) {
+  const a = (got.left || [])[0] || [];
+  const b = (got.right || [])[0] || [];
+  const cells = [...a];
+  while (cells.length < 17) cells.push("");
+  cells.push("");                       // R 자리
+  const bb = [...b];
+  while (bb.length < 2) bb.push("");
+  cells.push(...bb);
+  const out = {};
+  for (const [ci, key] of FIELDS) out[key] = String(cells[ci] || "").trim();
+  return { rows: out };
 }

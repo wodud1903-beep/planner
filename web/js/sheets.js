@@ -1,6 +1,7 @@
 // 구글 시트 읽기 — planner/sheets.py 의 읽기 부분만 옮긴 것.
 import { SHEETS_API } from "./config.js";
 import { token, setOffline, STATE } from "./auth.js";
+import { digitsOnly } from "./fmt.js";
 
 export class NeedSignIn extends Error {}
 export class WrongAccount extends Error {}
@@ -30,22 +31,23 @@ async function detail(r) {
 const rng = (tab, a1) => encodeURIComponent(`'${tab}'!${a1}`);
 
 // 한 번 조용히 다시 받아 한 번만 재시도한다. 두 번은 안 한다.
-async function call(url) {
+async function call(url, body = null) {
   let tok = await token();
   if (!tok) throw new NeedSignIn();
+  const go = () => fetch(url, {
+    method: body ? "POST" : "GET",
+    headers: {
+      Authorization: "Bearer " + tok,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
   let r;
-  try {
-    r = await fetch(url, { headers: { Authorization: "Bearer " + tok } });
-  } catch (e) {
-    setOffline(true);
-    throw new Offline();
-  }
+  try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
     tok = await token({ interactive: false });
     if (!tok) throw new NeedSignIn();
-    try {
-      r = await fetch(url, { headers: { Authorization: "Bearer " + tok } });
-    } catch (e) { setOffline(true); throw new Offline(); }
+    try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
   // 403 은 토큰 문제가 아니라 '이 계정으로는 못 연다' 는 뜻이다. 다시 로그인해도 소용없다.
   if (r.status === 403) {
@@ -151,4 +153,47 @@ export async function tabNames(sheetId) {
     title: (j.properties && j.properties.title) || "",
     tabs: (j.sheets || []).map((x) => x.properties && x.properties.title).filter(Boolean),
   };
+}
+
+
+// ---------------------------------------------------------------- 고객 고치기
+//
+// ⚠️ 여기가 이 앱에서 **처음으로 시트에 쓰는 자리**다. 잘못 쓰면 남의 시트의
+//    수식이 값으로 덮이고 되돌리기 어렵다. 규칙을 새로 만들지 않고
+//    planner/sheets.py 의 _write_cells 를 글자 그대로 옮긴다.
+//
+//  · 직접기재 열만, **칸 단위로** 쓴다. 줄을 통째로 쓰면 수식 칸이 덮인다.
+//    수식 칸 = A(순번) H(합계) P(고객센터) Q(사고접수) R(안내멘트) T(등록완료).
+//  · S열(견적서)은 **절대 안 쓴다.** =IMAGE() 수식이라 표시값이 빈 문자열이고,
+//    그걸 되돌려 쓰면 그림이 지워진다(PC 쪽에도 같은 사고 기록이 있다).
+//  · 금액은 콤마를 떼고 숫자로 — 안 그러면 시트 통화 서식이 깨진다.
+//  · valueInputOption 은 USER_ENTERED.
+
+/** 0=A, 1=B … 열 번호를 글자로. */
+export function colLetter(i) {
+  let n = Number(i), out = "";
+  do { out = String.fromCharCode(65 + (n % 26)) + out; n = Math.floor(n / 26) - 1; }
+  while (n >= 0);
+  return out;
+}
+
+/** 고객 한 줄의 직접기재 칸을 고친다. values 에 **든 키만** 쓴다. */
+export async function writeCells(sheetId, tab, row, values, fields, moneyKeys) {
+  const data = [];
+  for (const [ci, key] of fields) {
+    if (!(key in values)) continue;             // 안 고친 칸은 안 보낸다
+    let v = values[key];
+    if (moneyKeys.includes(key)) v = digitsOnly(v);   // 콤마를 떼고 숫자로
+    data.push({ range: `'${tab}'!${colLetter(ci)}${row}`, values: [[v]] });
+  }
+  if (!data.length) return 0;
+  await call(`${SHEETS_API}/${sheetId}/values:batchUpdate`,
+             { valueInputOption: "USER_ENTERED", data });
+  return data.length;
+}
+
+/** 그 줄의 A~Q + S~T 를 다시 읽는다 — 저장 직전 '그 사이 바뀌었나' 확인용. */
+export async function readRow(sheetId, tab, row) {
+  const [left, right] = await batch(sheetId, tab, [`A${row}:Q${row}`, `S${row}:T${row}`]);
+  return { left: left || [], right: right || [] };
 }

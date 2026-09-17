@@ -313,3 +313,7 @@ a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
 .wkhint { font-size: 12px; color: var(--sub); margin: 6px 0 0; }
 .wksec .empty { padding: 14px 10px; }
 .wkitem .meta { margin: 0 0 2px; }
+
+/* ---- 고객 고치기 ---- */
+textarea.bigin { font: inherit; font-size: 15px; resize: vertical; min-height: 72px; }
+.bigin[disabled] { opacity: .45; }
