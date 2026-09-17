@@ -21,7 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QDate, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QListWidget  # noqa: E402
 
-from planner import google_client, sheets, sync  # noqa: E402
+from planner import google_client, sheets, sync, theme  # noqa: E402
 
 FAIL = []
 
@@ -94,7 +94,6 @@ w.refresh_customers()
 pump()
 
 cw = CalendarWindow(w.gauth, w)
-cw.resize(1380, 880)
 cw.show()
 # ⚠️ 창은 뜬 뒤에 뒤에서 한 번 다시 불러온다(QTimer.singleShot → reload).
 #    그래서 일정을 **먼저** 넣어 두면 그 조회 결과로 덮여 사라진다.
@@ -114,12 +113,60 @@ ok("목록이 달력 **오른쪽**에 있다", lst_x > cal_x, f"달력 x={cal_x}
 # 예전엔 높이 120px 로 달력 아래에 눕혀 두어 세 건만 넘어도 스크롤해야 했다
 ok("높이가 120px 로 묶여 있지 않다", cw.lst.height() > 300, cw.lst.height())
 ok("아예 접히지는 않는다", not cw.split.childrenCollapsible())
-ok("창이 넓게 열린다", cw.width() >= 1380, cw.width())
+# ⚠️ 화면이 좁으면(검사용 가상 화면은 800x600 이다) 화면에 맞춘다.
+#    '무조건 1440' 으로 못 박으면 작은 노트북에서 창이 화면 밖으로 나간다.
+_avail = cw._avail()
+ok("제 크기로 열린다 (화면이 좁으면 화면에 맞춘다)",
+   cw.width() == min(CalendarWindow.DEFAULT_W, _avail.width()),
+   f"{cw.width()} / 화면 {_avail.width()}")
+
+print("\n[A2] 캘린더는 **따로 뜨는 창**이다")
+# ⚠️ 자식 위젯으로 두면 메인 창 안쪽에 갇혀, 메인 창보다 넓은 만큼
+#    (오른쪽 일정 열이 딱 그만큼이다) 소리 없이 잘린다. 손으로 메인 창을
+#    넓혀야 일정이 나타났다 — 실제로 그렇게 걸렸다.
+ok("독립된 창이다 (자식 위젯이 아니다)", cw.isWindow())
+before = (cw.width(), cw.height())
+main_w = w.width()
+w.resize(700, 600)
+pump()
+ok("메인 창을 줄여도 캘린더는 그대로다", (cw.width(), cw.height()) == before,
+   f"{before} → {(cw.width(), cw.height())}")
+cw4 = CalendarWindow(w.gauth, w)
+cw4.show()
+pump()
+ok("좁은 메인 창에서 열어도 제 크기로 뜬다", cw4.width() > w.width(),
+   f"캘린더 {cw4.width()} / 메인 {w.width()}")
+ok("달력 쪽이 일정 열보다 넓다", cw4.split.sizes()[0] > cw4.split.sizes()[1],
+   cw4.split.sizes())
+ok("화면 밖으로 나가지 않는다",
+   cw4.width() <= cw4._avail().width() and cw4.height() <= cw4._avail().height(),
+   f"{cw4.width()}x{cw4.height()} 화면 {cw4._avail().width()}x{cw4._avail().height()}")
+cw4.close()
+w.resize(main_w, 920)
+pump()
 
 print("\n[B] 그 날의 일정이 목록에 들어온다")
 ok("세 건이 보인다", cw.lst.count() == 3, cw.lst.count())
 ok("일정 원본을 들고 있다",
    cw.lst.item(0).data(Qt.UserRole) is not None)
+
+print("\n[B2] 읽기 좋게 — 큰 글씨 + 줄마다 라벨색")
+base = cw.font().pointSize()
+ok("기본 글씨보다 크다", cw.lst.item(0).font().pointSize() > base,
+   f"목록 {cw.lst.item(0).font().pointSize()}pt / 기본 {base}pt")
+ok("굵게 쓴다", cw.lst.item(0).font().bold())
+ok("줄 높이도 글씨에 맞춰 늘어난다", cw.lst.item(0).sizeHint().height() >= 28,
+   cw.lst.item(0).sizeHint().height())
+# ⚠️ 달력 칸의 띠와 **같은 색**이어야 한다. 둘 다 e.start 로 정렬해 같은 차례로
+#    도니, 달력의 셋째 띠와 목록의 셋째 줄이 같은 색이 된다. 색을 따로 고르면
+#    이 짝이 어긋나 오히려 헷갈린다.
+cols = [cw.lst.item(i).background().color().name() for i in range(cw.lst.count())]
+want = [cw.cal.chip_bg(i).lower() for i in range(cw.lst.count())]
+ok("달력 칸과 같은 라벨색", cols == want, f"{cols} vs {want}")
+ok("줄마다 색이 다르다", len(set(cols)) == len(cols), cols)
+ok("글자색도 색띠 위에서 읽히게 정한다",
+   cw.lst.item(0).foreground().color().name() == theme.c("chip_text").lower(),
+   cw.lst.item(0).foreground().color().name())
 
 print("\n[C] 제목에서 고객명 뽑기")
 ok("'홍길동 출고' → 홍길동", cw._customer_name_of(EVENTS[0]) == "홍길동",

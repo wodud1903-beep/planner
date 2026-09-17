@@ -662,6 +662,13 @@ class MainWindow(QMainWindow):
         if goto is not None:
             self._cal_win.goto_date(goto)
 
+    # ⚠️ 캘린더 창은 CalendarWindow 쪽에서 **따로 뜨는 창**으로 만든다
+    #    (Qt.Window). 예전엔 이 창의 자식 위젯이라 이 창보다 넓게 만들어도
+    #    넘치는 만큼 잘려 나갔다 — 오른쪽 일정 열이 통째로 안 보이고, 손으로
+    #    창을 넓혀야 나타났다. 그때는 여는 김에 이 창을 340px 넓혀 자리를
+    #    만들어 줬는데, 이 창 크기가 제멋대로 바뀌는 게 더 불편했다.
+    #    이제 캘린더는 제 크기를 스스로 갖고, 이 창은 건드리지 않는다.
+
     def _on_week_dblclick(self, index):
         """이번주 일정을 더블클릭 → 캘린더 창을 그 날짜로 연다."""
         r = index.row()

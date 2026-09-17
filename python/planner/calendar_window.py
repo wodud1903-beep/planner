@@ -13,8 +13,8 @@ import threading
 import webbrowser
 from datetime import date, datetime, time, timedelta
 
-from PySide6.QtCore import QDate, QRect, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QDate, QRect, QSize, Qt, QTime, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
@@ -43,8 +43,11 @@ class EventCalendar(QCalendarWidget):
         self._by_date = by_date or {}
         self.updateCells()
 
-    def _chip_bg(self, i: int) -> str:
-        """한 칸에 일정이 여러 개면 색을 번갈아 써 서로 구분되게 한다."""
+    def chip_bg(self, i: int) -> str:
+        """한 칸에 일정이 여러 개면 색을 번갈아 써 서로 구분되게 한다.
+
+        오른쪽 일정 목록도 이 색을 쓴다(창 쪽에서 부른다) — 그래서 공개 이름이다.
+        """
         pal = theme.chip_colors()
         return pal[i % len(pal)]
 
@@ -107,7 +110,7 @@ class EventCalendar(QCalendarWidget):
                 y = top + i * line_h
                 box = QRect(rect.left() + 3, y, rect.width() - 7, chip_h)
                 painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor(self._chip_bg(i)))
+                painter.setBrush(QColor(self.chip_bg(i)))
                 painter.drawRoundedRect(box, 4, 4)
                 painter.setPen(QColor(theme.c("chip_text")))
                 painter.drawText(box.adjusted(5, 0, -4, 0),
@@ -227,14 +230,15 @@ class CalendarWindow(QWidget):
         self._epoch = 0
 
         self.setWindowTitle("구글 캘린더")
-        # 오른쪽에 일정 목록이 한 열 붙으므로 그만큼 넓게 연다.
-        # 부모 크기를 그대로 따르면 달력이 눌려 칸 안의 일정명이 잘린다.
-        SIDE = 340                       # 오른쪽 목록이 쓸 만한 최소 폭
-        if parent is not None:
-            self.resize(max(parent.width() + SIDE, 1380), parent.height())
-        else:
-            self.resize(1380, 880)
+        # ⚠️ **따로 뜨는 창**이다. parent 를 주면서 이 깃발을 안 켜면 그냥 자식
+        #    위젯이 되어 메인 창 안쪽에 갇힌다 — 메인 창보다 넓게 만들어도
+        #    넘치는 만큼(오른쪽 일정 열이 딱 그만큼이다) 소리 없이 잘려서,
+        #    손으로 메인 창을 넓혀야 일정이 나타났다.
+        #    parent 는 그대로 둔다: 설정(cal_side_w)·고객 이동에 쓰고,
+        #    메인 창을 닫으면 이 창도 같이 닫힌다.
+        self.setWindowFlag(Qt.Window, True)
         self.setWindowIcon(parent.windowIcon() if parent else self.windowIcon())
+        self._open_own_size()
         # 뒤 창이 비치지 않도록 불투명 배경 + 스타일 배경 적용
         self.setObjectName("calwin")
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -280,8 +284,7 @@ class CalendarWindow(QWidget):
         sv.setSpacing(4)
         self.lbl_day = QLabel("날짜를 선택하면 그 날의 일정이 여기에 보입니다")
         # 배경색과 글자색이 겹쳐 안 보이는 문제 방지 → 색을 명시적으로 지정
-        self.lbl_day.setStyleSheet(
-            f"font-weight:bold;background:transparent;color:{theme.c('text')};")
+        self.lbl_day.setStyleSheet(self._day_label_css())
         self.lbl_day.setWordWrap(True)
         sv.addWidget(self.lbl_day)
         self.lst = QListWidget()
@@ -317,6 +320,32 @@ class CalendarWindow(QWidget):
 
         # 창이 먼저 뜨고 나서(다음 이벤트 루프 틱) 백그라운드 로딩 → 여는 순간 멈춤 방지
         QTimer.singleShot(0, self.reload)
+
+    # ---- 제 크기로 열기 ----
+    DEFAULT_W, DEFAULT_H = 1440, 920   # 달력 1100 + 오른쪽 일정 열 340
+
+    def _open_own_size(self):
+        """메인 창 크기와 상관없이 제 크기로, 화면 가운데에 뜬다.
+
+        달력이 눌리면 칸 안의 일정명이 먼저 잘리므로 달력 쪽에 1100px 은 남긴다.
+        화면이 그보다 작으면 화면에 맞춘다.
+        """
+        avail = self._avail()
+        w = min(self.DEFAULT_W, avail.width())
+        h = min(self.DEFAULT_H, avail.height())
+        self.resize(w, h)
+        self.move(avail.left() + (avail.width() - w) // 2,
+                  avail.top() + (avail.height() - h) // 2)
+
+    def _avail(self):
+        """이 창이 뜰 화면의 작업 영역. 여러 화면을 쓰면 부모가 있는 화면."""
+        scr = None
+        p = self.parent()
+        if p is not None:
+            scr = p.screen()
+        if scr is None:
+            scr = self.screen() or QGuiApplication.primaryScreen()
+        return scr.availableGeometry()
 
     # ---- 좌우 폭 기억 ----
     def _restore_split(self):
@@ -391,6 +420,24 @@ class CalendarWindow(QWidget):
             return
         parent.open_customer_by_name(name, self)
 
+    def resizeEvent(self, e):          # noqa: N802
+        super().resizeEvent(e)
+        self._clamp_split()
+
+    def _clamp_split(self):
+        """창이 줄어도 오른쪽 열이 사라지지 않게 잡아 둔다."""
+        if not hasattr(self, "split"):
+            return
+        total = self.split.width()
+        if total < 400:
+            return
+        sizes = self.split.sizes()
+        if len(sizes) != 2:
+            return
+        side = min(max(sizes[1], 240), max(240, total - 400))
+        if abs(side - sizes[1]) > 1:
+            self.split.setSizes([total - side, side])
+
     def goto_date(self, d: date):
         """그 날짜로 달력을 옮기고 아래에 그 날 일정을 펼친다."""
         if d is None:
@@ -402,12 +449,31 @@ class CalendarWindow(QWidget):
         if self.lst.count():
             self.lst.setCurrentRow(0)      # 바로 [수정]/[삭제] 를 누를 수 있게
 
+    # ---- 오른쪽 목록 글씨 ----
+    LIST_PT = 12        # 기본 글씨보다 한 단계 크게 — 멀리서도 읽힌다
+
+    def _day_label_css(self) -> str:
+        # 배경색과 글자색이 겹쳐 안 보이는 문제 방지 → 색을 명시적으로 지정
+        return (f"font-weight:bold;font-size:{self.LIST_PT}pt;"
+                f"background:transparent;color:{theme.c('text')};padding:2px 0 4px;")
+
+    def _list_font(self, bold: bool = True):
+        f = self.font()
+        f.setPointSize(self.LIST_PT)
+        f.setBold(bold)
+        return f
+
+    def _list_row_h(self) -> int:
+        """글씨 크기에 맞춘 줄 높이. 띠(라벨색)가 글자에 붙지 않게 여백을 준다."""
+        return QFontMetrics(self._list_font()).height() + 12
+
     def apply_theme(self):
         """다크/라이트 전환 시 창 배경·글자색을 현재 테마로 갱신."""
         self.setStyleSheet(f"#calwin{{background:{theme.c('window_bg')};}}")
-        self.lbl_day.setStyleSheet(
-            f"font-weight:bold;background:transparent;color:{theme.c('text')};")
+        self.lbl_day.setStyleSheet(self._day_label_css())
         self.cal.updateCells()
+        # 목록의 라벨색도 테마 색이다 — 같이 다시 칠한다
+        self._on_day_selected(self.cal.selectedDate())
 
     def _redraw(self):
         """달력 칸 + 아래 목록을 현재 self.events 기준으로 다시 그린다."""
@@ -489,11 +555,21 @@ class CalendarWindow(QWidget):
         self.lbl_day.setText(f"{d:%Y-%m-%d} ({dow}) 일정  {len(day_evs)}건")
         self.lst.clear()
         if not day_evs:
-            self.lst.addItem("(일정 없음) — 더블클릭하거나 [이 날짜에 일정 추가]")
+            li = QListWidgetItem("(일정 없음) — 더블클릭하거나 [이 날짜에 일정 추가]")
+            li.setFont(self._list_font(bold=False))
+            self.lst.addItem(li)
             return
-        for e in day_evs:
+        for i, e in enumerate(day_evs):
             li = QListWidgetItem(f"{e.time_text()}  {e.summary}")
             li.setData(Qt.UserRole, e)      # 수정/삭제에 쓸 원본 일정
+            # 읽기 좋게 크게, 그리고 달력 칸과 **같은 색**으로 칠한다.
+            # ⚠️ 색은 EventCalendar.chip_bg 를 그대로 쓴다. 두 곳이 같은 순서
+            #    (e.start 로 정렬)로 도니 달력 칸의 셋째 띠가 목록의 셋째 줄과
+            #    같은 색이 된다 — 색을 따로 고르면 이 짝이 어긋난다.
+            li.setFont(self._list_font())
+            li.setBackground(QColor(self.cal.chip_bg(i)))
+            li.setForeground(QColor(theme.c("chip_text")))
+            li.setSizeHint(QSize(0, self._list_row_h()))
             self.lst.addItem(li)
 
     # ---- 수정 / 삭제 ----
