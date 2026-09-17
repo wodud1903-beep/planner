@@ -204,6 +204,37 @@ btn = QPushButton("저장"); btn.setDefault(True)
 btn.setStyleSheet(theme.qss()); btn.show(); app.processEvents()
 ok("기본 단추가 그려진다", btn.isVisible() or True)
 
+print("\n[8] 기본(밝은 청회색) — 밝게 올렸어도 면이 녹지 않는가")
+# v1.16.2 에서 한 단계 밝게 올렸다. 밝게만 하면 패널·바탕·테두리가 서로
+# 붙어 버려 표와 달력의 칸 선이 사라진다 — 그 선을 여기서 지킨다.
+L = theme.LIGHT
+WAS_PANEL = "#F3F6FA"      # 올리기 전 패널
+ok("패널이 예전보다 밝다", lum(L["panel_bg"]) > lum(WAS_PANEL),
+   (WAS_PANEL, L["panel_bg"]))
+ok("입력칸은 순백", L["input_bg"] == "#FFFFFF", L["input_bg"])
+ok("패널이 전체배경보다 밝다", lum(L["panel_bg"]) > lum(L["window_bg"]))
+ok("입력칸이 패널보다 밝다 (밝은 테마는 이 방향)",
+   lum(L["input_bg"]) > lum(L["panel_bg"]))
+# ⚠️ 여기가 핵심이다. 밝게 올리면서 테두리·격자까지 같이 올리면 칸이 안 보인다.
+ok("테두리가 패널과 갈린다", ratio(L["border"], L["panel_bg"]) >= 1.30,
+   ratio(L["border"], L["panel_bg"]))
+ok("달력 격자가 패널과 갈린다", ratio(L["grid"], L["panel_bg"]) >= 1.18,
+   ratio(L["grid"], L["panel_bg"]))
+ok("본문 7:1", ratio(L["text"], L["panel_bg"]) >= 7.0,
+   ratio(L["text"], L["panel_bg"]))
+ok("흐린 글자 4.5:1", ratio(L["subtext"], L["panel_bg"]) >= 4.5,
+   ratio(L["subtext"], L["panel_bg"]))
+ok("포인트색 3:1 (순백 입력칸 위에서도)",
+   min(ratio(L["accent"], L["panel_bg"]), ratio(L["accent"], L["input_bg"])) >= 3.0,
+   (ratio(L["accent"], L["panel_bg"]), ratio(L["accent"], L["input_bg"])))
+ok("단추는 눌릴수록 진해진다",
+   lum(L["btn_bg"]) > lum(L["btn_hover"]) > lum(L["btn_pressed"]))
+# 달력 칸 색은 그대로 둔다 — 지금 색이 좋다고 하셨다
+for k, v in (("chip1", "#BBD6F2"), ("chip2", "#C9E6C9"),
+             ("chip3", "#F6DCC0"), ("chip4", "#DCD3F0"),
+             ("today", "#FFC98A"), ("tomorrow", "#FFF2A8")):
+    ok(f"{k} 은 그대로", L[k] == v, L[k])
+
 theme.set_theme("light")
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n" + ("실패 %d건: %s" % (len(FAIL), FAIL) if FAIL else "전부 통과"))

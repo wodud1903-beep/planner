@@ -6,34 +6,40 @@
 
 from __future__ import annotations
 
-# 라이트: 눈이 편하도록 순백(#FFF) 대신 은은한 오프화이트 톤 사용
+# 라이트: 밝은 청회색. v1.16.2 에서 한 단계 **밝게** 올렸다 — 바탕과 패널이
+# 무거워 보인다는 이야기가 있었고, 실제로 패널이 #F3F6FA 라 화면 전체가
+# 살짝 회색 필터를 씌운 것처럼 보였다. 이제 패널은 거의 흰색(#FBFCFE),
+# 입력칸은 순백이다.
+# ⚠️ 밝게 올릴 때 **테두리·격자는 같이 올리지 않는다.** 같이 올리면 면이
+#    녹아 붙어 표와 달력의 칸이 안 보인다. 테두리는 패널 대비 1.45 를 지킨다.
+#    (달력 칸 색 chip1~4·오늘·내일은 그대로 둔다 — 지금 색이 마음에 든다고 하셨다)
 LIGHT = {
-    "topbar": "#D7E1EC",
+    "topbar": "#E2EAF4",
     "topbar_text": "#2C3E50",
-    "window_bg": "#E7ECF2",     # 전체 배경(약간 낮춘 밝기)
-    "panel_bg": "#F3F6FA",      # 패널(순백 아님)
+    "window_bg": "#EDF1F6",     # 전체 배경
+    "panel_bg": "#FBFCFE",      # 패널 — 거의 흰색, 아주 옅은 청기만
     "text": "#2C3E50",
     "subtext": "#4A5B6C",
     "accent": "#5B8FBF",
-    "border": "#C3D0DE",
-    "header_bg": "#DDE7F1",
-    "select_bg": "#CDE0F4",
+    "border": "#C8D5E2",
+    "header_bg": "#E6EEF7",
+    "select_bg": "#D5E6F8",
     "select_text": "#1A2A38",
-    "btn_bg": "#E4EDF6",
-    "btn_hover": "#D6E3F1",
-    "btn_pressed": "#C6D9EC",
-    "input_bg": "#F7F9FC",      # 입력창(순백 아님)
-    "grid": "#D8E1EB",
-    "tab_bg": "#D7E1EC",
+    "btn_bg": "#EEF4FA",
+    "btn_hover": "#E0EBF7",
+    "btn_pressed": "#CFE0F1",
+    "input_bg": "#FFFFFF",      # 입력창 — 순백이라 칠 곳이 또렷하다
+    "grid": "#DCE4EE",
+    "tab_bg": "#E2EAF4",
     "today": "#FFC98A",
     "tomorrow": "#FFF2A8",
     "row_text": "#1A2430",     # 강조행 글자색
-    "brief_bg": "#E4EBF3",
+    "brief_bg": "#EFF4FA",
     "brief_text": "#2C3E50",
     "status_ok": "#2E7D32",
     "status_bad": "#C0392B",
-    "scroll": "#B3C4D6",
-    "scroll_hover": "#98AEC3",
+    "scroll": "#BFCEDD",
+    "scroll_hover": "#A6B9CC",
     "chip_text": "#1B2B3A",
     "chip1": "#BBD6F2",
     "chip2": "#C9E6C9",
