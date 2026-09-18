@@ -398,10 +398,13 @@ QCalendarWidget QAbstractItemView:enabled {{
     selection-background-color: {p['select_bg']}; selection-color: {p['select_text']};
 }}
 QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {p['header_bg']}; }}
-QCalendarWidget QToolButton {{ color: {p['text']}; background: transparent; border-radius: 6px; padding: 3px 8px; }}
+/* 연/월 글씨는 기본(10pt)보다 한 단계 크게 — 달력에서 제일 먼저 보는 글자다 */
+QCalendarWidget QToolButton {{ color: {p['text']}; background: transparent; border-radius: 6px;
+    padding: 4px 10px; font-size: 12pt; }}
 QCalendarWidget QToolButton:hover {{ background: {p['btn_hover']}; }}
 QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
-QCalendarWidget QSpinBox {{ background: {p['input_bg']}; color: {p['text']}; }}
+/* 연도를 눌러 고칠 때 뜨는 칸 — 위 글씨와 크기를 맞춘다 */
+QCalendarWidget QSpinBox {{ background: {p['input_bg']}; color: {p['text']}; font-size: 12pt; }}
 QCalendarWidget QMenu {{ background: {p['panel_bg']}; color: {p['text']}; }}
 QMenu {{
     background: {p['panel_bg']}; color: {p['text']};

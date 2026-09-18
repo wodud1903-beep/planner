@@ -191,13 +191,57 @@ w.sheet_rows.pop()
 w.refresh_customers()
 pump()
 
-print("\n[E] 우클릭 메뉴")
+print("\n[E] 우클릭 메뉴 — 이제 여기가 유일한 길이다")
 src = (_ROOT / "python" / "planner" / "calendar_window.py").read_text(encoding="utf-8")
 ok("목록에 우클릭 메뉴가 붙어 있다", "customContextMenuRequested" in src)
 ok("[일정 수정] 이 있다", '"일정 수정"' in src)
+ok("[일정 삭제] 가 있다", '"일정 삭제"' in src)
 ok("[해당 일정으로 이동] 이 있다", '"해당 일정으로 이동"' in src)
 # 더블클릭은 예전과 똑같이 수정 창을 연다
 ok("더블클릭은 그대로 수정", "itemDoubleClicked" in src and "_edit_selected" in src)
+ok("달력 더블클릭은 그대로 추가", "cal.activated" in src and "_add_for_selected" in src)
+
+# ⚠️ 위 단추 셋을 없앴다. 없앤 뒤 메뉴에 그 일이 없으면 **할 방법이 통째로
+#    사라진다.** 그래서 단추가 없다는 것과 메뉴에 있다는 것을 같이 못 박는다.
+for gone in ("이 날짜에 일정 추가", "선택 일정 수정", "선택 일정 삭제"):
+    ok(f"[{gone}] 단추가 없다", f'QPushButton("{gone}")' not in src)
+for attr in ("btn_add", "btn_edit", "btn_del"):
+    ok(f"{attr} 를 아무도 안 쓴다", attr not in src, attr)
+ok("남은 단추는 새로고침·브라우저·닫기",
+   all(hasattr(cw, a) for a in ("btn_refresh", "btn_web", "btn_close")))
+ok("무엇을 할 수 있는지 한 줄 안내가 있다",
+   hasattr(cw, "lbl_hint") and "오른쪽 버튼" in cw.lbl_hint.text(), 
+   getattr(getattr(cw, "lbl_hint", None), "text", lambda: "")())
+
+# 실제로 메뉴를 만들어 본다.
+# ⚠️ _list_menu 를 부르면 안 된다 — QMenu.exec 은 모달이라 검사가 거기서
+#    영영 멈춘다(그렇게 한 번 걸렸다). 그래서 만드는 쪽만 따로 부른다.
+cw.lst.setCurrentRow(0)
+ev0 = cw.lst.item(0).data(Qt.UserRole)
+_menu, acts = cw._menu_for(ev0)
+names = [a.text() for a in _menu.actions() if not a.isSeparator()]
+ok("메뉴에 추가·수정·삭제·이동이 다 있다",
+   "일정 추가" in names[0] and "일정 수정" in names
+   and "일정 삭제" in names and "해당 일정으로 이동" in names, names)
+ok("추가 메뉴에 고른 날짜가 적힌다", "9월 20일" in names[0], names[0])
+ok("일정 위에서는 수정·삭제가 켜진다",
+   acts["edit"].isEnabled() and acts["del"].isEnabled())
+ok("고객 일정이면 [해당 일정으로 이동] 도 켜진다", acts["go"].isEnabled())
+_menu2, acts2 = cw._menu_for(None)
+ok("빈 자리에서도 [일정 추가] 는 켜져 있다", acts2["add"].isEnabled())
+ok("빈 자리에서 수정·삭제는 꺼진다",
+   not acts2["edit"].isEnabled() and not acts2["del"].isEnabled())
+_menu3, acts3 = cw._menu_for(EVENTS[2])          # 치과 예약 — 고객과 안 이어진다
+ok("고객과 안 이어진 일정은 [이동] 이 꺼진다", not acts3["go"].isEnabled())
+
+print("\n[E2] 연/월 글씨가 크다")
+from planner import theme as _th  # noqa: E402
+q = _th.qss()
+ok("달력 위쪽 연/월이 기본보다 크다", "font-size: 12pt" in q,
+   [l.strip() for l in q.split("\n") if "font-size: 12pt" in l][:2])
+ok("연도를 고칠 때 뜨는 칸도 같은 크기",
+   "QCalendarWidget QSpinBox" in q and q.split("QCalendarWidget QSpinBox")[1]
+   .split("}")[0].find("12pt") > 0)
 
 print("\n[F] 고객으로 이동")
 opened = []

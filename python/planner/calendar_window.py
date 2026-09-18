@@ -228,6 +228,7 @@ class CalendarWindow(QWidget):
         # 아직 서버 반영이 확인되지 않은(방금 추가한) 일정
         self._pending: list[dict] = []
         self._epoch = 0
+        self._adding = False       # 일정 하나가 아직 구글로 올라가는 중인가
 
         self.setWindowTitle("구글 캘린더")
         # ⚠️ **따로 뜨는 창**이다. parent 를 주면서 이 깃발을 안 켜면 그냥 자식
@@ -248,12 +249,17 @@ class CalendarWindow(QWidget):
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(6)
         top = QHBoxLayout()
-        self.btn_add = QPushButton("이 날짜에 일정 추가")
-        self.btn_add.clicked.connect(self._add_for_selected)
-        self.btn_edit = QPushButton("선택 일정 수정")
-        self.btn_edit.clicked.connect(self._edit_selected)
-        self.btn_del = QPushButton("선택 일정 삭제")
-        self.btn_del.clicked.connect(self._delete_selected)
+        # ⚠️ [이 날짜에 일정 추가]·[선택 일정 수정]·[선택 일정 삭제] 단추는 없앴다.
+        #    셋 다 '먼저 고르고 위에서 누른다' 는 두 동작이라, 마우스로 바로
+        #    하는 편이 빠르다. 지금은 이렇게 한다:
+        #      · 달력의 날짜를 더블클릭 → 그 날에 일정 추가
+        #      · 오른쪽 목록에서 더블클릭 → 수정
+        #      · 오른쪽 목록에서 오른쪽 버튼 → 추가·수정·삭제·해당 고객으로 이동
+        #    그래서 아래 안내를 한 줄 둔다 — 단추가 없어지면 할 수 있는 일도
+        #    같이 안 보이게 되기 때문이다.
+        self.lbl_hint = QLabel("날짜를 더블클릭하면 일정 추가 · "
+                               "오른쪽 목록에서 마우스 오른쪽 버튼으로 수정·삭제")
+        self.lbl_hint.setStyleSheet(self._hint_css())
         self.btn_refresh = QPushButton("새로고침")
         # '불러오는 중…' 으로 글자가 길어져도 잘리지 않게 폭을 미리 잡아 둔다
         self.btn_refresh.setMinimumWidth(110)
@@ -262,10 +268,9 @@ class CalendarWindow(QWidget):
         self.btn_web.clicked.connect(lambda: webbrowser.open("https://calendar.google.com/"))
         self.btn_close = QPushButton("닫기")
         self.btn_close.clicked.connect(self.close)
-        top.addWidget(self.btn_add)
-        top.addWidget(self.btn_edit)
-        top.addWidget(self.btn_del)
         top.addWidget(self.btn_refresh)
+        top.addSpacing(10)
+        top.addWidget(self.lbl_hint)
         top.addStretch()
         top.addWidget(self.btn_web)
         top.addWidget(self.btn_close)
@@ -374,22 +379,47 @@ class CalendarWindow(QWidget):
 
     # ---- 오른쪽 목록 우클릭 ----
     def _list_menu(self, pos):
+        """오른쪽 목록의 마우스 오른쪽 버튼 — 추가·수정·삭제·고객으로 이동."""
         item = self.lst.itemAt(pos)
         if item is not None:
             self.lst.setCurrentItem(item)
         ev = item.data(Qt.UserRole) if item else None
+        menu, acts = self._menu_for(ev)
+        picked = menu.exec(self.lst.viewport().mapToGlobal(pos))
+        if picked is None:
+            return
+        if picked is acts["add"]:
+            self._add_for_selected()
+        elif picked is acts["edit"]:
+            self._edit_selected()
+        elif picked is acts["del"]:
+            self._delete_selected()
+        elif picked is acts["go"]:
+            self._goto_customer(ev)
+
+    def _menu_for(self, ev):
+        """그 메뉴를 **만들기만** 한다. 띄우는 것은 _list_menu 가 한다.
+
+        위 단추들을 없앴으므로 여기가 유일한 길이다. 그래서 일정이 없는 빈
+        자리에서 눌러도 [~일에 일정 추가] 는 늘 켜 둔다.
+
+        ⚠️ 만드는 일과 띄우는 일을 갈라 둔다. 한 덩어리로 두면 검사에서 메뉴가
+           뜬 채 영영 멈춘다(QMenu.exec 은 모달이다) — 실제로 그렇게 걸렸다.
+        """
         menu = QMenu(self)
-        act_edit = menu.addAction("일정 수정")
-        act_go = menu.addAction("해당 일정으로 이동")
-        act_edit.setEnabled(ev is not None)
+        qd = self.cal.selectedDate()
+        acts = {"add": menu.addAction(f"{qd.month()}월 {qd.day()}일에 일정 추가")}
+        menu.addSeparator()
+        acts["edit"] = menu.addAction("일정 수정")
+        acts["del"] = menu.addAction("일정 삭제")
+        menu.addSeparator()
+        acts["go"] = menu.addAction("해당 일정으로 이동")
+        acts["edit"].setEnabled(ev is not None)
+        acts["del"].setEnabled(ev is not None)
         # 고객과 이어지는 일정일 때만 켠다 — 눌러 놓고 '아무 일도 안 난다' 가
         # 제일 나쁘다.
-        act_go.setEnabled(bool(ev) and bool(self._customer_name_of(ev)))
-        picked = menu.exec(self.lst.viewport().mapToGlobal(pos))
-        if picked is act_edit:
-            self._edit_selected()
-        elif picked is act_go:
-            self._goto_customer(ev)
+        acts["go"].setEnabled(bool(ev) and bool(self._customer_name_of(ev)))
+        return menu, acts
 
     def _customer_name_of(self, ev) -> str:
         """일정 제목에서 고객명. 고객과 안 이어진 일정이면 ''.
@@ -452,6 +482,9 @@ class CalendarWindow(QWidget):
     # ---- 오른쪽 목록 글씨 ----
     LIST_PT = 12        # 기본 글씨보다 한 단계 크게 — 멀리서도 읽힌다
 
+    def _hint_css(self) -> str:
+        return f"color:{theme.c('subtext')};background:transparent;"
+
     def _day_label_css(self) -> str:
         # 배경색과 글자색이 겹쳐 안 보이는 문제 방지 → 색을 명시적으로 지정
         return (f"font-weight:bold;font-size:{self.LIST_PT}pt;"
@@ -471,6 +504,7 @@ class CalendarWindow(QWidget):
         """다크/라이트 전환 시 창 배경·글자색을 현재 테마로 갱신."""
         self.setStyleSheet(f"#calwin{{background:{theme.c('window_bg')};}}")
         self.lbl_day.setStyleSheet(self._day_label_css())
+        self.lbl_hint.setStyleSheet(self._hint_css())
         self.cal.updateCells()
         # 목록의 라벨색도 테마 색이다 — 같이 다시 칠한다
         self._on_day_selected(self.cal.selectedDate())
@@ -555,7 +589,7 @@ class CalendarWindow(QWidget):
         self.lbl_day.setText(f"{d:%Y-%m-%d} ({dow}) 일정  {len(day_evs)}건")
         self.lst.clear()
         if not day_evs:
-            li = QListWidgetItem("(일정 없음) — 더블클릭하거나 [이 날짜에 일정 추가]")
+            li = QListWidgetItem("(일정 없음) — 달력에서 날짜를 더블클릭하면 추가됩니다")
             li.setFont(self._list_font(bold=False))
             self.lst.addItem(li)
             return
@@ -642,6 +676,8 @@ class CalendarWindow(QWidget):
 
     # ---- 추가 ----
     def _add_for_selected(self):
+        if getattr(self, "_adding", False):
+            return                 # 앞의 추가가 아직 올라가는 중이다
         qd = self.cal.selectedDate()
         d = date(qd.year(), qd.month(), qd.day())
         # 캘린더 목록을 아직 못 받았어도 기본 캘린더로 바로 추가할 수 있게 한다
@@ -665,7 +701,7 @@ class CalendarWindow(QWidget):
         self._pending.append(pend)
         self.events = sorted(list(self.events) + [ev], key=lambda e: e.start)
         self._redraw()
-        self.btn_add.setEnabled(False)
+        self._adding = True        # 예전엔 [추가] 단추를 잠갔다. 단추가 없어졌으니 깃발로.
 
         rmin = self._reminder_minutes()
 
@@ -693,7 +729,7 @@ class CalendarWindow(QWidget):
 
     def _on_added(self, pend, real, err: str):
         """일정 추가 결과 (UI 스레드)."""
-        self.btn_add.setEnabled(True)
+        self._adding = False
         if err:
             # 롤백 — 미리 그려 둔 일정을 걷어낸다
             if pend in self._pending:
