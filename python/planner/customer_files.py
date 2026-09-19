@@ -170,6 +170,7 @@ class LocalSource:
     def __init__(self, root: str):
         self.root = (root or "").strip()
         self.failed = 0          # 훑다가 못 읽은 폴더 수 (화면이 알릴 수 있게)
+        self.auto = False        # 구글 드라이브에서 저절로 찾아낸 경로인가
 
     def available(self) -> bool:
         return bool(self.root) and Path(self.root).is_dir()
@@ -464,15 +465,23 @@ def pick_source(settings, auth):
     """설정을 보고 쓸 창고를 고른다 — 로컬이 먼저, 안 되면 드라이브.
 
     (창고, 안내문) 을 돌려준다. 둘 다 못 쓰면 (None, 이유).
+
+    폴더를 손으로 지정하지 않았거나 지정한 곳이 이 PC 엔 없으면, 이 PC 의
+    구글 드라이브에서 '내 드라이브\\고객정보' 를 찾아 쓴다(drive_path.resolve).
+    PC 마다 [폴더 선택]을 다시 하지 않으려는 것이다.
     """
-    local = LocalSource(getattr(settings, "files_dir", "") or "")
+    from . import drive_path
+    root, auto, why_dir = drive_path.resolve(settings)
+    local = LocalSource(root)
+    # 화면이 '자동으로 찾았다' 고 말할 수 있게 표시만 남긴다(경로는 저장하지 않는다)
+    local.auto = auto
     if local.available():
         return local, ""
     drive = DriveSource(auth, getattr(settings, "files_drive_folder", "") or "")
     if getattr(settings, "files_use_drive", False) and drive.available():
         return drive, ""
     # 못 쓰는 이유는 로컬 쪽을 먼저 알려 준다(그쪽이 기본이므로)
-    why = local.why_not()
+    why = why_dir or local.why_not()
     if getattr(settings, "files_use_drive", False):
         why += "\n\n드라이브 조회도 쓸 수 없습니다 — " + drive.why_not()
     return None, why

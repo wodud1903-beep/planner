@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import config, searchcombo, sheets, theme, weekly
+from . import config, drive_path, searchcombo, sheets, theme, weekly
 from .models import AppSettings
 
 
@@ -199,17 +199,22 @@ class SettingsDialog(QDialog):
         frow = QHBoxLayout()
         self.ed_files_dir = QLineEdit()
         self.ed_files_dir.setPlaceholderText(
-            r"예) G:\내 드라이브\고객정보  또는  C:\Users\...\Google Drive\고객정보")
+            "비워 두면 이 PC 의 구글 드라이브에서 자동으로 찾습니다")
         frow.addWidget(self.ed_files_dir, 1)
         btn_files_dir = QPushButton("찾기")
         btn_files_dir.clicked.connect(self._pick_files_dir)
         frow.addWidget(btn_files_dir)
         ffl.addRow("서류 폴더", frow)
         ffl.addRow(QLabel(
-            "구글 드라이브 데스크톱이 PC 에 내려받아 둔 '고객정보' 폴더를 고르세요.\n"
-            "사무실과 집 PC 양쪽에 드라이브 데스크톱이 깔려 있으면, 한쪽에서 넣은\n"
-            "서류가 다른 쪽에서도 그대로 보입니다. 추가 권한이 필요 없고 인터넷이\n"
-            "없어도 열립니다."))
+            "비워 두면 이 PC 의 구글 드라이브에서 '내 드라이브 \\ 고객정보' 를\n"
+            "스스로 찾아 씁니다. PC 마다 다시 고를 필요가 없습니다.\n"
+            "(드라이브 문자가 G: 가 아니어도 찾습니다. 다른 곳에 두셨을 때만 직접 고르세요)"))
+        # 지금 이 PC 에서 무엇이 잡히는지 바로 보여 준다 — 되는지 안 되는지를
+        # 설정 창을 닫고 탭을 열어 봐야 아는 것이 제일 답답하다.
+        self.lbl_files_auto = QLabel("")
+        self.lbl_files_auto.setWordWrap(True)
+        ffl.addRow("", self.lbl_files_auto)
+        self._refresh_files_auto()
 
         self.chk_files_drive = QCheckBox("폴더가 없을 때 구글 드라이브에서 직접 조회")
         ffl.addRow("드라이브 조회", self.chk_files_drive)
@@ -372,6 +377,7 @@ class SettingsDialog(QDialog):
         self.ed_sheet_id.setText(s.sheet_id)
         self.ed_sheet_name.setText(s.sheet_name)
         self.ed_files_dir.setText(s.files_dir)
+        self._refresh_files_auto()       # 설정을 불러온 뒤의 상태로 다시 적는다
         self.ed_fax_dir.setText(s.fax_dir)
         self.chk_fax.setChecked(s.fax_watch)
         self.chk_files_drive.setChecked(s.files_use_drive)
@@ -468,10 +474,32 @@ class SettingsDialog(QDialog):
             self.ed_fax_dir.setText(d)
 
     def _pick_files_dir(self):
-        start = self.ed_files_dir.text().strip() or os.path.expanduser("~")
+        start = (self.ed_files_dir.text().strip()
+                 or drive_path.find() or os.path.expanduser("~"))
         d = QFileDialog.getExistingDirectory(self, "고객정보 폴더 선택", start)
         if d:
             self.ed_files_dir.setText(d)
+            self._refresh_files_auto()
+
+    def _refresh_files_auto(self):
+        """이 PC 에서 서류 폴더가 잡히는지 지금 확인해 적는다."""
+        drive_path.invalidate()          # 방금 폴더 이름을 고쳤을 수 있다
+        manual = self.ed_files_dir.text().strip()
+        if manual:
+            ok = os.path.isdir(manual)
+            self.lbl_files_auto.setText(
+                ("직접 지정한 폴더를 씁니다." if ok else
+                 "⚠ 지정한 폴더가 이 PC 에는 없습니다. 비워 두면 자동으로 찾습니다."))
+            self.lbl_files_auto.setStyleSheet(
+                f"color:{theme.c('subtext') if ok else theme.strong('red')};")
+            return
+        found, why = drive_path.detect()
+        if found:
+            self.lbl_files_auto.setText("✔ 자동으로 찾았습니다 — " + found)
+            self.lbl_files_auto.setStyleSheet(f"color:{theme.c('status_ok')};")
+        else:
+            self.lbl_files_auto.setText("⚠ " + why.replace("\n", "  "))
+            self.lbl_files_auto.setStyleSheet(f"color:{theme.strong('red')};")
 
     # ---- 구글 로그인 ----
     def _update_gstatus(self):

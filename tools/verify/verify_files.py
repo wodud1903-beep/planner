@@ -88,6 +88,13 @@ ok("파일 내용을 읽는다", src.read_bytes(f).startswith(b"%PDF"))
 ok("로컬 경로를 준다", os.path.isfile(src.local_path(f)))
 
 print("\n[5] 창고 고르기 — 로컬 우선, 드라이브는 켠 사람만")
+# ⚠️ 이제 지정한 폴더가 없으면 이 PC 의 구글 드라이브에서 찾아본다(drive_path).
+#    검사 도는 PC 에 드라이브가 깔려 있으면 진짜 폴더가 잡혀 답이 바뀐다.
+#    여기서는 그 길을 막아 둔다 — 자동 찾기 자체는 verify_drivepath 가 본다.
+from planner import drive_path as _dp   # noqa: E402
+_dp._bases = lambda: []
+_dp.invalidate()
+
 class S:
     files_dir = root
     files_use_drive = False
@@ -105,7 +112,9 @@ class S2(S):
     files_dir = os.path.join(tmp, "없음")
 got, why = cf.pick_source(S2(), Auth())
 ok("폴더가 없고 드라이브도 안 켰으면 없음", got is None)
-ok("이유를 돌려준다", "찾을 수 없습니다" in why, why)
+ok("이유를 돌려준다", "이 PC 에는 없습니다" in why, why)
+# 무엇을 하라는 말까지 같이 간다 (예전엔 '폴더를 찾을 수 없습니다' 뿐이었다)
+ok("무엇을 하라는지도 적는다", _dp.FIX_HINT in why, why)
 
 class S3(S2):
     files_use_drive = True

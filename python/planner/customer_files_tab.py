@@ -705,9 +705,13 @@ class CustomerFilesTab(QWidget):
             return
         # 지나온 길을 그대로 보여 준다 — 드라이브 주소줄처럼
         crumbs = " / ".join(n.name for n in self.path)
+        root = getattr(self.source, "root", "") or self.settings.files_drive_folder
+        if getattr(self.source, "auto", False):
+            # 폴더를 지정하지 않았는데도 보이는 이유를 적어 둔다. 안 적으면
+            # '어디를 읽고 있는지' 를 알 길이 없다.
+            crumbs += "   (구글 드라이브에서 자동으로 찾음)"
         self.lbl_where.setText(crumbs)
-        self.lbl_where.setToolTip(
-            getattr(self.source, "root", "") or self.settings.files_drive_folder)
+        self.lbl_where.setToolTip(root)
 
     # ------------------------------------------------------------ 미리보기
     def _on_select(self):

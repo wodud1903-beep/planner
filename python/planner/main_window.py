@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from . import (
     alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
-    deliver_cal, fax_watch, fax_window, followup,
+    deliver_cal, drive_path, fax_watch, fax_window, followup,
     google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
@@ -3251,6 +3251,19 @@ class MainWindow(QMainWindow):
                          "more": more if more > 0 else 0,
                          "hint": "[고객관리] 탭에서 [서류] 를 눌러 미제출 목록을 "
                                  "복사해 고객에게 보내세요."})
+
+        # ---- 고객정보 폴더를 못 찾았다 ----
+        # 이 폴더가 없으면 [고객정보] 탭이 통째로 빈 화면이 된다. 그 탭을 열어야
+        # 비로소 알게 되는 것이 문제라, 켤 때 한 번 눈에 띄게 알린다.
+        _dir, _auto, _why = drive_path.resolve(self.settings)
+        if not _dir:
+            secs.append({
+                "icon": "📁", "title": "고객정보 폴더를 찾지 못했습니다", "color": "red",
+                "items": [{"lead": "확인", "text": drive_path.FIX_HINT}],
+                "count": 1,
+                "hint": "폴더 이름을 바꿔 두면 PC 를 바꿔도 따로 지정할 필요가 "
+                        "없습니다. 다른 곳에 두셨다면 [설정] → 서류 폴더에서 "
+                        "직접 고르셔도 됩니다."})
 
         # ---- 이번주 요약 (오늘~+7일) ----
         week_end = today + timedelta(days=7)
