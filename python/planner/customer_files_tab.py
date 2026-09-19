@@ -710,6 +710,9 @@ class CustomerFilesTab(QWidget):
             # 폴더를 지정하지 않았는데도 보이는 이유를 적어 둔다. 안 적으면
             # '어디를 읽고 있는지' 를 알 길이 없다.
             crumbs += "   (구글 드라이브에서 자동으로 찾음)"
+        elif self.source.kind == "drive":
+            # PC 에 받아 둔 것이 없어 인터넷으로 읽는 중이다. 느린 이유를 밝힌다.
+            crumbs += "   (인터넷으로 읽는 중 — 구글 드라이브를 켜 두면 빠릅니다)"
         self.lbl_where.setText(crumbs)
         self.lbl_where.setToolTip(root)
 

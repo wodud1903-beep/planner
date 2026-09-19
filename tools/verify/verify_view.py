@@ -123,7 +123,7 @@ os.makedirs(os.path.join(root, "김상현"), exist_ok=True)
 open(os.path.join(root, "김상현", "계약서.pdf"), "wb").write(PDF)
 open(os.path.join(root, "김상현", "신분증.png"), "wb").write(IMG)
 class S:
-    files_dir = root; files_use_drive = False; files_drive_folder = ""
+    files_dir = root; drive_api_on = False; files_drive_folder = ""
 class Auth:
     def is_connected(self): return False
     def has_scope(self, s): return False

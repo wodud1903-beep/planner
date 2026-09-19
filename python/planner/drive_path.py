@@ -27,6 +27,10 @@ CUSTOMER_DIR = "고객정보"
 # 못 찾았을 때 화면마다 같은 말로 안내한다 (사장님이 정한 문구)
 FIX_HINT = "내 드라이브 → 고객정보 폴더로 폴더명을 변경해주세요."
 
+# 드라이브 데스크톱이 없는 PC 에 안내할 곳
+INSTALL_URL = "https://dl.google.com/drive-file-stream/GoogleDriveSetup.exe"
+INSTALL_HINT = "구글드라이브 설치 시 속도가 빠릅니다."
+
 # 드라이브 문자를 훑는 순서. G 가 기본이고, 이미 쓰이고 있으면 그 뒤 문자로
 # 붙는다. A·B 는 옛 플로피 자리라 건드리지 않는다(드라이브가 헛돌 수 있다).
 _LETTERS = "GHIJKLMNOPQRSTUVWXYZDEFC"
@@ -152,10 +156,72 @@ def detect(sub: str = CUSTOMER_DIR) -> tuple:
         return p, ""
     roots = my_drive_roots()
     if roots:
+        # 드라이브는 붙어 있는데 그 폴더만 없다 → 이름을 고치면 된다
         return "", (f"구글 드라이브는 찾았지만 그 안에 '{sub}' 폴더가 없습니다.\n"
                     f"{roots[0]}\n" + FIX_HINT)
-    return "", ("이 PC 에서 구글 드라이브(내 드라이브)를 찾지 못했습니다.\n"
-                "구글 드라이브 데스크톱이 켜져 있는지 확인해 주세요.\n" + FIX_HINT)
+    # 여기부터는 드라이브 자체가 안 보인다. 깔려 있는데 꺼 둔 것과 아예 없는
+    # 것은 **할 말이 다르다** — 안 깔린 사람에게 '켜세요' 라고 하면 안 된다.
+    if installed():
+        return "", ("구글 드라이브가 지금 실행되고 있지 않습니다.\n"
+                    "켜 두면 서류가 PC 에 있어 훨씬 빠릅니다.\n" + FIX_HINT)
+    return "", ("이 PC 에 구글 드라이브가 깔려 있지 않습니다.\n"
+                + INSTALL_HINT + "\n" + FIX_HINT)
+
+
+# ------------------------------------------------- 깔려 있나 / 돌고 있나
+def _exe_paths() -> list:
+    """드라이브 데스크톱 실행 파일이 있을 만한 자리."""
+    out = []
+    for env in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env, "")
+        if base:
+            out.append(os.path.join(base, "Google", "Drive File Stream"))
+            out.append(os.path.join(base, "Google", "DriveFS"))
+    return out
+
+
+def installed() -> bool:
+    """이 PC 에 구글 드라이브 데스크톱이 깔려 있는가.
+
+    ⚠️ '깔려 있다' 와 '돌고 있다' 는 다르다. 깔려 있어도 꺼 두면 G: 가 없다.
+       그래서 둘을 따로 본다 — 안내할 말이 다르기 때문이다.
+    """
+    if my_drive_roots():
+        return True                     # 붙어 있으면 볼 것도 없다
+    for d in _exe_paths():
+        if _isdir(d):
+            return True
+    try:
+        import winreg
+        for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(root, r"SOFTWARE\Google\DriveFS"):
+                    return True
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def running() -> bool:
+    """드라이브가 지금 붙어 있는가(= 켜져 있는가).
+
+    프로세스 목록을 뒤지지 않는다. 우리가 알고 싶은 것은 '폴더가 보이는가' 이고,
+    그건 마운트가 있느냐로 그대로 드러난다.
+    """
+    return bool(my_drive_roots())
+
+
+def status(sub: str = CUSTOMER_DIR) -> dict:
+    """이 PC 의 형편을 한 번에 — 화면 세 곳이 같은 답을 쓰게 한다.
+
+    {"path": 찾은 경로, "installed": bool, "running": bool, "why": 못 찾은 이유}
+    """
+    path, why = detect(sub)
+    run = bool(path) or running()
+    return {"path": path, "installed": run or installed(),
+            "running": run, "why": why}
 
 
 def resolve(settings, sub: str = CUSTOMER_DIR) -> tuple:

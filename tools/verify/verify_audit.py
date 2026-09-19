@@ -139,7 +139,7 @@ os.makedirs(os.path.join(root, "박지훈"))
 class S:
     files_dir = root
     files_drive_folder = ""
-    files_use_drive = False
+    drive_api_on = False
 
 
 tab = cft.CustomerFilesTab(S(), None)

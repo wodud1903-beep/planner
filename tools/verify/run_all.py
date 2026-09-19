@@ -2,7 +2,7 @@
 """PC 앱 검사를 전부 돌린다.
 
     python tools/verify/run_all.py            전부
-    python tools/verify/run_all.py fax files  이름에 그 말이 든 것만
+    python tools/verify/run_all.py drive files  이름에 그 말이 든 것만
 
 ⚠️ 화면이 필요한 검사가 있다(Qt 창을 실제로 띄워 본다). 화면 없는 곳에서는
    먼저 가상 화면을 띄워야 한다:

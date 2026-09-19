@@ -12,7 +12,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Optional
 
-from . import config
+from . import config, drive_path
 
 
 # ---------------------------------------------------------------------------
@@ -279,16 +279,17 @@ class AppSettings:
     sheet_id: str = config.DEF_SHEET_ID
     sheet_name: str = config.DEF_SHEET_NAME
     # '고객정보' 탭 — 고객별 서류를 모아 둔 곳.
-    # files_dir 은 구글 드라이브 데스크톱이 PC 에 내려받아 둔 폴더(기본 경로).
-    # files_use_drive 를 켜면 그 폴더가 없을 때 드라이브를 직접 조회한다
-    # (drive.readonly 권한이 붙는다 — config.SCOPE_DRIVE_READ 설명 참고).
+    # files_dir 을 비워 두면 이 PC 의 구글 드라이브에서 '내 드라이브\고객정보' 를
+    # 스스로 찾는다(drive_path). 적어 두면 그쪽이 언제나 먼저다.
     files_dir: str = ""
-    files_use_drive: bool = False
-    files_drive_folder: str = ""
-    # 받은팩스 폴더 — 휴대폰 모바일팩스에서 '공유 → 드라이브 저장' 으로 넣으면
-    # 드라이브 데스크톱이 PC 로 내려받는 그 폴더. 비워 두면 팩스 기능이 잠잠하다.
-    fax_dir: str = ""
-    fax_watch: bool = True
+    # 드라이브 데스크톱이 없거나 꺼져 있는 PC 에서는 인터넷으로 같은 폴더를 읽는다.
+    # ⚠️ 옛 이름은 files_use_drive 였고 기본이 꺼짐이었다. 이름을 바꾼 이유는
+    #    **기본을 켜짐으로 돌리기 위해서**다 — 예전 설정 파일에 남아 있는
+    #    "filesUseDrive": false 를 그대로 읽으면 영영 꺼진 채로 남는다.
+    #    새 이름은 그 파일에 없으므로 기본값(켜짐)이 그대로 쓰인다.
+    #    (drive.readonly 권한이 붙는다 — config.SCOPE_DRIVE_READ 설명 참고)
+    drive_api_on: bool = True
+    files_drive_folder: str = drive_path.CUSTOMER_DIR
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
 
@@ -327,10 +328,8 @@ class AppSettings:
             "sheetId": self.sheet_id,
             "sheetName": self.sheet_name,
             "filesDir": self.files_dir,
-            "filesUseDrive": self.files_use_drive,
+            "driveApiOn": self.drive_api_on,
             "filesDriveFolder": self.files_drive_folder,
-            "faxDir": self.fax_dir,
-            "faxWatch": self.fax_watch,
             "tabOrder": list(self.tab_order or []),
         }
 
@@ -395,10 +394,9 @@ class AppSettings:
         s.sheet_id = o.get("sheetId", config.DEF_SHEET_ID) or config.DEF_SHEET_ID
         s.sheet_name = o.get("sheetName", config.DEF_SHEET_NAME) or config.DEF_SHEET_NAME
         s.files_dir = o.get("filesDir", "") or ""
-        s.files_use_drive = bool(o.get("filesUseDrive", False))
-        s.files_drive_folder = o.get("filesDriveFolder", "") or ""
-        s.fax_dir = o.get("faxDir", "") or ""
-        s.fax_watch = bool(o.get("faxWatch", True))
+        s.drive_api_on = bool(o.get("driveApiOn", True))
+        s.files_drive_folder = (o.get("filesDriveFolder", "") or ""
+                                or drive_path.CUSTOMER_DIR)
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         return s
 

@@ -173,7 +173,7 @@ cft.QMessageBox.information = staticmethod(lambda *a, **k: None)
 from planner.customer_files_tab import CustomerFilesTab
 
 class S:
-    files_dir = root; files_use_drive = False; files_drive_folder = ""
+    files_dir = root; drive_api_on = False; files_drive_folder = ""
 class Auth:
     def is_connected(self): return False
     def has_scope(self, s): return False
@@ -243,7 +243,7 @@ ok("클립보드에 드라이브 주소가 들어간다",
 
 # 읽기 전용(드라이브 조회) 모드에서는 못 고친다
 class SD:
-    files_dir = ""; files_use_drive = True; files_drive_folder = "고객정보"
+    files_dir = ""; drive_api_on = True; files_drive_folder = "고객정보"
 class AuthD:
     def is_connected(self): return True
     def has_scope(self, s): return True

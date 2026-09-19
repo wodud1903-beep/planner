@@ -214,44 +214,28 @@ class SettingsDialog(QDialog):
         self.lbl_files_auto = QLabel("")
         self.lbl_files_auto.setWordWrap(True)
         ffl.addRow("", self.lbl_files_auto)
+
+        # 드라이브 데스크톱이 없거나 꺼져 있을 때 — 인터넷으로 같은 폴더를 읽는다.
+        self.chk_files_drive = QCheckBox(
+            "구글 드라이브가 없거나 꺼져 있으면 인터넷으로 같은 폴더를 읽기")
+        # ⚠️ 이 칸을 만든 **뒤에** 상태를 적는다. 적는 쪽이 이 칸을 보기 때문이다.
+        self.chk_files_drive.toggled.connect(lambda _on: self._refresh_files_auto())
+        ffl.addRow("인터넷으로 읽기", self.chk_files_drive)
         self._refresh_files_auto()
-
-        self.chk_files_drive = QCheckBox("폴더가 없을 때 구글 드라이브에서 직접 조회")
-        ffl.addRow("드라이브 조회", self.chk_files_drive)
-        self.ed_files_folder = QLineEdit()
-        self.ed_files_folder.setPlaceholderText("드라이브의 폴더 이름 (예: 고객정보)")
-        ffl.addRow("드라이브 폴더", self.ed_files_folder)
         lbl_warn = QLabel(
-            "⚠ 이 기능을 켜면 로그인할 때 '드라이브 전체 읽기' 권한을 함께 요청합니다.\n"
-            "구글이 제한하는 권한이라, 켠 뒤에는 [Google 로그아웃] 후 다시 로그인해야\n"
-            "적용됩니다. 또 이 권한으로 앱을 여러 사람에게 배포하려면 구글 앱 인증과\n"
-            "매년 유료 보안심사를 통과해야 합니다.\n"
-            "→ 위의 '서류 폴더' 만 지정해도 기능은 똑같이 쓸 수 있습니다. 그쪽이 기본입니다.")
-        lbl_warn.setStyleSheet(f"color:{theme.strong('orange')};")
+            "이걸 켜 두면 드라이브 데스크톱이 깔려 있지 않은 PC 에서도 같은 서류가\n"
+            "보입니다(PC 에 받아 둔 것이 없어 조금 느립니다).\n"
+            "⚠ 로그인할 때 '드라이브 읽기' 권한을 함께 요청하므로, 처음 한 번은\n"
+            "[Google 로그아웃] 후 다시 로그인해야 합니다.")
+        lbl_warn.setStyleSheet(f"color:{theme.c('subtext')};")
         ffl.addRow(lbl_warn)
+        # 드라이브가 안 깔려 있으면 여기서 바로 받게 해 준다
+        self.lbl_install = QLabel("")
+        self.lbl_install.setOpenExternalLinks(True)      # 눌러서 바로 받기
+        self.lbl_install.setWordWrap(True)
+        ffl.addRow("", self.lbl_install)
+        self._refresh_install_hint()
         root.addWidget(gb_files)
-
-        # ---- 받은 팩스 ----
-        gb_fax = QGroupBox("받은 팩스 — 팩스가 오면 알려 주기")
-        xfl = QFormLayout(gb_fax)
-        xrow = QHBoxLayout()
-        self.ed_fax_dir = QLineEdit()
-        self.ed_fax_dir.setPlaceholderText(
-            r"예) G:\내 드라이브\받은팩스")
-        xrow.addWidget(self.ed_fax_dir, 1)
-        btn_fax_dir = QPushButton("찾기")
-        btn_fax_dir.clicked.connect(self._pick_fax_dir)
-        xrow.addWidget(btn_fax_dir)
-        xfl.addRow("받은팩스 폴더", xrow)
-        self.chk_fax = QCheckBox("팩스가 들어오면 알람으로 알려 주기")
-        xfl.addRow("알림", self.chk_fax)
-        xfl.addRow(QLabel(
-            "휴대폰 모바일팩스에서 받은 팩스를 [공유] → 드라이브의 이 폴더에 저장하면,\n"
-            "PC 가 그걸 알아채서 알람을 띄우고 바로 보여 줍니다. PDF 는 물론 여러 장짜리\n"
-            "TIFF 팩스도 장을 넘겨 볼 수 있습니다.\n"
-            "※ 폴더를 처음 지정할 때 이미 들어 있던 팩스로는 알람이 울리지 않습니다."))
-        root.addWidget(gb_fax)
-
 
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
@@ -378,10 +362,7 @@ class SettingsDialog(QDialog):
         self.ed_sheet_name.setText(s.sheet_name)
         self.ed_files_dir.setText(s.files_dir)
         self._refresh_files_auto()       # 설정을 불러온 뒤의 상태로 다시 적는다
-        self.ed_fax_dir.setText(s.fax_dir)
-        self.chk_fax.setChecked(s.fax_watch)
-        self.chk_files_drive.setChecked(s.files_use_drive)
-        self.ed_files_folder.setText(s.files_drive_folder)
+        self.chk_files_drive.setChecked(s.drive_api_on)
         self.sp_expiry.setValue(s.expiry_months)
         self.chk_weekly.setChecked(s.weekly_on)
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
@@ -445,10 +426,7 @@ class SettingsDialog(QDialog):
         s.sheet_id = sheets.parse_sheet_id(self.ed_sheet_id.text())
         s.sheet_name = self.ed_sheet_name.text().strip() or config.DEF_SHEET_NAME
         s.files_dir = self.ed_files_dir.text().strip()
-        s.fax_dir = self.ed_fax_dir.text().strip()
-        s.fax_watch = self.chk_fax.isChecked()
-        s.files_use_drive = self.chk_files_drive.isChecked()
-        s.files_drive_folder = self.ed_files_folder.text().strip()
+        s.drive_api_on = self.chk_files_drive.isChecked()
         s.expiry_months = self.sp_expiry.value()
         s.weekly_on = self.chk_weekly.isChecked()
         s.theme = self.cmb_theme.currentData() or "light"
@@ -467,12 +445,6 @@ class SettingsDialog(QDialog):
         s.kb_hot_key = self.cmb_kb_key.currentText()
         self.accept()
 
-    def _pick_fax_dir(self):
-        start = self.ed_fax_dir.text().strip() or os.path.expanduser("~")
-        d = QFileDialog.getExistingDirectory(self, "받은팩스 폴더 선택", start)
-        if d:
-            self.ed_fax_dir.setText(d)
-
     def _pick_files_dir(self):
         start = (self.ed_files_dir.text().strip()
                  or drive_path.find() or os.path.expanduser("~"))
@@ -480,6 +452,25 @@ class SettingsDialog(QDialog):
         if d:
             self.ed_files_dir.setText(d)
             self._refresh_files_auto()
+
+    def _refresh_install_hint(self):
+        """드라이브 데스크톱이 없으면 받을 곳을 알려 준다(눌러서 바로 받기)."""
+        st = drive_path.status()
+        if st["installed"] and st["running"]:
+            self.lbl_install.hide()
+            return
+        self.lbl_install.show()
+        if st["installed"]:
+            # 깔려 있는데 안 돌고 있다 — 받으라고 하면 엉뚱한 말이 된다
+            self.lbl_install.setText(
+                "구글 드라이브가 지금 실행되고 있지 않습니다. "
+                "켜 두면 서류가 PC 에 있어 훨씬 빠릅니다.")
+            self.lbl_install.setStyleSheet(f"color:{theme.strong('orange')};")
+            return
+        self.lbl_install.setText(
+            f"{drive_path.INSTALL_HINT} "
+            f"<a href='{drive_path.INSTALL_URL}'>구글 드라이브 내려받기</a>")
+        self.lbl_install.setStyleSheet(f"color:{theme.strong('orange')};")
 
     def _refresh_files_auto(self):
         """이 PC 에서 서류 폴더가 잡히는지 지금 확인해 적는다."""
@@ -497,9 +488,16 @@ class SettingsDialog(QDialog):
         if found:
             self.lbl_files_auto.setText("✔ 자동으로 찾았습니다 — " + found)
             self.lbl_files_auto.setStyleSheet(f"color:{theme.c('status_ok')};")
-        else:
-            self.lbl_files_auto.setText("⚠ " + why.replace("\n", "  "))
-            self.lbl_files_auto.setStyleSheet(f"color:{theme.strong('red')};")
+            return
+        # 설치 안내는 바로 아래 줄(눌러서 받는 곳)이 맡는다 → 여기선 뺀다
+        why = why.replace(drive_path.INSTALL_HINT + "\n", "")
+        text = "⚠ " + why.replace("\n", "  ")
+        if self.chk_files_drive.isChecked():
+            # 폴더가 PC 에 없어도 인터넷으로 읽으면 화면은 똑같이 나온다.
+            # 그 사실을 안 적으면 '안 되는 줄' 알고 헛손질하게 된다.
+            text += "\n(지금은 인터넷으로 읽습니다 — 폴더를 만들어 두면 더 빠릅니다)"
+        self.lbl_files_auto.setText(text)
+        self.lbl_files_auto.setStyleSheet(f"color:{theme.strong('red')};")
 
     # ---- 구글 로그인 ----
     def _update_gstatus(self):

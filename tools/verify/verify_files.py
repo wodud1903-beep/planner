@@ -97,7 +97,7 @@ _dp.invalidate()
 
 class S:
     files_dir = root
-    files_use_drive = False
+    drive_api_on = False
     files_drive_folder = ""
 class Auth:
     def __init__(self, conn=True, scopes=None):
@@ -117,7 +117,7 @@ ok("이유를 돌려준다", "이 PC 에는 없습니다" in why, why)
 ok("무엇을 하라는지도 적는다", _dp.FIX_HINT in why, why)
 
 class S3(S2):
-    files_use_drive = True
+    drive_api_on = True
     files_drive_folder = "고객정보"
 got, why = cf.pick_source(S3(), Auth(True, [config.SCOPE_DRIVE_READ]))
 ok("켜고 권한 있으면 드라이브", got is not None and got.kind == "drive")
@@ -154,7 +154,7 @@ from planner.customer_files_tab import CustomerFilesTab
 
 class SNone:
     files_dir = os.path.join(tmp, "없는폴더")
-    files_use_drive = False
+    drive_api_on = False
     files_drive_folder = ""
 
 t2 = CustomerFilesTab(SNone(), Auth())

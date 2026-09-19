@@ -477,11 +477,20 @@ def pick_source(settings, auth):
     local.auto = auto
     if local.available():
         return local, ""
-    drive = DriveSource(auth, getattr(settings, "files_drive_folder", "") or "")
-    if getattr(settings, "files_use_drive", False) and drive.available():
+
+    # PC 에 폴더가 없다 — 드라이브 데스크톱이 안 깔렸거나 꺼져 있는 PC 다.
+    # 인터넷으로 같은 폴더를 읽어 **똑같이 보이게** 한다. 느릴 뿐이다.
+    on = getattr(settings, "drive_api_on", True)
+    folder = (getattr(settings, "files_drive_folder", "") or "").strip() \
+        or drive_path.CUSTOMER_DIR
+    drive = DriveSource(auth, folder)
+    if on and drive.available():
         return drive, ""
     # 못 쓰는 이유는 로컬 쪽을 먼저 알려 준다(그쪽이 기본이므로)
     why = why_dir or local.why_not()
-    if getattr(settings, "files_use_drive", False):
-        why += "\n\n드라이브 조회도 쓸 수 없습니다 — " + drive.why_not()
+    if on:
+        why += "\n\n인터넷으로 읽는 것도 안 됩니다 — " + drive.why_not()
+    else:
+        why += ("\n\n[설정] → '구글 드라이브가 없거나 꺼져 있으면 인터넷으로 같은 "
+                "폴더를 읽기' 를 켜면 이 PC 에서도 볼 수 있습니다.")
     return None, why

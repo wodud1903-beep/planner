@@ -87,7 +87,7 @@ cft.QMessageBox.warning = staticmethod(lambda *a, **k: POPUPS.append(a[2] if len
 from planner.customer_files_tab import CustomerFilesTab, UP_ROW
 
 class S:
-    files_dir = root; files_use_drive = False; files_drive_folder = ""
+    files_dir = root; drive_api_on = False; files_drive_folder = ""
 class Auth:
     def is_connected(self): return False
     def has_scope(self, s): return False
@@ -210,7 +210,7 @@ ok("검색 중엔 자동갱신이 화면을 안 흔든다", True)
 print("\n[8] 읽을 곳이 없을 때")
 class SNone:
     files_dir = os.path.join(tmp, "없는폴더")
-    files_use_drive = False; files_drive_folder = ""
+    drive_api_on = False; files_drive_folder = ""
 t2 = CustomerFilesTab(SNone(), Auth()); t2.reload(); app.processEvents()
 ok("새로고침이 잠기지 않는다", t2.btn_reload.isEnabled())
 ok("타이머를 멈춘다", not t2._poll.isActive())

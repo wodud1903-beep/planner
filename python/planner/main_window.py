@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from . import (
     alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
-    deliver_cal, drive_path, fax_watch, fax_window, followup,
+    deliver_cal, drive_path, followup,
     google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
@@ -295,17 +295,6 @@ class MainWindow(QMainWindow):
         self._sync_poll = QTimer(self)
         self._sync_poll.timeout.connect(lambda: self.sync_now_async(manual=False))
         self._sync_poll.start(10 * 60 * 1000)
-
-        # 받은팩스 폴더 지켜보기.
-        #
-        # ⚠️ 고객정보 탭의 폴더 감시로는 안 된다 — 그건 그 탭이 보일 때만, 지금 보고
-        #    있는 폴더만 본다. 팩스는 어느 탭에 있든 트레이로 내려가 있든 잡아야 하므로
-        #    창에 딸린 별도 타이머로 둔다. 폴더 하나 훑기는 수 ms 라 부담이 없다.
-        self._fax = fax_watch.FaxFolder(
-            self.settings.fax_dir, self._load_fax_seen())
-        self._fax_poll = QTimer(self)
-        self._fax_poll.timeout.connect(self._check_fax)
-        self._fax_poll.start(self.FAX_POLL_MS)
 
         # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
         self._task_refetch_timer = QTimer(self)
@@ -2131,7 +2120,6 @@ class MainWindow(QMainWindow):
             ("캘린더 열기", self.open_calendar),
             # 브리핑과 주간 요약이 한 화면이 되어 메뉴도 한 줄로 합쳤다
             ("주간 요약", self.show_startup_screen),
-            ("받은 팩스", self.open_fax),
             ("지금 백업", lambda: self._backup(manual=True)),
             ("업데이트 확인", lambda: self.check_update(manual=True)),
             ("변경 이력", self.open_changelog),
@@ -2173,7 +2161,7 @@ class MainWindow(QMainWindow):
 
         # 설정에서 '드라이브에서 직접 조회' 를 켜 두었으면 그 권한도 같이 받는다
         extra = ([config.SCOPE_DRIVE_READ]
-                 if getattr(self.settings, "files_use_drive", False) else [])
+                 if getattr(self.settings, "drive_api_on", True) else [])
 
         def worker():
             try:
@@ -2206,7 +2194,7 @@ class MainWindow(QMainWindow):
                       or ("dark" if self.settings.dark_mode else "light"))
         prev_sheet = (self.settings.sheet_id.strip(), self.settings.sheet_name.strip())
         prev_files = (self.settings.files_dir.strip(),
-                      self.settings.files_use_drive,
+                      self.settings.drive_api_on,
                       self.settings.files_drive_folder.strip())
         dlg = SettingsDialog(self.gauth, self.settings, self,
                              account=getattr(self, 'account_email', ''),
@@ -2228,7 +2216,7 @@ class MainWindow(QMainWindow):
             # 예전엔 설정에서 폴더를 지정해도 탭이 그대로여서, 다시 켜기 전엔
             # 아무것도 안 나왔다.
             now_files = (self.settings.files_dir.strip(),
-                         self.settings.files_use_drive,
+                         self.settings.drive_api_on,
                          self.settings.files_drive_folder.strip())
             if now_files != prev_files and hasattr(self, "tab_files"):
                 self.tab_files.set_settings(self.settings)
@@ -3255,15 +3243,21 @@ class MainWindow(QMainWindow):
         # ---- 고객정보 폴더를 못 찾았다 ----
         # 이 폴더가 없으면 [고객정보] 탭이 통째로 빈 화면이 된다. 그 탭을 열어야
         # 비로소 알게 되는 것이 문제라, 켤 때 한 번 눈에 띄게 알린다.
-        _dir, _auto, _why = drive_path.resolve(self.settings)
-        if not _dir:
+        #
+        # ⚠️ PC 에 폴더가 없어도 인터넷으로 읽히면 화면은 똑같이 나온다. 그때까지
+        #    빨간 줄을 띄우면 멀쩡한 것을 고장 났다고 말하는 셈이라, **정말 읽을
+        #    곳이 없을 때만** 띄운다(pick_source 가 그 판단을 이미 한다).
+        from . import customer_files
+        if customer_files.pick_source(self.settings, self.gauth)[0] is None:
+            hint = ("폴더 이름을 바꿔 두면 PC 를 바꿔도 따로 지정할 필요가 "
+                    "없습니다. 다른 곳에 두셨다면 [설정] → 서류 폴더에서 "
+                    "직접 고르셔도 됩니다.")
+            if not drive_path.installed():
+                hint = drive_path.INSTALL_HINT + " " + hint
             secs.append({
                 "icon": "📁", "title": "고객정보 폴더를 찾지 못했습니다", "color": "red",
                 "items": [{"lead": "확인", "text": drive_path.FIX_HINT}],
-                "count": 1,
-                "hint": "폴더 이름을 바꿔 두면 PC 를 바꿔도 따로 지정할 필요가 "
-                        "없습니다. 다른 곳에 두셨다면 [설정] → 서류 폴더에서 "
-                        "직접 고르셔도 됩니다."})
+                "count": 1, "hint": hint})
 
         # ---- 이번주 요약 (오늘~+7일) ----
         week_end = today + timedelta(days=7)
@@ -3418,75 +3412,6 @@ class MainWindow(QMainWindow):
             self.refresh_alarm()
             self._touch_sync()          # 되돌린 상태를 다른 PC 에도 전파
         backup_dialog.BackupDialog(self, on_restored=after_restore).exec()
-
-    # ------------------------------------------------------------ 받은 팩스
-    #
-    # 휴대폰 모바일팩스에서 '공유 → 드라이브 저장' 으로 받은팩스 폴더에 넣으면,
-    # 드라이브 데스크톱이 PC 로 내려받고 여기서 그걸 잡아 알린다.
-    # (SK텔링크 모바일팩스에는 앱이 붙을 수 있는 공개 API 도, 수신 팩스 자동 메일
-    #  전달도 없다. 그래서 폴더를 거치는 이 길이 유일하게 되는 길이다.)
-    FAX_POLL_MS = 10 * 1000
-    FAX_FILE = "fax_seen.json"
-
-    def _load_fax_seen(self) -> set:
-        try:
-            p = config.data_file(self.FAX_FILE)
-            if p.exists():
-                got = json.loads(p.read_text(encoding="utf-8"))
-                return set(got if isinstance(got, list) else [])
-        except Exception:
-            pass
-        return set()
-
-    def _save_fax_seen(self) -> None:
-        try:
-            config.atomic_write(config.data_file(self.FAX_FILE),
-                                json.dumps(sorted(self._fax.seen),
-                                           ensure_ascii=False))
-        except Exception:
-            pass
-        self._touch_sync()
-
-    def _check_fax(self):
-        """10초마다 — 새로 들어온 팩스가 있으면 알린다."""
-        if not self.settings.fax_watch:
-            return
-        want = self.settings.fax_dir or ""
-        if self._fax.folder != want:
-            # 설정에서 폴더를 바꿨다 → 새 폴더의 기존 파일로 알람하지 않는다
-            self._fax.set_folder(want)
-            self._fax.seen = self._load_fax_seen()
-        if not self._fax.folder:
-            return
-        try:
-            got = self._fax.tick()
-        except Exception:
-            return                      # 폴더가 잠깐 안 보여도 조용히 넘어간다
-        if not got:
-            return
-        self._save_fax_seen()
-        self._on_fax_arrived(got)
-
-    def _on_fax_arrived(self, got: list):
-        """새 팩스 알림 — 여러 건이 와도 팝업은 하나로 묶는다."""
-        first = got[0][0]
-        if len(got) == 1:
-            title = "팩스 도착"
-            body = fax_watch.label(*got[0])
-        else:
-            title = f"팩스 {len(got)}건 도착"
-            body = "\n".join(fax_watch.label(n, i) for n, i in got[:8])
-            if len(got) > 8:
-                body += f"\n… 외 {len(got) - 8}건"
-        # 사이렌이 아니라 조용한 안내로 띄운다 — 팩스는 급히 깨울 일이 아니다.
-        alarm_window.popup(title, body, self.alarm_stack, siren=False,
-                           action=("보기", lambda n=first: self.open_fax(n)))
-        self.alarm_stack = (self.alarm_stack + 1) % 5
-        self._toast(title, body.split("\n")[0])
-
-    def open_fax(self, pick: str = ""):
-        """받은 팩스 창을 연다."""
-        fax_window.show_for(self.settings.fax_dir, pick or "", self)
 
     def open_changelog(self):
         """변경 이력 창을 연다."""
