@@ -87,6 +87,50 @@ ok("폴더째 넣을 수 있다", os.path.isdir(dn[0])
 saved = fo.save_bytes(b"\x89PNG-clip", d, "카톡사진.png")
 ok("붙여넣은 그림을 저장한다", open(saved, "rb").read() == b"\x89PNG-clip")
 
+print("\n[3-2] 옮기기 — 서류 폴더 안에서 다른 폴더로")
+# ⚠️ 옮기기는 복사와 달리 원본이 사라진다. 거절해야 할 자리를 하나씩 못 박는다.
+mv_from = fo.make_folder(root, "옮기기출발")
+mv_to = fo.make_folder(root, "옮기기도착")
+a1 = fo.save_bytes(b"A", mv_from, "가.png")
+a2 = fo.save_bytes(b"B", mv_from, "나.png")
+done, failed = fo.move_in([a1, a2], mv_to, root)
+ok("둘 다 옮겨진다", len(done) == 2 and not failed, (done, failed))
+ok("원본 자리에서는 사라진다", not os.path.exists(a1) and not os.path.exists(a2))
+ok("내용은 그대로", open(os.path.join(mv_to, "가.png"), "rb").read() == b"A")
+
+a3 = fo.save_bytes(b"C", mv_from, "가.png")
+done, _ = fo.move_in([a3], mv_to, root)
+ok("겹치면 (2) 로 비켜 준다", done[0].endswith("가 (2).png"), os.path.basename(done[0]))
+ok("먼저 있던 파일은 그대로", open(os.path.join(mv_to, "가.png"), "rb").read() == b"A")
+
+fdir = fo.make_folder(mv_from, "묶음폴더")
+fo.save_bytes(b"D", fdir, "안의것.png")
+done, _ = fo.move_in([fdir], mv_to, root)
+ok("폴더도 통째로 옮겨진다",
+   os.path.isdir(os.path.join(mv_to, "묶음폴더"))
+   and os.path.exists(os.path.join(mv_to, "묶음폴더", "안의것.png")))
+ok("옮긴 폴더는 원래 자리에 없다", not os.path.isdir(fdir))
+
+inner = os.path.join(mv_to, "묶음폴더")
+done, failed = fo.move_in([mv_to], inner, root)
+ok("자기 안으로는 못 옮긴다", not done and failed, (done, failed))
+ok("그래서 폴더가 멀쩡하다", os.path.isdir(mv_to))
+done, failed = fo.move_in([src1], mv_to, root)
+ok("창고 밖에서 온 것은 옮기지 않는다", not done and failed, failed)
+ok("창고 밖 원본은 멀쩡하다", os.path.exists(src1))
+done, failed = fo.move_in([os.path.join(mv_to, "가.png")], out, root)
+ok("창고 밖으로는 못 옮긴다", not done and failed, failed)
+done, failed = fo.move_in([root], mv_to, root)
+ok("맨 위 폴더는 못 옮긴다", not done and failed, failed)
+keep = os.path.join(mv_to, "가.png")
+done, failed = fo.move_in([keep], mv_to, root)
+ok("이미 그 폴더에 있으면 아무 일도 안 한다",
+   not done and not failed and os.path.exists(keep), (done, failed))
+done, failed = fo.move_in([os.path.join(mv_from, "없는것.png")], mv_to, root)
+ok("없는 파일은 실패로 알려 준다", not done and failed, failed)
+shutil.rmtree(mv_from, ignore_errors=True)
+shutil.rmtree(mv_to, ignore_errors=True)
+
 print("\n[4] 빼기 — 지우기")
 victim = fo.save_bytes(b"x", d, "지울것.png")
 fo.delete(victim, root)
@@ -316,15 +360,158 @@ ok("같은 폴더에 도로 놓으면 사본이 안 생긴다",
    len(os.listdir(tab._cur_dir())) == _before,
    (_before, len(os.listdir(tab._cur_dir()))))
 
+print("\n[8-3] 여러 개 고르기 (Ctrl+클릭)")
+ok("여럿 고를 수 있는 표다",
+   tab.tbl.selectionMode() == cft.QAbstractItemView.ExtendedSelection,
+   tab.tbl.selectionMode())
+tab.reload(); settle(tab)
+tab._enter([n for n in tab.rows if n.name == "2026-08 김상현"][0]); settle(tab)
+files = [r for r, n in enumerate(tab._view)
+         if n is not cft.UP_ROW and not n.is_dir][:3]
+ok("파일이 세 개 이상 있다", len(files) == 3, len(files))
+tab.tbl.clearSelection()
+# ⚠️ selectRow() 는 '이것만 고른다' 라서 쌓이지 않는다(Ctrl+클릭이 아니다).
+#    Ctrl+클릭과 같은 일을 하려면 선택 모델에 Select 로 더해야 한다.
+from PySide6.QtCore import QItemSelectionModel as _QSM
+for r in files:
+    tab.tbl.selectionModel().select(
+        tab.tbl.model().index(r, 0), _QSM.Select | _QSM.Rows)
+app.processEvents()
+ok("고른 것 셋을 다 돌려준다", len(tab._selected()) == 3,
+   [n.name for n in tab._selected()])
+ok("끌어내기도 셋 다 싣는다", len(tab._drag_paths()) == 3, tab._drag_paths())
+tab.copy_selected(); app.processEvents()
+_cb = QApplication.clipboard().mimeData()
+ok("복사도 셋 다 올라간다", _cb.hasUrls() and len(_cb.urls()) == 3,
+   len(_cb.urls()) if _cb.hasUrls() else None)
+# 아무것도 안 골랐으면 지금 줄 하나로 친다 (예전처럼 동작)
+tab.tbl.clearSelection(); tab.tbl.setCurrentCell(files[0], 0); app.processEvents()
+ok("하나만 있을 때도 그대로 된다", len(tab._selected()) == 1,
+   [n.name for n in tab._selected()])
+# '상위 폴더로' 줄은 고른 것에 안 섞인다
+tab.tbl.selectAll(); app.processEvents()
+ok("'상위 폴더로' 는 빼고 준다",
+   all(getattr(n, "name", "") != "" for n in tab._selected())
+   and len(tab._selected()) == len(tab._view) - 1,
+   (len(tab._selected()), len(tab._view)))
+tab.tbl.clearSelection()
+
+print("\n[8-4] 끌어서 폴더 위에 놓으면 그 폴더로 옮긴다")
+tab.reload(); settle(tab)
+dst_row = next(r for r, n in enumerate(tab._view)
+               if n is not cft.UP_ROW and n.name == "2026-09 이수민")
+src_node = next(n for n in tab.rows if n.name == "2026-08 김상현")
+moving = os.path.join(src_node.key, "계약서.pdf")
+ok("옮길 파일이 있다", os.path.exists(moving))
+ok("폴더 줄이 놓을 곳이 된다",
+   os.path.normpath(tab._drop_folder(dst_row))
+   == os.path.normpath(os.path.join(root, "2026-09 이수민")),
+   tab._drop_folder(dst_row))
+file_row = next((r for r, n in enumerate(tab._view)
+                 if n is not cft.UP_ROW and not n.is_dir), None)
+ok("파일 줄에 놓으면 지금 폴더로",
+   file_row is None
+   or os.path.normpath(tab._drop_folder(file_row)) == os.path.normpath(root),
+   file_row if file_row is None else tab._drop_folder(file_row))
+ok("빈 자리에 놓아도 지금 폴더로",
+   os.path.normpath(tab._drop_folder(None)) == os.path.normpath(root))
+
+ASKED.clear()
+tab._drop_files([U(moving)], dst_row); settle(tab)
+# ⚠️ 옮기기는 되돌릴 수 없다 → 반드시 먼저 묻는다
+ok("옮기기 전에 물어본다", any("옮길까요" in a for a in ASKED), ASKED[-1:])
+ok("어느 폴더로 가는지 말해 준다", any("이수민" in a for a in ASKED), ASKED[-1:])
+ok("그 폴더로 옮겨졌다",
+   os.path.exists(os.path.join(root, "2026-09 이수민", "계약서.pdf")))
+ok("원래 자리에서는 사라졌다", not os.path.exists(moving))
+
+# 바깥에서 온 파일은 **옮기지 말고 복사**해야 한다 (원본이 사라지면 큰일)
+outside = os.path.join(out, "바깥것.pdf"); open(outside, "wb").write(b"%PDF")
+ASKED.clear()
+tab._drop_files([U(outside)], dst_row); settle(tab)
+ok("바깥 파일은 복사한다(원본이 남는다)", os.path.exists(outside))
+ok("복사본이 그 폴더에 들어간다",
+   os.path.exists(os.path.join(root, "2026-09 이수민", "바깥것.pdf")))
+ok("복사는 묻지 않는다", not any("옮길까요" in a for a in ASKED), ASKED)
+
+# 있던 자리에 도로 놓으면 아무 일도 없다
+stay = os.path.join(root, "2026-09 이수민", "바깥것.pdf")
+ASKED.clear()
+tab._drop_files([U(stay)], dst_row); settle(tab)
+ok("제자리에 놓으면 묻지도 않는다", not ASKED and os.path.exists(stay), ASKED)
+
+# '상위 폴더로' 줄에 놓으면 한 겹 위로 (탐색기와 같다)
+tab._enter(next(n for n in tab.rows if n.name == "2026-09 이수민")); settle(tab)
+up_row = next((r for r, n in enumerate(tab._view) if n is cft.UP_ROW), None)
+ok("'상위 폴더로' 줄이 있다", up_row is not None)
+ok("거기에 놓으면 한 겹 위로",
+   os.path.normpath(tab._drop_folder(up_row)) == os.path.normpath(root),
+   tab._drop_folder(up_row))
+ASKED.clear()
+tab._drop_files([U(stay)], up_row); settle(tab)
+ok("위 폴더로 옮겨진다", os.path.exists(os.path.join(root, "바깥것.pdf")))
+ok("옮기기 전에 물어봤다", any("옮길까요" in a for a in ASKED), ASKED[-1:])
+
+# 떨어질 곳을 칠해 준다 (어디로 가는지 안 보이면 엉뚱한 폴더로 간다)
+tab.reload(); settle(tab)
+folder_row = next(r for r, n in enumerate(tab._view)
+                  if n is not cft.UP_ROW and n.is_dir)
+tab._hint_drop(folder_row)
+ok("폴더 줄을 칠한다", tab._drop_row == folder_row, tab._drop_row)
+plain_row = next(r for r, n in enumerate(tab._view)
+                 if n is not cft.UP_ROW and not n.is_dir)
+tab._hint_drop(plain_row)
+ok("파일 줄은 칠하지 않는다", tab._drop_row is None, tab._drop_row)
+tab._hint_drop(folder_row); tab._hint_drop(None)
+ok("칠한 것은 되돌린다", tab._drop_row is None)
+
+print("\n[8-5] 진짜 놓기 이벤트로도 되는가")
+# 여기까지는 _drop_paths 를 손으로 불렀다. 실제로는 Qt 이벤트로 들어오므로
+# 자리 계산(뷰포트 좌표)과 배선까지 한 번은 진짜로 굴려 본다.
+from PySide6.QtCore import QMimeData, QPoint, QPointF, QUrl as _QUrl
+from PySide6.QtGui import QDropEvent
+tab.reload(); settle(tab)
+dst_row = next(r for r, n in enumerate(tab._view)
+               if n is not cft.UP_ROW and n.name == "2026-09 이수민")
+src_node = next(n for n in tab.rows if n.name == "2026-08 김상현")
+mv2 = fo.save_bytes(b"%PDF", src_node.key, "이벤트로옮길것.pdf")
+md3 = QMimeData(); md3.setUrls([_QUrl.fromLocalFile(mv2)])
+rect = tab.tbl.visualRect(tab.tbl.model().index(dst_row, 0))
+pos = QPointF(rect.center())
+dev = QDropEvent(pos, Qt.CopyAction, md3, Qt.LeftButton, Qt.NoModifier)
+ASKED.clear()
+# ⚠️ Qt 는 이 이벤트를 **뷰의 dropEvent 로** 넣어 준다. 예전엔 창 쪽
+#    eventFilter 로 받으려 했는데 거기까지 오지 않았다(이 검사로 잡았다).
+tab.tbl.dropEvent(dev)
+ok("놓기 이벤트를 받아 준다", dev.isAccepted())
+# ⚠️ 놓는 순간에는 아직 끌기 중이라 모달 창을 띄우면 안 된다 → 다음 턴으로 미룬다
+ok("그 자리에서 바로 묻지 않는다", not ASKED, ASKED)
+settle(tab); app.processEvents(); settle(tab)
+ok("다음 턴에 묻고 옮긴다", any("옮길까요" in a for a in ASKED), ASKED[-1:])
+ok("떨어뜨린 폴더로 들어갔다",
+   os.path.exists(os.path.join(root, "2026-09 이수민", "이벤트로옮길것.pdf")))
+esrc2 = inspect.getsource(_FileTable.dropEvent)
+ok("미루는 배선이 코드에 있다",
+   "QTimer.singleShot(0" in esrc2 and "_on_drop" in esrc2)
+ok("뷰가 직접 받는다", all(hasattr(_FileTable, m) for m in
+   ("dropEvent", "dragMoveEvent", "dragEnterEvent", "dragLeaveEvent")))
+# 지나갈 때 칠해 주는 배선도 뷰에 있다
+from PySide6.QtGui import QDragMoveEvent
+md4 = QMimeData(); md4.setUrls([_QUrl.fromLocalFile(mv2)])
+dme = QDragMoveEvent(rect.center(), Qt.CopyAction, md4, Qt.LeftButton, Qt.NoModifier)
+tab.tbl.dragMoveEvent(dme)
+ok("지나가면 그 폴더 줄을 칠한다", tab._drop_row == dst_row,
+   (tab._drop_row, dst_row))
+
 print("\n[9] 메뉴에 네 가지가 다 있는가")
 msrc = inspect.getsource(CustomerFilesTab._menu)
 for want in ("이름 바꾸기", "삭제", "새 폴더 만들기", "드라이브 주소 복사",
-             "복사  (Ctrl+C)"):
+             "(Ctrl+C)"):
     ok(f"메뉴: {want}", want in msrc)
 esrc = inspect.getsource(CustomerFilesTab.eventFilter)
 ok("Delete 키로 지운다", "Key_Delete" in esrc)
 ok("Ctrl+V 로 붙여넣는다", "QKeySequence.Paste" in esrc)
-ok("끌어다 놓기를 받는다", "QEvent.Drop" in esrc)
+ok("끌어다 놓기는 표가 받는다", "dropEvent" in inspect.getsource(_FileTable))
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n" + ("실패 %d건: %s" % (len(FAIL), FAIL) if FAIL else "전부 통과"))

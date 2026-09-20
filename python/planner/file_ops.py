@@ -56,14 +56,21 @@ def unique_path(folder: str, name: str) -> str:
     return p
 
 
-def _inside(folder: str, path: str) -> bool:
-    """path 가 folder 안에 있는가 (창고 밖을 건드리지 않게)."""
+def inside(folder: str, path: str) -> bool:
+    """path 가 folder 안에 있는가 (창고 밖을 건드리지 않게).
+
+    화면 쪽도 쓴다 — 끌어다 놓은 것이 **우리 서류 폴더 안에서 온 것인지**
+    (옮기기) 바깥에서 온 것인지(복사) 가르는 데 이 답이 필요하다.
+    """
     try:
         a = os.path.normcase(os.path.abspath(folder))
         b = os.path.normcase(os.path.abspath(path))
         return b == a or b.startswith(a + os.sep)
     except Exception:
         return False
+
+
+_inside = inside          # 안에서 쓰던 옛 이름
 
 
 def delete(path: str, root: str) -> None:
@@ -143,6 +150,48 @@ def copy_in(sources: list, folder: str) -> tuple:
             done.append(target)
         except Exception as e:
             failed.append(f"{os.path.basename(src)} — {e}")
+    return done, failed
+
+
+def move_in(sources: list, folder: str, root: str) -> tuple:
+    """목록에서 끌어다 다른 폴더 위에 놓은 것들을 그 폴더로 **옮긴다.**
+
+    (옮긴 경로 목록, 안 된 것 설명 목록). 하나가 실패해도 나머지는 계속한다.
+
+    ⚠️ 옮기기는 복사와 달리 원본이 사라진다. 그래서 거절할 자리를 넉넉히 둔다.
+       · 창고(root) 밖에서 오거나 창고 밖으로 가는 것 — 끌다 놓친 것일 수 있다
+       · 폴더를 제 안으로(또는 제 하위 폴더로) — 폴더가 통째로 사라진다
+       · 이미 그 폴더에 있는 것 — 아무 일도 안 한다(사본을 만들지 않는다)
+       이름이 겹치면 덮어쓰지 않고 '이름 (2)' 로 비켜 준다.
+    """
+    done, failed = [], []
+    if not _inside(root, folder):
+        return done, ["옮길 곳이 서류 폴더 밖입니다."]
+    for src in sources:
+        name = os.path.basename(src.rstrip("\\/")) or src
+        try:
+            if not os.path.exists(src):
+                failed.append(f"{name} — 찾을 수 없습니다")
+                continue
+            if not _inside(root, src):
+                failed.append(f"{name} — 서류 폴더 밖이라 옮기지 않았습니다")
+                continue
+            if os.path.normcase(os.path.abspath(src)) == os.path.normcase(
+                    os.path.abspath(root)):
+                failed.append(f"{name} — 맨 위 폴더는 옮길 수 없습니다")
+                continue
+            # 폴더를 제 안으로 넣으면 그 폴더가 통째로 사라진다
+            if os.path.isdir(src) and _inside(src, folder):
+                failed.append(f"{name} — 자기 안으로는 옮길 수 없습니다")
+                continue
+            if os.path.normcase(os.path.dirname(os.path.abspath(src))) == \
+                    os.path.normcase(os.path.abspath(folder)):
+                continue                # 이미 거기 있다
+            target = unique_path(folder, name)
+            shutil.move(src, target)
+            done.append(target)
+        except Exception as e:
+            failed.append(f"{name} — {e}")
     return done, failed
 
 

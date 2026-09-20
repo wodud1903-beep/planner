@@ -228,6 +228,16 @@ def fill_hover(name: str) -> str:
     return _FILL_HOVER.get(name, c("btn_hover"))
 
 
+def fill_text() -> str:
+    """채운 색 위에 올리는 글자색.
+
+    _FILL 값들은 **흰 글자 4.5:1** 을 만족하도록 고른 것이다(verify_colors 가
+    지킨다). 그래서 테마와 상관없이 흰색이다. 화면 코드가 흰색을 직접 적지
+    않도록 여기로 한 번 모은다.
+    """
+    return "#FFFFFF"
+
+
 def c(key: str) -> str:
     return _current.get(key, "#000000")
 

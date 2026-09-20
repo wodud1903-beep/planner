@@ -51,9 +51,12 @@ class _FileTable(QTableWidget):
     이름도 원본 화질도 모른 채 다시 만들어 낸다.
     """
 
-    def __init__(self, cols, on_drag_paths, parent=None):
+    def __init__(self, cols, on_drag_paths, on_drop=None, on_hover=None,
+                 parent=None):
         super().__init__(0, cols, parent)
         self._on_drag_paths = on_drag_paths
+        self._on_drop = on_drop            # (경로들, 줄번호) — 놓았을 때
+        self._on_hover = on_hover          # (줄번호|None) — 지나갈 때 칠하기
 
     def startDrag(self, actions):
         paths = self._on_drag_paths()
@@ -67,6 +70,49 @@ class _FileTable(QTableWidget):
         if not pm.isNull():
             drag.setPixmap(pm)
         drag.exec(Qt.CopyAction)
+
+    # ---- 받기 ----
+    # ⚠️ 이 넷은 **이 자리에 있어야 한다.** 예전엔 창 쪽 eventFilter 로 받았는데,
+    #    끌어다 놓기 이벤트는 Qt 가 뷰의 이 함수들로 바로 넣어 주기 때문에
+    #    필터까지 오지 않는 길이 있다. 검사에서 놓기 이벤트를 보내 봤더니
+    #    필터가 한 번도 안 불렸다 — 그래서 뷰가 직접 받는다.
+    def _row_at(self, e) -> int:
+        try:
+            pos = e.position().toPoint()
+        except AttributeError:             # 옛 Qt
+            pos = e.pos()
+        idx = self.indexAt(pos)
+        return idx.row() if idx.isValid() else None
+
+    def dragEnterEvent(self, e):           # noqa: N802
+        self.dragMoveEvent(e)
+
+    def dragMoveEvent(self, e):            # noqa: N802
+        if not e.mimeData().hasUrls():
+            e.ignore()
+            return
+        if self._on_hover:
+            self._on_hover(self._row_at(e))
+        e.acceptProposedAction()
+
+    def dragLeaveEvent(self, e):           # noqa: N802
+        if self._on_hover:
+            self._on_hover(None)
+        e.accept()
+
+    def dropEvent(self, e):                # noqa: N802
+        if not e.mimeData().hasUrls():
+            super().dropEvent(e)
+            return
+        row = self._row_at(e)
+        paths = [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
+        if self._on_hover:
+            self._on_hover(None)
+        e.acceptProposedAction()
+        # ⚠️ 여기서 바로 물어보면 안 된다. 놓는 순간은 아직 끌기가 끝나기 전이라
+        #    그 위에 모달 창을 띄우면 마우스를 쥔 채로 굳는다. 다음 턴으로 미룬다.
+        if self._on_drop and paths:
+            QTimer.singleShot(0, lambda p=paths, r=row: self._on_drop(p, r))
 
 
 def file_mime(paths: list) -> QMimeData:
@@ -114,6 +160,7 @@ class CustomerFilesTab(QWidget):
         self._index_gen = 0           # 몇 번째 훑기인가(낡은 결과 버리기)
         self._sig = None              # 지금 폴더의 요약값(바뀜 감지)
         self._preview_key = ""
+        self._drop_row = None         # 끌어다 놓는 동안 칠해 둔 줄
         # 정렬 기준은 '몇 번째 칸' 이 아니라 '어느 칸 이름' 으로 들고 있는다.
         # 찾아보기는 칸이 3개(이름·크기·날짜)인데 검색은 4개(이름·위치·크기·날짜)
         # 라서, 번호로 기억하면 검색으로 넘어가는 순간 날짜가 크기로 바뀌었다.
@@ -162,11 +209,16 @@ class CustomerFilesTab(QWidget):
 
         # ---- 목록 + 미리보기 ----
         self.split = QSplitter(Qt.Horizontal)
-        self.tbl = _FileTable(len(self.COLS), self._drag_paths)
+        # 끌어낼 때는 폴더까지 싣는다 — 안쪽에서 폴더를 다른 폴더로 옮기는 데
+        # 쓴다. 카카오톡처럼 폴더를 못 받는 곳은 그냥 무시한다(탐색기도 같다).
+        self.tbl = _FileTable(len(self.COLS), self._drag_all_paths,
+                              on_drop=self._drop_paths, on_hover=self._hint_drop)
         self.tbl.setHorizontalHeaderLabels(self.COLS)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.tbl.setSelectionMode(QAbstractItemView.SingleSelection)
+        # Ctrl+클릭으로 여럿, Shift+클릭으로 사이를 한꺼번에 고른다(탐색기와 같다).
+        # 여럿 고른 채로 복사·삭제·끌어내기·옮기기가 다 된다.
+        self.tbl.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tbl.setAlternatingRowColors(True)
         self.tbl.verticalHeader().setDefaultSectionSize(30)
@@ -555,30 +607,52 @@ class CustomerFilesTab(QWidget):
     # 그 파일이 붙고, 목록에서 그대로 끌어다 놓아도 전송된다.
     # 드라이브를 API 로 조회하는 중에는 PC 에 파일이 없으므로 안 된다.
     def _drag_paths(self) -> list:
-        """지금 고른 것의 실제 경로. 끌어내기와 복사가 같이 쓴다."""
-        n = self._current()
-        if n is None or n.is_dir or self.source is None:
+        """끌어내기·복사에 실을 **파일** 경로. 고른 것이 여럿이면 여럿 다.
+
+        폴더는 뺀다 — 카카오톡은 폴더를 받지 못한다. 폴더를 옮기는 일은
+        안쪽 끌어다 놓기(_move_into)가 따로 맡는다.
+        """
+        if self.source is None:
             return []
-        path = self.source.local_path(n)
-        return [path] if path and os.path.exists(path) else []
+        out = []
+        for n in self._selected():
+            if n.is_dir:
+                continue
+            p = self.source.local_path(n)
+            if p and os.path.exists(p):
+                out.append(p)
+        return out
+
+    def _drag_all_paths(self) -> list:
+        """폴더까지 포함해 고른 것 전부의 경로 — 안쪽에서 옮길 때 쓴다."""
+        if self.source is None:
+            return []
+        out = []
+        for n in self._selected():
+            p = self.source.local_path(n)
+            if p and os.path.exists(p):
+                out.append(p)
+        return out
 
     def copy_selected(self):
-        """Ctrl+C — 고른 파일을 클립보드에 올린다."""
-        n = self._current()
-        if n is None:
-            return
-        if n.is_dir:
-            self._toast("폴더는 복사할 수 없습니다. 파일을 골라 주세요.")
+        """Ctrl+C — 고른 파일을 클립보드에 올린다(여럿도 된다)."""
+        picked = self._selected()
+        if not picked:
             return
         paths = self._drag_paths()
         if not paths:
+            if all(n.is_dir for n in picked):
+                self._toast("폴더는 복사할 수 없습니다. 파일을 골라 주세요.")
+                return
             QMessageBox.information(
                 self, config.APP_NAME,
                 "이 파일은 PC 에 없어서 복사할 수 없습니다.\n"
                 "[설정] 에서 서류 폴더를 지정하면 복사·끌어내기가 됩니다.")
             return
         QApplication.clipboard().setMimeData(file_mime(paths))
-        self._toast(f"{os.path.basename(paths[0])} — 복사했습니다. "
+        what = (os.path.basename(paths[0]) if len(paths) == 1
+                else f"{len(paths)}개")
+        self._toast(f"{what} — 복사했습니다. "
                     "카카오톡에서 Ctrl+V 로 붙여 넣으세요.")
 
     # ---------------------------------------------------------------- 정렬
@@ -654,6 +728,7 @@ class CustomerFilesTab(QWidget):
             self._sort_key, self._sort_desc = "이름", False
 
     def _fill(self, rows: list, up: bool = False, with_where: bool = False):
+        self._drop_row = None          # 줄을 새로 만드니 칠해 둔 표시도 없어진다
         self.tbl.setRowCount(0)
         self._view = ([UP_ROW] if up else []) + list(rows)
         self.tbl.setRowCount(len(self._view))
@@ -684,6 +759,22 @@ class CustomerFilesTab(QWidget):
             return None
         n = view[r]
         return None if n is UP_ROW else n
+
+    def _selected(self) -> list:
+        """고른 것 전부(Ctrl·Shift 로 여럿). 차례는 화면에 보이는 차례 그대로.
+
+        '상위 폴더로' 줄은 진짜 항목이 아니므로 빼고 준다.
+        """
+        out = []
+        for r in sorted({i.row() for i in self.tbl.selectedIndexes()}):
+            if 0 <= r < len(self._view):
+                n = self._view[r]
+                if n is not UP_ROW:
+                    out.append(n)
+        if out:
+            return out
+        n = self._current()          # 고른 것이 없으면 지금 줄 하나로 친다
+        return [n] if n is not None else []
 
     def _selected_name(self) -> str:
         n = self._current()
@@ -864,28 +955,104 @@ class CustomerFilesTab(QWidget):
             if ev.key() == Qt.Key_F2:
                 self.rename_selected()
                 return True
-        elif t in (QEvent.DragEnter, QEvent.DragMove):
-            if ev.mimeData().hasUrls() and self._can_edit():
-                ev.acceptProposedAction()
-                return True
-        elif t == QEvent.Drop:
-            if ev.mimeData().hasUrls():
-                self._drop_files(ev.mimeData().urls())
-                ev.acceptProposedAction()
-                return True
+        # 끌어다 놓기는 표(_FileTable)가 직접 받는다 — 여기로 오지 않는 길이
+        # 있기 때문이다. 그쪽 주석 참고.
         return super().eventFilter(obj, ev)
 
-    def _drop_files(self, urls):
+    # ------------------------------------------- 끌어다 놓기(받기 · 옮기기)
+    def _drop_folder(self, row) -> str:
+        """그 줄에 놓았을 때 들어갈 폴더의 실제 경로.
+
+        폴더 줄이면 그 폴더 안으로, '상위 폴더로' 줄이면 한 겹 위로
+        (탐색기와 같다). 파일 줄이나 빈 자리면 지금 보고 있는 폴더.
+        """
+        if row is not None and 0 <= row < len(self._view):
+            n = self._view[row]
+            if n is UP_ROW:
+                if len(self.path) >= 2:
+                    return self.path[-2].key
+                return ""
+            if n.is_dir and n.key:
+                return n.key
+        return self._cur_dir()
+
+    def _hint_drop(self, row):
+        """떨어질 폴더 줄을 칠한다(칠한 것은 반드시 되돌린다)."""
+        if row is not None and not (0 <= row < len(self._view)):
+            row = None
+        if row is not None:
+            n = self._view[row]
+            if not (n is UP_ROW or (n.is_dir and n.key)):
+                row = None              # 파일 위에서는 칠하지 않는다
+        prev = getattr(self, "_drop_row", None)
+        if prev == row:
+            return
+        from PySide6.QtGui import QBrush, QColor
+        if prev is not None and prev < self.tbl.rowCount():
+            for c in range(self.tbl.columnCount()):
+                it = self.tbl.item(prev, c)
+                if it is not None:
+                    it.setBackground(QBrush())      # 원래대로
+                    it.setForeground(QBrush())
+        if row is not None:
+            # ⚠️ 고른 줄(파란 배경)과 **확실히 달라야** 한다. 옅은 색으로 하면
+            #    끌고 가는 중에 '고른 것' 과 '떨어질 곳' 이 구별되지 않는다.
+            #    진한 초록 + 흰 글자 — 세 테마 모두에서 한눈에 갈린다.
+            bg, fg = QColor(theme.fill("green")), QColor(theme.fill_text())
+            for c in range(self.tbl.columnCount()):
+                it = self.tbl.item(row, c)
+                if it is not None:
+                    it.setBackground(bg)
+                    it.setForeground(fg)
+        self._drop_row = row
+
+    def _drop_files(self, urls, row=None):
+        """끌어다 놓은 것(QUrl 목록)을 받는다."""
+        self._drop_paths([u.toLocalFile() for u in urls if u.isLocalFile()], row)
+
+    def _drop_paths(self, paths, row=None):
         if not self._can_edit():
             self._no_edit_msg()
             return
-        folder = self._cur_dir()
-        paths = [u.toLocalFile() for u in urls if u.isLocalFile()]
+        folder = self._drop_folder(row)
         paths = [p for p in paths if p]
         if not folder or not paths:
             return
-        done, failed = file_ops.copy_in(paths, folder)
-        self._after_change(f"{len(done)}건을 넣었습니다.", failed)
+        root = self.source.root
+        # ⚠️ 우리 목록에서 끌어낸 것이면 **옮기고**, 바깥(탐색기·카카오톡)에서
+        #    온 것이면 **복사한다.** 같은 동작에 두 뜻이 있는 셈이라, 어느
+        #    쪽인지는 '그 파일이 서류 폴더 안에 있느냐' 로 가른다.
+        #    바깥 파일을 옮겨 버리면 원본이 사라진다 — 그건 절대 안 된다.
+        inside = [p for p in paths if file_ops.inside(root, p)]
+        outside = [p for p in paths if p not in inside]
+        if outside:
+            done, failed = file_ops.copy_in(outside, folder)
+            self._after_change(f"{len(done)}건을 넣었습니다.", failed)
+        if inside:
+            self._move_into(inside, folder)
+
+    def _move_into(self, paths: list, folder: str):
+        """서류 폴더 안에서 다른 폴더로 옮긴다 — 묻고 나서."""
+        moving = [p for p in paths
+                  if os.path.normcase(os.path.dirname(os.path.abspath(p)))
+                  != os.path.normcase(os.path.abspath(folder))]
+        if not moving:
+            return                      # 있던 자리에 도로 놓았다 — 아무 일도 없다
+        where = os.path.basename(folder.rstrip("\\/")) or folder
+        what = (f"'{os.path.basename(moving[0])}' 을(를)" if len(moving) == 1
+                else f"{len(moving)}개를")
+        # ⚠️ 반드시 묻는다. 목록을 누르다 손이 밀리면 서류가 통째로 다른 고객
+        #    폴더로 들어가는데, 옮긴 뒤에는 어디로 갔는지 찾기 어렵다.
+        if QMessageBox.question(
+                self, config.APP_NAME,
+                f"{what} '{where}' 폴더로 옮길까요?\n\n"
+                "구글 드라이브에서도 같이 옮겨집니다.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes) != QMessageBox.Yes:
+            return
+        done, failed = file_ops.move_in(moving, folder, self.source.root)
+        self._after_change(f"{len(done)}개를 '{where}' 로 옮겼습니다."
+                           if done else "", failed)
 
     def paste_clipboard(self):
         """Ctrl+V — 카톡에서 복사한 그림이나, 탐색기에서 복사한 파일을 넣는다."""
@@ -944,29 +1111,48 @@ class CustomerFilesTab(QWidget):
         return f"{base} {date.today():%m%d}.png"
 
     def delete_selected(self):
-        n = self._current()
-        if n is None:
+        picked = self._selected()
+        if not picked:
             return
         if not self._can_edit():
             self._no_edit_msg()
             return
-        what = "폴더" if n.is_dir else "파일"
-        extra = ("\n\n폴더 안의 파일도 전부 지워집니다." if n.is_dir else "")
+        has_dir = any(n.is_dir for n in picked)
+        extra = ("\n\n폴더 안의 파일도 전부 지워집니다." if has_dir else "")
+        if len(picked) == 1:
+            n = picked[0]
+            what = f"{'폴더' if n.is_dir else '파일'} '{n.name}' 을(를)"
+        else:
+            names = " · ".join(n.name for n in picked[:5])
+            if len(picked) > 5:
+                names += f" 외 {len(picked) - 5}개"
+            what = f"{len(picked)}개({names})를"
         if QMessageBox.question(
                 self, config.APP_NAME,
-                f"{what} '{n.name}' 을(를) 지울까요?{extra}\n\n"
+                f"{what} 지울까요?{extra}\n\n"
                 "구글 드라이브에서도 지워지고, 되돌릴 수 없습니다.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No) != QMessageBox.Yes:
             return
-        try:
-            file_ops.delete(n.key, self.source.root)
-        except file_ops.OpError as e:
-            QMessageBox.warning(self, config.APP_NAME, str(e))
-            return
-        self._after_change(f"'{n.name}' 을(를) 지웠습니다.", [])
+        failed = []
+        n_ok = 0
+        for n in picked:
+            try:
+                file_ops.delete(n.key, self.source.root)
+                n_ok += 1
+            except file_ops.OpError as e:
+                failed.append(f"{n.name} — {e}")
+        msg = (f"'{picked[0].name}' 을(를) 지웠습니다." if n_ok == 1
+               else f"{n_ok}개를 지웠습니다.")
+        self._after_change(msg if n_ok else "", failed)
 
     def rename_selected(self):
+        picked = self._selected()
+        if len(picked) > 1:
+            # 여러 개를 한 이름으로 바꿀 수는 없다. 말없이 하나만 바꾸면
+            # 나머지는 왜 그대로인지 알 길이 없다.
+            self._toast("이름은 하나씩만 바꿀 수 있습니다.")
+            return
         n = self._current()
         if n is None:
             return
@@ -1045,17 +1231,21 @@ class CustomerFilesTab(QWidget):
     def _menu(self, pos):
         m = QMenu(self)
         n = self._current()
+        picked = self._selected()
+        many = len(picked) > 1
+        tail = f"  ({len(picked)}개)" if many else ""
         editable = self._can_edit()
-        if n is not None and not n.is_dir:
-            a = m.addAction("복사  (Ctrl+C)")
+        if any(not x.is_dir for x in picked):
+            a = m.addAction(f"복사{tail}  (Ctrl+C)")
             a.setToolTip("카카오톡 대화창에서 Ctrl+V 로 붙여 넣을 수 있습니다")
             a.triggered.connect(self.copy_selected)
             m.addSeparator()
         if n is not None:
             a = m.addAction("이름 바꾸기")
-            a.setEnabled(editable)
+            # 여러 개를 한 이름으로 바꿀 수는 없다
+            a.setEnabled(editable and not many)
             a.triggered.connect(self.rename_selected)
-            a = m.addAction("삭제")
+            a = m.addAction(f"삭제{tail}")
             a.setEnabled(editable)
             a.triggered.connect(self.delete_selected)
             m.addSeparator()
