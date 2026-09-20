@@ -59,6 +59,119 @@ class _FileTable(QTableWidget):
         self._on_drop = on_drop            # (경로들, 줄번호) — 놓았을 때
         self._on_hover = on_hover          # (줄번호|None) — 지나갈 때 칠하기
         self._dropped = False              # 이번 끌기에서 놓기 이벤트가 왔는가
+        self._press = None                 # 누른 자리(뷰포트 좌표)
+        self._idrag = False                # 목록 안에서 끌고 있는 중인가
+        self._idrag_paths: list = []
+        self._click_row = None             # 눌렀지만 아직 선택을 안 바꾼 줄
+
+    # ---------------------------------------------------------------- 끌기
+    #
+    # ⚠️ **목록 안에서 옮기는 일은 Qt 의 끌어다놓기(QDrag)에 맡기지 않는다.**
+    #    두 번 고쳤는데도 윈도에서 안 먹었다. 처음엔 창 쪽 eventFilter 로 받으려
+    #    했고(이벤트가 거기까지 안 왔다), 다음엔 뷰의 dropEvent 로 받고 끌기가
+    #    끝난 자리까지 봤는데(v1.20.0) 그래도 아무 일도 나지 않았다.
+    #    그래서 Qt 의 그 길을 아예 쓰지 않는다 — 누르고·끌고·놓는 **마우스 이벤트만**
+    #    가지고 우리가 직접 한다. 이건 안 올 수가 없는 이벤트다.
+    #
+    #    바깥(카카오톡·탐색기)으로 끌어내는 것은 여전히 QDrag 라야 한다. 그래서
+    #    커서가 **창 밖으로 나가는 순간** 그때 진짜 끌기로 넘긴다.
+    def mousePressEvent(self, e):          # noqa: N802
+        self._idrag = False
+        self._click_row = None
+        if e.button() == Qt.LeftButton:
+            self._press = self._pt(e)
+            row = self._row_at_point(self._press)
+            picked = {i.row() for i in self.selectedIndexes()}
+            plain = not (e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier))
+            if row is not None and row in picked and len(picked) > 1 and plain:
+                # ⚠️ 여러 개를 골라 두고 그중 하나를 누른 것이다. 여기서 기본
+                #    동작을 부르면 **그 줄 하나만 남기고 선택이 풀려서**, 끌어도
+                #    한 개만 옮겨진다. 끌 수도 있으니 선택을 그대로 둔다.
+                #    끌지 않고 그냥 놓으면 그때 이 줄만 고른다(탐색기와 같다).
+                self._click_row = row
+                return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):           # noqa: N802
+        if not (e.buttons() & Qt.LeftButton):
+            super().mouseMoveEvent(e)
+            return
+        p = self._pt(e)
+        if not self._idrag and self._press is not None:
+            if (p - self._press).manhattanLength() >= QApplication.startDragDistance():
+                if self._row_at_point(self._press) is not None:
+                    paths = self._on_drag_paths()
+                    if paths:
+                        self._idrag = True
+                        self._idrag_paths = list(paths)
+                        self.setCursor(Qt.DragMoveCursor)
+        if not self._idrag:
+            super().mouseMoveEvent(e)
+            return
+        # 창 밖으로 나갔다 → 여기서부터는 진짜 끌어내기(카카오톡 등)
+        if not self._in_window(e):
+            paths = self._idrag_paths
+            self._end_idrag()
+            self._external_drag(paths)
+            return
+        if self._on_hover:                 # 어느 폴더 위인지 칠해 준다
+            self._on_hover(self._row_at_point(p)
+                           if self.viewport().rect().contains(p) else None)
+        # 고무줄 선택이 같이 돌지 않게 기본 동작은 부르지 않는다
+
+    def mouseReleaseEvent(self, e):        # noqa: N802
+        if not self._idrag:
+            self._press = None
+            if self._click_row is not None and e.button() == Qt.LeftButton:
+                row, self._click_row = self._click_row, None
+                self.clearSelection()      # 끌지 않았다 → 이제 이 줄만 고른다
+                self.selectRow(row)
+                self.setCurrentCell(row, 0)
+                e.accept()
+                return
+            super().mouseReleaseEvent(e)
+            return
+        p = self._pt(e)
+        paths = self._idrag_paths
+        self._end_idrag()
+        if self.viewport().rect().contains(p) and self._on_drop and paths:
+            row = self._row_at_point(p)
+            # 묻는 창은 다음 턴에 — 마우스를 놓는 도중에 모달을 띄우지 않는다
+            QTimer.singleShot(0, lambda q=list(paths), r=row: self._on_drop(q, r))
+        e.accept()
+
+    def _pt(self, e):
+        try:
+            return e.position().toPoint()
+        except AttributeError:             # 옛 Qt
+            return e.pos()
+
+    def _in_window(self, e) -> bool:
+        w = self.window()
+        return w.frameGeometry().contains(e.globalPosition().toPoint()
+                                          if hasattr(e, "globalPosition")
+                                          else e.globalPos())
+
+    def _end_idrag(self):
+        self._idrag = False
+        self._click_row = None
+        self._idrag_paths = []
+        self._press = None
+        self.unsetCursor()
+        if self._on_hover:
+            self._on_hover(None)
+
+    def _external_drag(self, paths: list):
+        """창 밖으로 끌어냈다 — 카카오톡·탐색기가 받을 수 있게 진짜 끌기로."""
+        if not paths:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(file_mime(paths))
+        icon = self.style().standardIcon(self.style().SP_FileIcon)
+        pm = icon.pixmap(32, 32)
+        if not pm.isNull():
+            drag.setPixmap(pm)
+        drag.exec(Qt.CopyAction)
 
     def startDrag(self, actions):
         paths = self._on_drag_paths()
@@ -274,9 +387,13 @@ class CustomerFilesTab(QWidget):
         self.tbl.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl.customContextMenuRequested.connect(self._menu)
         self.tbl.setAcceptDrops(True)
-        # 끌어다 놓기(받기)와 끌어내기(보내기) 둘 다 한다
-        self.tbl.setDragEnabled(True)
-        self.tbl.setDragDropMode(QAbstractItemView.DragDrop)
+        # ⚠️ 받기만 Qt 에 맡긴다(DropOnly). 끌어내기를 Qt 에 맡기면(DragDrop)
+        #    Qt 가 제 방식대로 QDrag 를 시작해 버리는데, 그 길에서는 목록 안에
+        #    놓아도 아무 일이 안 났다. 끌기는 _FileTable 이 마우스 이벤트로
+        #    직접 한다(거기 주석 참고). setDragDropMode 가 dragEnabled 를 같이
+        #    켜고 끄므로 순서가 중요하다 — 모드를 먼저 정하고 꺼야 한다.
+        self.tbl.setDragDropMode(QAbstractItemView.DropOnly)
+        self.tbl.setDragEnabled(False)
         self.tbl.setDefaultDropAction(Qt.CopyAction)
         self.tbl.viewport().setAcceptDrops(True)
         self.tbl.installEventFilter(self)

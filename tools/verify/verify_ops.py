@@ -341,10 +341,13 @@ for r, n in enumerate(tab._view):
 ok("폴더는 끌어낼 게 없다", tab._drag_paths() == [], tab._drag_paths())
 
 # 표가 끌어낼 수 있게 돼 있는가
-ok("표가 끌어내기를 켰다", tab.tbl.dragEnabled())
-ok("받기·보내기 둘 다 한다",
-   tab.tbl.dragDropMode() == cft.QAbstractItemView.DragDrop,
+# ⚠️ 끌어내기를 Qt 에 맡기지 않는다(DropOnly + dragEnabled False). 맡기면 Qt 가
+#    제 방식대로 QDrag 를 시작하는데, 그 길에서는 목록 안에 놓아도 아무 일이
+#    안 났다(윈도에서 두 판 연속 안 먹었다). 끌기는 마우스 이벤트로 직접 한다.
+ok("받기는 Qt 에 맡긴다", tab.tbl.acceptDrops()
+   and tab.tbl.dragDropMode() == cft.QAbstractItemView.DropOnly,
    tab.tbl.dragDropMode())
+ok("끌기는 Qt 에 안 맡긴다", not tab.tbl.dragEnabled())
 ok("끌어낼 수 있는 표를 쓴다", isinstance(tab.tbl, _FileTable))
 ok("Ctrl+C 를 받는다",
    "QKeySequence.Copy" in inspect.getsource(CustomerFilesTab.eventFilter))
@@ -549,6 +552,90 @@ ok("이벤트가 왔으면 건너뛴다", "if not self._dropped" in src2)
 ok("dropEvent 가 그 표시를 남긴다",
    "_dropped = True" in inspect.getsource(_FileTable.dropEvent))
 ok("끄는 동안 폴더를 칠해 준다", "_track_hover" in src2)
+
+print("\n[8-7] 진짜 마우스로 끌어 옮기기 (누르고 · 끌고 · 놓기)")
+# ⚠️ 이 검사가 없어서 두 판을 헛고쳤다. dropEvent 를 직접 부르거나 끝난 자리를
+#    넘겨 주는 식으로만 봤는데, 정작 **마우스로 끌면** 아무 일도 안 났다.
+#    이제는 진짜 마우스 이벤트를 보낸다 — 사람이 하는 것과 같은 길이다.
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import QPointF, QEvent as _QEv
+
+def mouse(kind, pos, buttons=Qt.LeftButton, button=Qt.LeftButton):
+    vp = tab.tbl.viewport()
+    ev = QMouseEvent(kind, QPointF(pos), QPointF(vp.mapToGlobal(pos)),
+                     button, buttons, Qt.NoModifier)
+    app.sendEvent(vp, ev)
+    app.processEvents()
+
+def center_of(row):
+    return tab.tbl.visualRect(tab.tbl.model().index(row, 0)).center()
+
+def drag_row_to(from_row, to_row):
+    """사람이 하는 것처럼: 누르고 → 조금씩 끌고 → 놓는다."""
+    a, b = center_of(from_row), center_of(to_row)
+    mouse(_QEv.MouseButtonPress, a)
+    for t in (0.25, 0.5, 0.75, 1.0):       # 중간을 거쳐 간다(끌기로 인식되게)
+        mouse(_QEv.MouseMove, a + (b - a) * t, buttons=Qt.LeftButton,
+              button=Qt.NoButton)
+    mouse(_QEv.MouseButtonRelease, b, buttons=Qt.NoButton)
+    settle(tab); app.processEvents(); settle(tab)
+
+tab.reload(); settle(tab)
+tab._enter(next(n for n in tab.rows if n.name == "2026-08 김상현")); settle(tab)
+one = fo.save_bytes(b"%PDF", tab._cur_dir(), "마우스로옮길것.pdf")
+fo.make_folder(tab._cur_dir(), "받을폴더")
+# ⚠️ reload() 는 맨 위 폴더로 돌아간다. 지금 폴더만 다시 읽어야 한다.
+def refresh():
+    tab._sig = None
+    tab._list_current(quiet=False)
+    settle(tab)
+refresh()
+f_row = next(r for r, n in enumerate(tab._view)
+             if n is not cft.UP_ROW and n.name == "마우스로옮길것.pdf")
+d_row = next(r for r, n in enumerate(tab._view)
+             if n is not cft.UP_ROW and n.name == "받을폴더")
+tab.tbl.clearSelection(); tab.tbl.selectRow(f_row); app.processEvents()
+ASKED.clear()
+drag_row_to(f_row, d_row)
+ok("마우스로 끌어 놓으면 옮겨진다",
+   os.path.exists(os.path.join(tab._cur_dir(), "받을폴더", "마우스로옮길것.pdf")),
+   ASKED[-1:])
+ok("그 전에 물어본다", any("옮길까요" in a for a in ASKED), ASKED[-1:])
+ok("원래 자리에서는 사라진다", not os.path.exists(one))
+
+# 여러 개를 골라 두고 그중 하나를 눌러 끌면 **고른 것 전부**가 간다
+m1 = fo.save_bytes(b"A", tab._cur_dir(), "여럿1.pdf")
+m2 = fo.save_bytes(b"B", tab._cur_dir(), "여럿2.pdf")
+refresh()
+r1 = next(r for r, n in enumerate(tab._view)
+          if n is not cft.UP_ROW and n.name == "여럿1.pdf")
+r2 = next(r for r, n in enumerate(tab._view)
+          if n is not cft.UP_ROW and n.name == "여럿2.pdf")
+d_row = next(r for r, n in enumerate(tab._view)
+             if n is not cft.UP_ROW and n.name == "받을폴더")
+tab.tbl.clearSelection()
+for r in (r1, r2):
+    tab.tbl.selectionModel().select(tab.tbl.model().index(r, 0), _QSM.Select | _QSM.Rows)
+app.processEvents()
+ok("둘을 골라 뒀다", len(tab._selected()) == 2, [n.name for n in tab._selected()])
+ASKED.clear()
+drag_row_to(r1, d_row)
+ok("고른 것 둘 다 옮겨진다",
+   os.path.exists(os.path.join(tab._cur_dir(), "받을폴더", "여럿1.pdf"))
+   and os.path.exists(os.path.join(tab._cur_dir(), "받을폴더", "여럿2.pdf")),
+   ASKED[-1:])
+
+# 끌지 않고 그냥 누르면 그 줄만 골라진다 (탐색기와 같다)
+refresh()
+rows = [r for r, n in enumerate(tab._view) if n is not cft.UP_ROW][:2]
+tab.tbl.clearSelection()
+for r in rows:
+    tab.tbl.selectionModel().select(tab.tbl.model().index(r, 0), _QSM.Select | _QSM.Rows)
+app.processEvents()
+mouse(_QEv.MouseButtonPress, center_of(rows[0]))
+mouse(_QEv.MouseButtonRelease, center_of(rows[0]), buttons=Qt.NoButton)
+ok("그냥 누르면 그 줄 하나만 남는다", len(tab._selected()) == 1,
+   [n.name for n in tab._selected()])
 
 print("\n[9] 메뉴에 네 가지가 다 있는가")
 msrc = inspect.getsource(CustomerFilesTab._menu)
