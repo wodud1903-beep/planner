@@ -19,7 +19,8 @@ import sys
 import threading
 
 from PySide6.QtCore import QBuffer, QEvent, QMimeData, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDrag, QGuiApplication, QImage, QKeySequence
+from PySide6.QtGui import (
+    QCursor, QDrag, QGuiApplication, QImage, QKeySequence)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
@@ -57,6 +58,7 @@ class _FileTable(QTableWidget):
         self._on_drag_paths = on_drag_paths
         self._on_drop = on_drop            # (경로들, 줄번호) — 놓았을 때
         self._on_hover = on_hover          # (줄번호|None) — 지나갈 때 칠하기
+        self._dropped = False              # 이번 끌기에서 놓기 이벤트가 왔는가
 
     def startDrag(self, actions):
         paths = self._on_drag_paths()
@@ -69,20 +71,57 @@ class _FileTable(QTableWidget):
         pm = icon.pixmap(32, 32)
         if not pm.isNull():
             drag.setPixmap(pm)
-        drag.exec(Qt.CopyAction)
+
+        # ⚠️ 여기가 핵심이다. 제 목록 안에 놓았는데도 **놓기 이벤트가 오지 않는
+        #    경우가 있다**(윈도에서 실제로 그랬다 — 검사에서 dropEvent 를 직접
+        #    불러 봤을 때는 멀쩡했는데 진짜로 끌어 놓으면 아무 일도 안 났다).
+        #    그래서 이벤트가 오기를 기다리지 않는다. 끌기가 끝난 **자리**를 보고
+        #    우리 목록 안이면 우리가 처리한다. 창 밖(카카오톡 등)이면 손대지 않는다.
+        self._dropped = False
+        hover = QTimer(self)                 # 끄는 동안 어느 폴더 위인지 칠한다
+        hover.timeout.connect(self._track_hover)
+        hover.start(60)
+        try:
+            drag.exec(Qt.CopyAction)
+        finally:
+            hover.stop()
+            if self._on_hover:
+                self._on_hover(None)
+        if not self._dropped:
+            self._finish_drag_at(QCursor.pos(), paths)
+
+    def _track_hover(self):
+        """끌고 다니는 동안 커서 밑의 폴더를 칠한다(놓기 이벤트와 무관하게)."""
+        if not self._on_hover:
+            return
+        p = self.viewport().mapFromGlobal(QCursor.pos())
+        self._on_hover(self._row_at_point(p)
+                       if self.viewport().rect().contains(p) else None)
+
+    def _finish_drag_at(self, gpos, paths):
+        """끌기가 끝난 자리로 처리한다. 창 밖이면 아무 일도 안 한다."""
+        p = self.viewport().mapFromGlobal(gpos)
+        if not self.viewport().rect().contains(p):
+            return                           # 밖으로 끌어냈다 — 받은 쪽이 알아서
+        row = self._row_at_point(p)
+        if self._on_drop and paths:
+            QTimer.singleShot(0, lambda q=list(paths), r=row: self._on_drop(q, r))
 
     # ---- 받기 ----
     # ⚠️ 이 넷은 **이 자리에 있어야 한다.** 예전엔 창 쪽 eventFilter 로 받았는데,
     #    끌어다 놓기 이벤트는 Qt 가 뷰의 이 함수들로 바로 넣어 주기 때문에
     #    필터까지 오지 않는 길이 있다. 검사에서 놓기 이벤트를 보내 봤더니
     #    필터가 한 번도 안 불렸다 — 그래서 뷰가 직접 받는다.
+    def _row_at_point(self, pos) -> int:
+        idx = self.indexAt(pos)
+        return idx.row() if idx.isValid() else None
+
     def _row_at(self, e) -> int:
         try:
             pos = e.position().toPoint()
         except AttributeError:             # 옛 Qt
             pos = e.pos()
-        idx = self.indexAt(pos)
-        return idx.row() if idx.isValid() else None
+        return self._row_at_point(pos)
 
     def dragEnterEvent(self, e):           # noqa: N802
         self.dragMoveEvent(e)
@@ -109,6 +148,7 @@ class _FileTable(QTableWidget):
         if self._on_hover:
             self._on_hover(None)
         e.acceptProposedAction()
+        self._dropped = True               # startDrag 의 뒷처리가 또 하지 않게
         # ⚠️ 여기서 바로 물어보면 안 된다. 놓는 순간은 아직 끌기가 끝나기 전이라
         #    그 위에 모달 창을 띄우면 마우스를 쥔 채로 굳는다. 다음 턴으로 미룬다.
         if self._on_drop and paths:
@@ -632,6 +672,12 @@ class CustomerFilesTab(QWidget):
             p = self.source.local_path(n)
             if p and os.path.exists(p):
                 out.append(p)
+        # ⚠️ 인터넷으로 읽는 중(드라이브 API)에는 PC 에 파일이 없어 경로가 없다.
+        #    그러면 끌기가 **아무 일도 없이** 끝난다 — 고장 난 것처럼 보인다.
+        #    왜 안 되는지 한 번은 말해 준다.
+        if not out and self._selected() and not self._can_edit():
+            self._toast("인터넷으로 읽는 중에는 끌어서 옮길 수 없습니다. "
+                        "구글 드라이브를 켜 두면 됩니다.")
         return out
 
     def copy_selected(self):

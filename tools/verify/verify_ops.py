@@ -503,6 +503,53 @@ tab.tbl.dragMoveEvent(dme)
 ok("지나가면 그 폴더 줄을 칠한다", tab._drop_row == dst_row,
    (tab._drop_row, dst_row))
 
+print("\n[8-6] 놓기 이벤트가 안 와도 옮겨진다")
+# ⚠️ 실제 윈도에서 '끌어서 폴더에 놓기' 가 전혀 안 먹었다. 검사에서 dropEvent 를
+#    직접 부를 때는 멀쩡했으니, 놓기 이벤트 자체가 안 오는 길이 있는 것이다.
+#    그래서 이제 끌기가 끝난 **자리**를 보고 처리한다. 그 길을 여기서 못 박는다.
+tab.reload(); settle(tab)
+dst_row = next(r for r, n in enumerate(tab._view)
+               if n is not cft.UP_ROW and n.name == "2026-09 이수민")
+src_node = next(n for n in tab.rows if n.name == "2026-08 김상현")
+mv3 = fo.save_bytes(b"%PDF", src_node.key, "이벤트없이옮길것.pdf")
+rect = tab.tbl.visualRect(tab.tbl.model().index(dst_row, 0))
+gpos = tab.tbl.viewport().mapToGlobal(rect.center())
+ASKED.clear()
+tab.tbl._dropped = False
+tab.tbl._finish_drag_at(gpos, [mv3])
+settle(tab); app.processEvents(); settle(tab)
+ok("놓기 이벤트 없이도 옮긴다",
+   os.path.exists(os.path.join(root, "2026-09 이수민", "이벤트없이옮길것.pdf")),
+   ASKED[-1:])
+ok("그때도 한 번 묻는다", any("옮길까요" in a for a in ASKED), ASKED[-1:])
+
+# 폴더째 옮기기 — 사장님이 말한 바로 그 동작
+subdir = fo.make_folder(src_node.key, "옮겨질폴더")
+fo.save_bytes(b"x", subdir, "안의서류.pdf")
+ASKED.clear()
+tab.tbl._dropped = False
+tab.tbl._finish_drag_at(gpos, [subdir])
+settle(tab); app.processEvents(); settle(tab)
+ok("폴더도 하위로 들어간다",
+   os.path.isdir(os.path.join(root, "2026-09 이수민", "옮겨질폴더")))
+ok("폴더 안의 서류도 같이 간다",
+   os.path.exists(os.path.join(root, "2026-09 이수민", "옮겨질폴더", "안의서류.pdf")))
+
+# 창 밖에서 놓으면(카카오톡 등) 손대지 않는다 — 원본이 사라지면 큰일이다
+keep2 = fo.save_bytes(b"%PDF", src_node.key, "밖으로끌것.pdf")
+ASKED.clear()
+tab.tbl._dropped = False
+tab.tbl._finish_drag_at(QPoint(-5000, -5000), [keep2])
+settle(tab); app.processEvents(); settle(tab)
+ok("창 밖에 놓으면 아무 일도 안 한다", os.path.exists(keep2) and not ASKED, ASKED)
+
+# 놓기 이벤트가 온 경우에는 뒷처리가 또 하지 않는다 (두 번 옮기면 안 된다)
+src2 = inspect.getsource(_FileTable.startDrag)
+ok("이벤트가 왔으면 건너뛴다", "if not self._dropped" in src2)
+ok("dropEvent 가 그 표시를 남긴다",
+   "_dropped = True" in inspect.getsource(_FileTable.dropEvent))
+ok("끄는 동안 폴더를 칠해 준다", "_track_hover" in src2)
+
 print("\n[9] 메뉴에 네 가지가 다 있는가")
 msrc = inspect.getsource(CustomerFilesTab._menu)
 for want in ("이름 바꾸기", "삭제", "새 폴더 만들기", "드라이브 주소 복사",

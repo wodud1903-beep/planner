@@ -47,13 +47,14 @@ ok("커밋 꼬리표가 안 섞였다",
 ok("제목 없는 절도 버텨 낸다(v1.8.0)",
    any(s["version"] == "1.8.0" for s in secs))
 ok("옛 형식 'v1.1.1: 제목' 도 제목을 뽑았다",
-   next(s["title"] for s in secs if s["version"] == "1.1.1").startswith("워크플로우"))
+   next(s["title"] for s in secs if s["version"] == "1.1.1").startswith("워크플로"))
 
 print("\n[B] 릴리스 본문 뽑기")
 r = subprocess.run([sys.executable, "tools/extract_release_notes.py", "v1.11.0"],
                    cwd=ROOT, capture_output=True, text=True)
 ok("최신 태그 본문이 나온다", r.returncode == 0 and len(r.stdout) > 200, f"{len(r.stdout)}자")
-ok("뽑은 본문에 ■ 절이 있다", "■" in r.stdout)
+# 변경 이력은 '· 한 줄에 한 가지' 로 적는다(파일 맨 위의 규칙). 본문이 그 모양인가.
+ok("뽑은 본문에 항목이 있다", "·" in r.stdout, r.stdout[:60])
 ok("다음 버전 절이 섞여 들지 않았다", "## v" not in r.stdout)
 r2 = subprocess.run([sys.executable, "tools/extract_release_notes.py", "v9.9.9"],
                     cwd=ROOT, capture_output=True, text=True)
@@ -67,8 +68,10 @@ r4 = subprocess.run([sys.executable, "tools/extract_release_notes.py", "v1.11.0"
                     cwd=ROOT, capture_output=True, text=True, env=env)
 ok("윈도 인코딩(cp1252)에서도 파일로 써진다", r4.returncode == 0,
    (r4.stderr or "").strip()[-80:] or "OK")
+# ⚠️ 여기서 보는 것은 '한글이 살아서 파일에 쓰였는가' 다. 화면으로 내보내면
+#    윈도 파이썬이 cp1252 로 잡아 한글에서 죽는다(v1.12.0 릴리스가 그래서 실패했다).
 ok("그 파일이 UTF-8 한글이다",
-   r4.returncode == 0 and "■" in open(outp, encoding="utf-8").read())
+   r4.returncode == 0 and "팩스" in open(outp, encoding="utf-8").read())
 wf0 = open(f"{ROOT}/.github/workflows/build-exe.yml", encoding="utf-8").read()
 ok("워크플로가 `>` 대신 파일 이름을 넘긴다",
    "RELEASE_NOTES.md" in wf0 and "> RELEASE_NOTES.md" not in wf0)
@@ -91,6 +94,25 @@ ok("다른 버전을 눌러도 바뀐다", w.txt.toPlainText().strip().startswit
 links = re.findall(r'href="([^"]+)"', w.txt.toHtml())
 ok("링크의 & 가 안 깨진다(escape 순서)", not any("&amp;" in l for l in links))
 w.close(); pump()
+
+print("\n[D-2] 짧게 적혀 있는가")
+# ⚠️ 변경 이력이 길어지면 아무도 안 읽는다. 실제로 '부가 설명이 많아 보기
+#    어렵다' 는 이야기를 듣고 통째로 줄였다(v1.20.0). 다시 길어지지 않게 못 박는다.
+#    규칙은 파일 맨 위에도 적어 두었다 — 한 판에 다섯 줄 안쪽, 한 줄에 한 가지.
+MAX_LINES, MAX_CHARS = 6, 90
+_long = [(s_["version"], len([l for l in s_["body"].split("\n") if l.strip()]))
+         for s_ in secs
+         if len([l for l in s_["body"].split("\n") if l.strip()]) > MAX_LINES]
+ok(f"어느 판도 {MAX_LINES}줄을 넘지 않는다", not _long, _long)
+_wide = [(s_["version"], len(l)) for s_ in secs for l in s_["body"].split("\n")
+         if len(l) > MAX_CHARS]
+ok(f"한 줄이 {MAX_CHARS}자를 넘지 않는다", not _wide, _wide[:3])
+_shape = [(s_["version"], l[:24]) for s_ in secs for l in s_["body"].split("\n")
+          if l.strip() and not l.startswith("· ")]
+ok("모든 줄이 '· ' 로 시작한다 (소제목·문단 없이)", not _shape, _shape[:3])
+ok("■ 소제목을 쓰지 않는다", not [s_["version"] for s_ in secs if "■" in s_["body"]],
+   [s_["version"] for s_ in secs if "■" in s_["body"]][:3])
+ok("규칙이 파일 맨 위에 적혀 있다", "한 판에 다섯 줄 안쪽" in changelog.text())
 
 print("\n[E] 배관")
 spec = open(f"{ROOT}/python/planner.spec", encoding="utf-8").read()
