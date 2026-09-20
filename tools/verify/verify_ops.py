@@ -637,6 +637,33 @@ mouse(_QEv.MouseButtonRelease, center_of(rows[0]), buttons=Qt.NoButton)
 ok("그냥 누르면 그 줄 하나만 남는다", len(tab._selected()) == 1,
    [n.name for n in tab._selected()])
 
+print("\n[8-8] 창 밖으로 끌어내면 카카오톡 쪽으로 넘긴다")
+# ⚠️ 목록 안에서 옮기려고 Qt 의 끌기를 껐다. 그러면서 **카카오톡으로 끌어내는
+#    길도 같이 죽지 않았는지** 확인한다. 창 밖으로 나가는 순간 진짜 끌기로
+#    넘겨야 한다. (진짜 QDrag 는 멈추므로 넘기는 지점만 본다)
+HANDOFF = []
+_real_ext = cft._FileTable._external_drag
+cft._FileTable._external_drag = lambda self, paths: HANDOFF.append(list(paths))
+refresh()
+f_row = next(r for r, n in enumerate(tab._view) if n is not cft.UP_ROW and not n.is_dir)
+tab.tbl.clearSelection(); tab.tbl.selectRow(f_row); app.processEvents()
+a = center_of(f_row)
+mouse(_QEv.MouseButtonPress, a)
+mouse(_QEv.MouseMove, a + QPoint(30, 0), buttons=Qt.LeftButton, button=Qt.NoButton)
+ok("아직 창 안이면 안 넘긴다", not HANDOFF, HANDOFF)
+# 창 밖 좌표로 움직인다 — globalPosition 이 창 밖이면 넘겨야 한다
+vp = tab.tbl.viewport()
+far = vp.mapFromGlobal(QPoint(tab.window().frameGeometry().right() + 300,
+                              tab.window().frameGeometry().bottom() + 300))
+mouse(_QEv.MouseMove, far, buttons=Qt.LeftButton, button=Qt.NoButton)
+ok("창 밖으로 나가면 진짜 끌기로 넘긴다", len(HANDOFF) == 1, HANDOFF)
+ok("넘길 때 그 파일을 실어 준다",
+   HANDOFF and HANDOFF[0] and HANDOFF[0][0].endswith(tab._view[f_row].name),
+   HANDOFF[:1])
+mouse(_QEv.MouseButtonRelease, far, buttons=Qt.NoButton)
+ok("넘긴 뒤에는 안쪽 끌기가 풀린다", not tab.tbl._idrag)
+cft._FileTable._external_drag = _real_ext
+
 print("\n[9] 메뉴에 네 가지가 다 있는가")
 msrc = inspect.getsource(CustomerFilesTab._menu)
 for want in ("이름 바꾸기", "삭제", "새 폴더 만들기", "드라이브 주소 복사",
