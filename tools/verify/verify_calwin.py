@@ -243,6 +243,32 @@ ok("연도를 고칠 때 뜨는 칸도 같은 크기",
    "QCalendarWidget QSpinBox" in q and q.split("QCalendarWidget QSpinBox")[1]
    .split("}")[0].find("12pt") > 0)
 
+print("\n[E3] 날짜 숫자가 굵고 또렷한가")
+from PySide6.QtCore import Qt as _Qt  # noqa: E402
+from planner import theme as _th2  # noqa: E402
+ok("날짜 글씨가 커졌다 (9pt → 11pt 이상)", cw.cal.DAY_PT >= 11, cw.cal.DAY_PT)
+_src = (_ROOT / "python" / "planner" / "calendar_window.py").read_text(encoding="utf-8")
+ok("이번 달 날짜는 굵게 그린다", "f.setBold(in_month)" in _src)
+ok("토·일 색을 팔레트에서 가져온다",
+   'theme.c("day_sun")' in _src and 'theme.c("day_sat")' in _src)
+# 맨 윗줄 요일 이름도 같은 색이라야 따로 놀지 않는다
+_sat = cw.cal.weekdayTextFormat(_Qt.Saturday)
+_sun = cw.cal.weekdayTextFormat(_Qt.Sunday)
+_mon = cw.cal.weekdayTextFormat(_Qt.Monday)
+# QColor.name() 은 소문자로 준다 — 팔레트는 대문자라 맞춰서 견준다
+ok("머리줄 '토' 가 토요일 색",
+   _sat.foreground().color().name() == _th2.c("day_sat").lower(),
+   _sat.foreground().color().name())
+ok("머리줄 '일' 이 일요일 색",
+   _sun.foreground().color().name() == _th2.c("day_sun").lower(),
+   _sun.foreground().color().name())
+ok("머리줄 평일은 본문색",
+   _mon.foreground().color().name() == _th2.c("text").lower(),
+   _mon.foreground().color().name())
+ok("머리줄도 굵다", _sat.fontWeight() >= 75, _sat.fontWeight())
+# 날짜 숫자를 키웠으니 일정 띠가 숫자를 파고들면 안 된다
+ok("일정 띠 자리는 숫자 높이에서 잡는다", "rect.top() + num_h" in _src)
+
 print("\n[F] 고객으로 이동")
 opened = []
 w.on_customer_edit = lambda: opened.append(w._sel_customer())

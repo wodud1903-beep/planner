@@ -204,6 +204,25 @@ btn = QPushButton("저장"); btn.setDefault(True)
 btn.setStyleSheet(theme.qss()); btn.show(); app.processEvents()
 ok("기본 단추가 그려진다", btn.isVisible() or True)
 
+print("\n[7-2] 달력 날짜 색 — 토·일이 한눈에 갈리는가")
+# ⚠️ '색이 너무 연해 공휴일이 구분 안 된다' 는 이야기를 듣고 넣었다(v1.20.2).
+#    색만 진하게 해서는 부족하다 — 획이 얇으면 색도 옅어 보인다. 글씨 굵기는
+#    verify_calwin 이 보고, 여기서는 색이 세 테마 모두에서 읽히는지 본다.
+for _t in theme.THEME_ORDER:
+    theme.set_theme(_t)
+    _p = theme.THEMES[_t][1]
+    for _k, _nm in (("day_sat", "토요일"), ("day_sun", "일요일·공휴일")):
+        ok(f"{_t}/{_nm} 4.5:1", ratio(_p[_k], _p["panel_bg"]) >= 4.5,
+           ratio(_p[_k], _p["panel_bg"]))
+    ok(f"{_t}: 토·일 색이 서로 다르다", _p["day_sat"] != _p["day_sun"])
+    ok(f"{_t}: 평일(본문색)과도 다르다",
+       _p["day_sat"] != _p["text"] and _p["day_sun"] != _p["text"])
+    # 예전에 쓰던 strong() 보다 또렷해야 의미가 있다
+    ok(f"{_t}: 예전보다 또렷하다",
+       ratio(_p["day_sat"], _p["panel_bg"]) >= ratio(theme.strong("blue"), _p["panel_bg"])
+       and ratio(_p["day_sun"], _p["panel_bg"]) >= ratio(theme.strong("red"), _p["panel_bg"]))
+theme.set_theme("dark")
+
 print("\n[8] 기본(밝은 청회색) — 밝게 올렸어도 면이 녹지 않는가")
 # v1.16.2 에서 한 단계 밝게 올렸다. 밝게만 하면 패널·바탕·테두리가 서로
 # 붙어 버려 표와 달력의 칸 선이 사라진다 — 그 선을 여기서 지킨다.

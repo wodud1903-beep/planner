@@ -14,7 +14,9 @@ import webbrowser
 from datetime import date, datetime, time, timedelta
 
 from PySide6.QtCore import QDate, QRect, QSize, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetrics, QGuiApplication, QPainter,
+    QTextCharFormat)
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
@@ -31,6 +33,8 @@ class EventCalendar(QCalendarWidget):
     구글 캘린더처럼 클릭하지 않아도 일정이 칸 안에 보인다.
     """
 
+    DAY_PT = 11        # 날짜 숫자 (예전 9pt 는 색이 연해 보였다)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._by_date: dict = {}   # date -> [(timetext, summary), ...]
@@ -38,6 +42,22 @@ class EventCalendar(QCalendarWidget):
         self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
         self.setHorizontalHeaderFormat(QCalendarWidget.ShortDayNames)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.apply_colors()
+
+    def apply_colors(self):
+        """맨 윗줄 요일 이름도 칸 안의 날짜와 같은 색·굵기로 맞춘다.
+
+        여기를 안 맞추면 '토' 는 연한데 그 아래 토요일 날짜만 진해서 따로 논다.
+        테마를 바꾸면 다시 불러야 한다(창의 apply_theme 이 부른다).
+        """
+        for day, key in ((Qt.Saturday, "day_sat"), (Qt.Sunday, "day_sun"),
+                         (Qt.Monday, "text"), (Qt.Tuesday, "text"),
+                         (Qt.Wednesday, "text"), (Qt.Thursday, "text"),
+                         (Qt.Friday, "text")):
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(theme.c(key)))
+            fmt.setFontWeight(QFont.Bold)
+            self.setWeekdayTextFormat(day, fmt)
 
     def set_events(self, by_date: dict):
         self._by_date = by_date or {}
@@ -74,19 +94,24 @@ class EventCalendar(QCalendarWidget):
         dow = qd.dayOfWeek()  # 1=월 .. 7=일
         # 색을 박아 두면 테마를 못 따라간다 — 다크에서 3.6:1 까지 떨어졌었다
         if dow == 7 or holiday.is_holiday(d):
-            numcol = QColor(theme.strong("red"))
+            numcol = QColor(theme.c("day_sun"))
         elif dow == 6:
-            numcol = QColor(theme.strong("blue"))
+            numcol = QColor(theme.c("day_sat"))
         else:
             numcol = QColor(theme.c("text"))
         if not in_month:
             numcol = QColor(theme.c("subtext"))
         f = painter.font()
-        f.setPointSize(9)
-        f.setBold(d == today)
+        # ⚠️ 9pt 보통 글씨로는 빨강·파랑이 연해 보여 공휴일이 잘 구분되지 않았다.
+        #    색만 진하게 해서는 모자란다 — 획이 얇으면 색도 같이 옅어 보인다.
+        #    이번 달 날짜만 굵게 해서 지난달·다음달과도 한눈에 갈린다.
+        f.setPointSize(self.DAY_PT)
+        f.setBold(in_month)
         painter.setFont(f)
+        num_h = painter.fontMetrics().height()
         painter.setPen(numcol)
-        painter.drawText(rect.adjusted(5, 3, -4, 0), Qt.AlignLeft | Qt.AlignTop, str(qd.day()))
+        painter.drawText(rect.adjusted(5, 2, -4, 0), Qt.AlignLeft | Qt.AlignTop,
+                         str(qd.day()))
 
         # 일정명 — 색칠한 띠(칩) 위에 굵은 글씨로. 날짜 숫자와 확실히 구분된다.
         evs = self._by_date.get(d, [])
@@ -99,8 +124,10 @@ class EventCalendar(QCalendarWidget):
             # 칩 여백은 최소로 — 칸에 들어가는 일정 수가 예전보다 줄면 안 된다
             chip_h = fm.height() + 2
             line_h = chip_h + 1
-            top = rect.top() + 20
-            avail = rect.height() - 22
+            # 숫자 높이에서 시작 자리를 잡는다. 20 으로 박아 두면 날짜 글씨를
+            # 키웠을 때 칩이 숫자를 파고든다.
+            top = rect.top() + num_h + 2
+            avail = rect.height() - (num_h + 4)
             maxlines = max(0, avail // line_h)
             shown = evs if len(evs) <= maxlines else evs[:max(0, maxlines - 1)]
 
@@ -505,6 +532,7 @@ class CalendarWindow(QWidget):
         self.setStyleSheet(f"#calwin{{background:{theme.c('window_bg')};}}")
         self.lbl_day.setStyleSheet(self._day_label_css())
         self.lbl_hint.setStyleSheet(self._hint_css())
+        self.cal.apply_colors()
         self.cal.updateCells()
         # 목록의 라벨색도 테마 색이다 — 같이 다시 칠한다
         self._on_day_selected(self.cal.selectedDate())

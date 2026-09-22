@@ -40,6 +40,8 @@ LIGHT = {
     "status_bad": "#C0392B",
     "scroll": "#BFCEDD",
     "scroll_hover": "#A6B9CC",
+    "day_sat": "#1257C7",   # 달력 토요일 숫자 — 또렷한 파랑
+    "day_sun": "#D01B1B",   # 달력 일요일·공휴일 숫자 — 또렷한 빨강
     "chip_text": "#1B2B3A",
     "chip1": "#BBD6F2",
     "chip2": "#C9E6C9",
@@ -81,6 +83,8 @@ DARK = {
     "status_bad": "#FF5A66",
     "scroll": "#333333",
     "scroll_hover": "#454545",
+    "day_sat": "#6FB0FF",
+    "day_sun": "#FF7A85",
     "chip_text": "#F5F5F5",
     "chip1": "#1E3A5F",
     "chip2": "#1A4038",
@@ -116,6 +120,8 @@ WARM = {
     "status_bad": "#C0562F",
     "scroll": "#DFCBB6",
     "scroll_hover": "#CBB49C",
+    "day_sat": "#14509E",
+    "day_sun": "#C42B1C",
     "chip_text": "#40312A",
     "chip1": "#F6D9BE",
     "chip2": "#E9DFC7",

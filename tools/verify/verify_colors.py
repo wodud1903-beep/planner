@@ -160,8 +160,10 @@ ok("상단 현황 색이 전부 아는 이름",
 ok("진행현황 색이 전부 아는 이름",
    set(MainWindow.STATUS_TONES.values()) <= set(TONES))
 csrc = inspect.getsource(calendar_window)
-ok("캘린더 주말이 강조색을 쓴다", 'theme.strong("red")' in csrc
-   and 'theme.strong("blue")' in csrc)
+# 달력의 토·일은 v1.20.2 부터 전용 색(day_sat/day_sun)을 쓴다 — 강조색보다
+# 또렷해야 공휴일이 한눈에 갈린다. 어느 쪽이든 **테마에서** 와야 한다는 것이 요점.
+ok("캘린더 주말 색이 테마에서 온다", 'theme.c("day_sun")' in csrc
+   and 'theme.c("day_sat")' in csrc)
 msrc = inspect.getsource(MainWindow)
 ok("구글 상태 라벨도 테마 색", "theme.c('status_ok')" in msrc
    and "theme.c('status_bad')" in msrc)
