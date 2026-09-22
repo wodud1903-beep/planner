@@ -637,7 +637,7 @@ mouse(_QEv.MouseButtonRelease, center_of(rows[0]), buttons=Qt.NoButton)
 ok("그냥 누르면 그 줄 하나만 남는다", len(tab._selected()) == 1,
    [n.name for n in tab._selected()])
 
-print("\n[8-8] 창 밖으로 끌어내면 카카오톡 쪽으로 넘긴다")
+print("\n[8-8] 목록 밖으로 끌어내면 카카오톡·바탕화면 쪽으로 넘긴다")
 # ⚠️ 목록 안에서 옮기려고 Qt 의 끌기를 껐다. 그러면서 **카카오톡으로 끌어내는
 #    길도 같이 죽지 않았는지** 확인한다. 창 밖으로 나가는 순간 진짜 끌기로
 #    넘겨야 한다. (진짜 QDrag 는 멈추므로 넘기는 지점만 본다)
@@ -650,19 +650,45 @@ tab.tbl.clearSelection(); tab.tbl.selectRow(f_row); app.processEvents()
 a = center_of(f_row)
 mouse(_QEv.MouseButtonPress, a)
 mouse(_QEv.MouseMove, a + QPoint(30, 0), buttons=Qt.LeftButton, button=Qt.NoButton)
-ok("아직 창 안이면 안 넘긴다", not HANDOFF, HANDOFF)
+ok("아직 목록 안이면 안 넘긴다", not HANDOFF, HANDOFF)
 # 창 밖 좌표로 움직인다 — globalPosition 이 창 밖이면 넘겨야 한다
+# ⚠️ '창 밖으로 나가면' 이 아니라 '목록 밖으로 나가면' 이라야 한다.
+#    카카오톡 창이 앱 위에 겹쳐 있거나 앱이 최대화돼 있으면 커서가 창 안에
+#    머문 채라, 창 기준으로 하면 카톡으로 끌어낼 수가 없다(실제로 그랬다).
 vp = tab.tbl.viewport()
-far = vp.mapFromGlobal(QPoint(tab.window().frameGeometry().right() + 300,
-                              tab.window().frameGeometry().bottom() + 300))
+far = QPoint(vp.width() + 40, vp.height() // 2)     # 목록 밖 · 창 안
+ok("그 자리는 아직 창 안이다",
+   tab.window().rect().contains(tab.window().mapFromGlobal(vp.mapToGlobal(far))))
 mouse(_QEv.MouseMove, far, buttons=Qt.LeftButton, button=Qt.NoButton)
-ok("창 밖으로 나가면 진짜 끌기로 넘긴다", len(HANDOFF) == 1, HANDOFF)
+ok("목록 밖으로 나가면 진짜 끌기로 넘긴다", len(HANDOFF) == 1, HANDOFF)
 ok("넘길 때 그 파일을 실어 준다",
    HANDOFF and HANDOFF[0] and HANDOFF[0][0].endswith(tab._view[f_row].name),
    HANDOFF[:1])
 mouse(_QEv.MouseButtonRelease, far, buttons=Qt.NoButton)
 ok("넘긴 뒤에는 안쪽 끌기가 풀린다", not tab.tbl._idrag)
 cft._FileTable._external_drag = _real_ext
+
+print("\n[8-9] 마우스 뒤로가기 단추 → 상위 폴더")
+tab.reload(); settle(tab)
+tab._enter(next(n for n in tab.rows if n.name == "2026-08 김상현")); settle(tab)
+ok("하위 폴더에 들어와 있다", len(tab.path) == 2, len(tab.path))
+mouse(_QEv.MouseButtonPress, QPoint(40, 40), buttons=Qt.BackButton,
+      button=Qt.BackButton)
+mouse(_QEv.MouseButtonRelease, QPoint(40, 40), buttons=Qt.NoButton,
+      button=Qt.BackButton)
+settle(tab)
+ok("뒤로가기 단추로 상위 폴더에 간다", len(tab.path) == 1, len(tab.path))
+# 맨 위에서 더 눌러도 탈이 없어야 한다
+mouse(_QEv.MouseButtonPress, QPoint(40, 40), buttons=Qt.BackButton,
+      button=Qt.BackButton)
+settle(tab)
+ok("맨 위에서는 아무 일도 안 난다", len(tab.path) == 1, len(tab.path))
+# 앞으로 단추는 하는 일이 없다(그래도 엉뚱한 선택이 되면 안 된다)
+_before = [n.name for n in tab._selected()]
+mouse(_QEv.MouseButtonPress, QPoint(40, 40), buttons=Qt.ForwardButton,
+      button=Qt.ForwardButton)
+settle(tab)
+ok("앞으로 단추는 조용히 넘어간다", len(tab.path) == 1)
 
 print("\n[9] 메뉴에 네 가지가 다 있는가")
 msrc = inspect.getsource(CustomerFilesTab._menu)

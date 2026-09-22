@@ -53,11 +53,12 @@ class _FileTable(QTableWidget):
     """
 
     def __init__(self, cols, on_drag_paths, on_drop=None, on_hover=None,
-                 parent=None):
+                 on_back=None, parent=None):
         super().__init__(0, cols, parent)
         self._on_drag_paths = on_drag_paths
         self._on_drop = on_drop            # (경로들, 줄번호) — 놓았을 때
         self._on_hover = on_hover          # (줄번호|None) — 지나갈 때 칠하기
+        self._on_back = on_back            # 마우스 뒤로가기 단추 → 상위 폴더
         self._dropped = False              # 이번 끌기에서 놓기 이벤트가 왔는가
         self._press = None                 # 누른 자리(뷰포트 좌표)
         self._idrag = False                # 목록 안에서 끌고 있는 중인가
@@ -73,9 +74,18 @@ class _FileTable(QTableWidget):
     #    그래서 Qt 의 그 길을 아예 쓰지 않는다 — 누르고·끌고·놓는 **마우스 이벤트만**
     #    가지고 우리가 직접 한다. 이건 안 올 수가 없는 이벤트다.
     #
-    #    바깥(카카오톡·탐색기)으로 끌어내는 것은 여전히 QDrag 라야 한다. 그래서
-    #    커서가 **창 밖으로 나가는 순간** 그때 진짜 끌기로 넘긴다.
+    #    바깥(카카오톡·탐색기·바탕화면)으로 끌어내는 것은 여전히 QDrag 라야 한다.
+    #    그래서 커서가 **목록 밖으로 나가는 순간** 그때 진짜 끌기로 넘긴다.
+    #    ⚠️ 처음에는 '창 밖으로 나가면' 으로 했는데 그러면 카카오톡으로 못 끈다 —
+    #       카톡 창이 앱 위에 겹쳐 있거나 앱이 최대화돼 있으면 커서가 창 안에
+    #       머문 채로 남기 때문이다. 목록을 벗어나는 순간으로 바꿔야 한다.
     def mousePressEvent(self, e):          # noqa: N802
+        # 마우스 옆 단추(뒤로/앞으로)로 상위 폴더에 간다 — 브라우저·탐색기와 같다.
+        if e.button() in (Qt.BackButton, Qt.ForwardButton):
+            if e.button() == Qt.BackButton and self._on_back:
+                self._on_back()
+            e.accept()                     # 앞으로 단추는 하는 일 없이 삼킨다
+            return
         self._idrag = False
         self._click_row = None
         if e.button() == Qt.LeftButton:
@@ -108,8 +118,8 @@ class _FileTable(QTableWidget):
         if not self._idrag:
             super().mouseMoveEvent(e)
             return
-        # 창 밖으로 나갔다 → 여기서부터는 진짜 끌어내기(카카오톡 등)
-        if not self._in_window(e):
+        # 목록 밖으로 나갔다 → 여기서부터는 진짜 끌어내기(카카오톡·바탕화면)
+        if not self.viewport().rect().contains(p):
             paths = self._idrag_paths
             self._end_idrag()
             self._external_drag(paths)
@@ -145,12 +155,6 @@ class _FileTable(QTableWidget):
             return e.position().toPoint()
         except AttributeError:             # 옛 Qt
             return e.pos()
-
-    def _in_window(self, e) -> bool:
-        w = self.window()
-        return w.frameGeometry().contains(e.globalPosition().toPoint()
-                                          if hasattr(e, "globalPosition")
-                                          else e.globalPos())
 
     def _end_idrag(self):
         self._idrag = False
@@ -365,7 +369,8 @@ class CustomerFilesTab(QWidget):
         # 끌어낼 때는 폴더까지 싣는다 — 안쪽에서 폴더를 다른 폴더로 옮기는 데
         # 쓴다. 카카오톡처럼 폴더를 못 받는 곳은 그냥 무시한다(탐색기도 같다).
         self.tbl = _FileTable(len(self.COLS), self._drag_all_paths,
-                              on_drop=self._drop_paths, on_hover=self._hint_drop)
+                              on_drop=self._drop_paths, on_hover=self._hint_drop,
+                              on_back=self.go_up)
         self.tbl.setHorizontalHeaderLabels(self.COLS)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
