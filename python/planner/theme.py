@@ -212,6 +212,22 @@ def strong_bg(name: str) -> str:
     return _STRONG_BG[_is_dark].get(name, c("panel_bg"))
 
 
+# 표의 **줄 전체**를 칠하는 색 (고객관리의 진행현황 — 출고·발주·취소·진행보류).
+# 배지 배경(_STRONG_BG)은 너무 옅어 줄로 깔면 구분이 안 됐다. 한 단계 진하게 두되
+# 본문 글자는 어느 테마에서든 8.5:1 이상 나오게 골랐다(verify_dark 가 지킨다).
+_ROW_TINT = {
+    False: {"blue": "#DCEBFA", "green": "#DDF2DF", "red": "#FBE0DD",
+            "gray": "#E6E9EE"},
+    True: {"blue": "#1B3350", "green": "#173A2B", "red": "#43222A",
+           "gray": "#2A2F36"},
+}
+
+
+def row_tint(name: str) -> str:
+    """줄 전체에 까는 연한 색. 모르는 이름이면 빈 값(칠하지 않는다)."""
+    return _ROW_TINT[_is_dark].get(name, "")
+
+
 # 색을 가득 채운 단추(멘트복사의 [상담후]·[부재중] 등)에 쓰는 바탕색.
 #
 # strong() 을 그대로 못 쓴다 — strong() 은 '패널 위에 얹는 글자색' 이라 밝은데,

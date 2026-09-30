@@ -431,6 +431,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_summary_data", None):
             self._show_summary(self._summary_data)   # 색상 다시 계산
         if hasattr(self, "tbl_cust"):
+            self.tbl_cust.setStyleSheet(self._cust_table_css())
             self.refresh_customers()
         if hasattr(self, "tab_comm"):
             self.tab_comm.apply_theme()
@@ -997,7 +998,7 @@ class MainWindow(QMainWindow):
         # 11pt 는 커 보인다 하셔서 한 단계 내린다(기본 글씨와 같은 10pt)
         # 고객관리는 열이 많아 글자를 한 단계 작게 둔다(10pt) — 키우면 열이 잘린다.
         # 대신 한 칸 높이는 넉넉히 해서 눈이 편하게 한다.
-        self.tbl_cust.setStyleSheet("QTableWidget { font-size: 10pt; }")
+        self.tbl_cust.setStyleSheet(self._cust_table_css())
         self.tbl_cust.verticalHeader().setDefaultSectionSize(40)
         self.tbl_cust.doubleClicked.connect(self._on_cust_dblclick)
         self.tbl_cust.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1014,7 +1015,8 @@ class MainWindow(QMainWindow):
             self._fit_cust_columns()
         return super().eventFilter(obj, ev)
 
-    # 진행현황 색상 (글자만 — 배경은 건드리지 않는다).
+    # 진행현황 색 — 줄 전체에 연한 색을 깐다(v1.20.4). 예전엔 진행현황 칸의
+    # 글자색만 바꿔서 발주·출고·취소가 한눈에 안 갈렸다.
     # 색을 여기에 박아 두면 다크 화면에서 대비가 3.4:1 까지 떨어져 안 읽혔다.
     # 테마가 들고 있는 강조색을 쓰면 밝은 화면·어두운 화면 각각에 맞는 밝기로 나온다.
     STATUS_TONES = {"출고": "blue", "발주": "green", "취소": "red",
@@ -1024,6 +1026,22 @@ class MainWindow(QMainWindow):
         """진행현황 글자색. 아는 상태가 아니면 빈 값(기본 글자색을 쓴다)."""
         tone = self.STATUS_TONES.get((status or "").strip())
         return theme.strong(tone) if tone else ""
+
+    def _cust_table_css(self) -> str:
+        """고객 표 — 글씨 10pt + **진한 선택색**.
+
+        ⚠️ 줄마다 진행현황 색을 깔자 '출고'(연파랑) 줄이 기본 선택색과 거의 같아졌다
+           (대비 1.05). 출고 줄을 눌러도 골랐는지 안 보인다. 그래서 이 표만
+           선택색을 진한 파랑 + 흰 글자로 바꿔 어떤 연한 줄 색과도 확실히 갈리게 한다.
+        """
+        return ("QTableWidget { font-size: 10pt; "
+                f"selection-background-color: {theme.fill('blue')}; "
+                f"selection-color: {theme.fill_text()}; }}")
+
+    def status_row_color(self, status: str) -> str:
+        """그 상태의 줄 전체에 까는 연한 색. 모르는 상태면 빈 값(칠하지 않는다)."""
+        tone = self.STATUS_TONES.get((status or "").strip())
+        return theme.row_tint(tone) if tone else ""
 
     # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
     COL_STATUS = 7
@@ -1551,11 +1569,22 @@ class MainWindow(QMainWindow):
                 if c == self.COL_NOTE and note:
                     item.setToolTip(cr.get("note"))   # 잘린 부분은 툴팁으로
                 self.tbl_cust.setItem(r, c, item)
-            # 진행현황: 출고=파랑 / 발주=초록 / 취소=빨강 / 진행보류=회색, 굵게 (글자만)
-            col = self.status_color(status)
-            if col:
+            # 진행현황: 출고=파랑 / 발주=초록 / 취소=빨강 / 진행보류=회색 — **줄 전체**
+            row_bg = self.status_row_color(status)
+            if row_bg and not pend:
+                bg = QColor(row_bg)
+                # 단추가 들어가는 칸(안내멘트·견적서)은 항목이 없다. 빈 항목을
+                # 만들어 같이 칠해야 단추 둘레가 흰 채로 남지 않는다.
+                for c in range(self.tbl_cust.columnCount()):
+                    cell = self.tbl_cust.item(r, c)
+                    if cell is None:
+                        cell = QTableWidgetItem("")
+                        cell.setData(Qt.UserRole, cr.row)
+                        self.tbl_cust.setItem(r, c, cell)
+                    cell.setBackground(bg)
+                # ⚠️ 진행현황 글자는 **본문색 + 굵게**. 색 배경 위에 색 글자를 두면
+                #    4.3:1 로 떨어져 오히려 안 읽혔다(재 봤다). 색은 줄이 말해 준다.
                 cell = self.tbl_cust.item(r, self.COL_STATUS)
-                cell.setForeground(QColor(col))
                 f = cell.font()
                 f.setBold(True)
                 cell.setFont(f)

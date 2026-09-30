@@ -200,6 +200,63 @@ ok("상단 현황에 강조색이 들어간다", theme.strong("orange") in html
    and theme.strong("violet") in html, html[:120])
 ok("예전 박힌 색이 안 보인다", "#E08A1E" not in html and "#7B58C4" not in html)
 
+print("\n[7-2] 고객 목록 — 진행현황에 따라 줄 전체를 칠한다")
+# 예전엔 진행현황 칸 글자색만 바뀌어 발주·출고·취소가 한눈에 안 갈렸다(v1.20.4).
+from PySide6.QtCore import Qt  # noqa: E402
+TONE_OF = {"출고": "blue", "발주": "green", "취소": "red", "진행보류": "gray"}
+for _t in theme.THEME_ORDER:
+    theme.set_theme(_t)
+    _p = theme.THEMES[_t][1]
+    tints = {st: theme.row_tint(tn) for st, tn in TONE_OF.items()}
+    ok(f"{_t}: 네 상태 모두 줄 색이 있다", all(tints.values()), tints)
+    for st, bg in tints.items():
+        # 글씨는 연한 배경 위에서 또렷해야 한다 — 본문 7:1 이상
+        ok(f"{_t}/{st}: 본문 글자 7:1", ratio(_p["text"], bg) >= 7.0,
+           ratio(_p["text"], bg))
+        ok(f"{_t}/{st}: 바탕과 구분된다", ratio(bg, _p["panel_bg"]) >= 1.1,
+           ratio(bg, _p["panel_bg"]))
+        # ⚠️ 출고(연파랑)가 기본 선택색과 거의 같았다(1.05). 고객 표는 선택색을
+        #    진한 파랑으로 바꿨다 — 그 색과 어떤 줄 색도 확실히 갈려야 한다.
+        ok(f"{_t}/{st}: 고른 줄 색과 확실히 다르다",
+           ratio(bg, theme.fill("blue")) >= 2.0, ratio(bg, theme.fill("blue")))
+    ok(f"{_t}: 네 줄 색이 서로 다르다", len(set(tints.values())) == 4, tints)
+ok("모르는 이름은 칠하지 않는다", theme.row_tint("없는색") == "")
+
+theme.set_theme("light"); theme.apply_to_app(app)
+w.settings.theme = "light"; w.apply_theme()
+def _cust(seq, name, status):
+    cr = sheets.CustomerRow(row=seq + 1, uid=f"u{seq}", seq=str(seq))
+    cr.values = {"customer": name, "status": status, "finance": "KB캐피탈"}
+    return cr
+w.sheet_rows = [_cust(5, "가", "출고"), _cust(4, "나", "발주"), _cust(3, "다", "취소"),
+                _cust(2, "라", "진행보류"), _cust(1, "마", "")]
+w.refresh_customers(); app.processEvents()
+T = w.tbl_cust
+names = [T.item(r, 1).text() for r in range(T.rowCount())]
+for st, nm in (("출고", "가"), ("발주", "나"), ("취소", "다"), ("진행보류", "라")):
+    r = names.index(nm)
+    want = theme.row_tint(TONE_OF[st]).lower()
+    cols = {T.item(r, c).background().color().name() if T.item(r, c) else None
+            for c in range(T.columnCount())}
+    ok(f"{st}: 줄의 **모든 칸**이 그 색", cols == {want}, cols)
+r = names.index("마")
+ok("상태 없는 줄은 칠하지 않는다",
+   all(T.item(r, c) is None or T.item(r, c).background().style() == Qt.NoBrush
+       for c in range(T.columnCount())))
+sc = T.item(names.index("가"), w.COL_STATUS)
+ok("진행현황 글자는 굵게", sc.font().bold())
+# 색 배경 위 색 글자는 4.3:1 로 떨어졌다 → 본문색(따로 칠하지 않음)
+ok("진행현황 글자를 색으로 칠하지 않는다",
+   sc.foreground().style() == Qt.NoBrush, sc.foreground().color().name())
+ok("고객 표 선택색이 진한 파랑",
+   theme.fill("blue") in T.styleSheet() and theme.fill_text() in T.styleSheet(),
+   T.styleSheet())
+w.settings.theme = "dark"; w.apply_theme(); app.processEvents()
+ok("테마를 바꾸면 줄 색도 따라간다",
+   T.item(names.index("가"), 0).background().color().name()
+   == theme.row_tint("blue").lower(),
+   T.item(names.index("가"), 0).background().color().name())
+
 print("\n[8] 다른 테마를 깨뜨리지 않았는가")
 base = set(theme.LIGHT)
 for k in theme.THEME_ORDER:
