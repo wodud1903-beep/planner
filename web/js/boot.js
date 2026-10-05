@@ -70,10 +70,10 @@ router.on(/^\/docs$/, () => docs.screen(null));
   await pullSettings();
 
   await cust.loadSettings();          // 시트 주소·탭은 라우팅 전에 읽어 둔다
-  const ui = await store.ui();
-  if (!location.hash && ui.route) location.hash = ui.route;
+  // 주소만 치거나 홈 화면 아이콘으로 열면 늘 일정 화면이다(router 기본값).
+  // 마지막에 보던 화면으로 가지 않는다 — 업데이트로 다시 불러올 때는 주소의
+  // #… 가 그대로 남으므로 보던 화면은 그대로 유지된다.
   router.start();
-  addEventListener("hashchange", () => store.ui({ route: location.hash.slice(1) }));
 
   // 화면이 뜬 다음에 조용히 로그인·자료 받기
   setTimeout(async () => {
@@ -128,9 +128,7 @@ async function registerSW() {
     if (!w) return;
     // 방금 켰거나 방금 앞으로 돌아온 때만 바꾼다. 쓰는 중이면 미룬다.
     if (_touched && document.visibilityState === "visible") return;
-    store.ui({ route: location.hash.slice(1) }).then(() => {
-      w.postMessage({ type: "SKIP_WAITING" });
-    });
+    w.postMessage({ type: "SKIP_WAITING" });
   };
   swc.addEventListener("controllerchange", () => location.reload());
   reg.addEventListener("updatefound", () => {

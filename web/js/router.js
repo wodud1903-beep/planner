@@ -10,12 +10,12 @@ export function go(path) {
 }
 
 export function handle() {
-  const path = location.hash.slice(1) || "/kb";
+  const path = location.hash.slice(1) || "/agenda";   // 주소만 치면 일정
   for (const [pat, fn] of routes) {
     const m = path.match(pat);
     if (m) { _cur = { path, m }; fn(m, path); return; }
   }
-  go("/kb");
+  go("/agenda");
 }
 
 export function start() {

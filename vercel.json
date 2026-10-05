@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "bash tools/build_web.sh .web_out \"$VERCEL_GIT_COMMIT_SHA\"",
+  "outputDirectory": ".web_out",
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- web CHANGELOG.md vercel.json tools/build_web.sh python/planner/config.py",
+  "headers": [
+    {
+      "source": "/(sw\\.js|version\\.json)",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    }
+  ]
+}

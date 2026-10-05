@@ -2,3 +2,5 @@
 web/CHANGELOG.md
 web/verify/.pdfjs/
 node_modules/
+.web_out/
+_site/

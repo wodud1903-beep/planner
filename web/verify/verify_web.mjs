@@ -94,6 +94,9 @@ const reqs = [];
 p.on("request", (r) => reqs.push(r.url()));
 await p.goto(s.url, { waitUntil: "networkidle" });
 ok("탭 여섯 개가 보인다", (await p.locator("nav.tabs a").count()) === 6);
+ok("주소만 치면 일정 화면이다",
+   (await p.locator('nav.tabs a[data-tab="/agenda"][aria-current="page"]').count()) === 1,
+   await p.evaluate(() => location.hash));
 ok("제목이 나온다", (await p.locator("header h1").textContent()).includes("일정관리기"));
 const b404 = reqs.filter((u) => u.startsWith("http://localhost") && !u.includes("gsi"));
 const statuses = await Promise.all(b404.map(async (u) => (await p.request.get(u)).status()));
@@ -109,7 +112,25 @@ await p.waitForFunction(() => document.querySelector("#clog details"), null, { t
 const nsec = await p.locator("#clog details").count();
 ok("변경 이력을 읽어 절로 나눈다", nsec > 50, nsec + "개 버전");
 ok("첫 절이 펼쳐져 있다", await p.locator("#clog details[open]").count() === 1);
-ok("■ 소제목이 그려진다", (await p.locator("#clog .kbhead").count()) > 0);
+// 변경 이력은 "· 한 줄에 한 가지" 형식이다(■ 소제목은 쓰지 않는다 — CHANGELOG 맨 위 규칙).
+ok("첫 절에 한 줄 요약이 보인다",
+   ((await p.locator("#clog details[open]").textContent()) || "").includes("·"));
+
+console.log("\n[4-2] 주소만 치면 늘 일정 화면 — 마지막에 보던 화면으로 가지 않는다");
+{
+  const pR = await page(ctx);
+  await pR.goto(s.url, { waitUntil: "networkidle" });
+  ok("정보 화면을 본 뒤에도 주소만 치면 일정 화면이다",
+     (await pR.locator('nav.tabs a[data-tab="/agenda"][aria-current="page"]').count()) === 1,
+     await pR.evaluate(() => location.hash));
+  await pR.goto(s.url + "#/calc", { waitUntil: "networkidle" });
+  ok("#/calc 로 열면 그 화면 그대로",
+     (await pR.locator('nav.tabs a[data-tab="/calc"][aria-current="page"]').count()) === 1);
+  await pR.reload({ waitUntil: "networkidle" });
+  ok("다시 불러와도 보던 화면 그대로(업데이트 때와 같다)",
+     (await pR.locator('nav.tabs a[data-tab="/calc"][aria-current="page"]').count()) === 1);
+  await pR.close();
+}
 
 console.log("\n[5] 자료검색 — 로그인 전에도 빈 화면이 아니다");
 await p.click('nav.tabs a[data-tab="/kb"]');
