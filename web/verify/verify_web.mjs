@@ -132,6 +132,61 @@ console.log("\n[4-2] 주소만 치면 늘 일정 화면 — 마지막에 보던 
   await pR.close();
 }
 
+console.log("\n[4-3] 테마 — 정보 탭에서 고른다");
+{
+  // 폰이 다크 설정인 경우로 연다 — 자동/직접 고름의 차이가 드러난다
+  const cT = await browser.newContext({ colorScheme: "dark", viewport: { width: 412, height: 900 } });
+  const pT = await page(cT);
+  await pT.goto(s.url + "#/about", { waitUntil: "networkidle" });
+  const bg = () => pT.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--bg").trim().toLowerCase());
+  const attr = () => pT.evaluate(() => document.documentElement.dataset.theme || "");
+  const pick = async (k) => {
+    await pT.click(`#themes button[data-theme-pick="${k}"]`);
+    await pT.waitForTimeout(100);
+  };
+  ok("테마 단추 네 개", (await pT.locator("#themes button").count()) === 4);
+  ok("처음엔 자동이 골라져 있다",
+     (await pT.locator('#themes button[data-theme-pick=""][aria-pressed="true"]').count()) === 1);
+  ok("자동 + 폰 다크 → 다크 색", (await bg()) === "#10141a", await bg());
+  await pick("light");
+  ok("기본을 고르면 폰이 다크여도 밝은 색", (await bg()) === "#f5f7fa" && (await attr()) === "light",
+     await bg());
+  await pick("warm");
+  ok("따뜻한", (await bg()) === "#fbf3ea" && (await attr()) === "warm", await bg());
+  ok("고른 단추만 눌린 표시",
+     (await pT.locator('#themes button[aria-pressed="true"]').count()) === 1
+     && (await pT.locator('#themes button[data-theme-pick="warm"][aria-pressed="true"]').count()) === 1);
+  ok("위 막대 색도 바뀐다",
+     (await pT.evaluate(() => document.querySelector('meta[name="theme-color"]').content)) === "#fffbf6");
+  await pT.reload({ waitUntil: "networkidle" });
+  ok("다시 열어도 그대로", (await bg()) === "#fbf3ea" && (await attr()) === "warm");
+  await pick("dark");
+  ok("다크", (await bg()) === "#10141a" && (await attr()) === "dark");
+  await pick("");
+  ok("자동으로 되돌리면 속성이 빠진다", (await attr()) === "");
+  // 세 테마 모두 본문·보조 글자가 읽힌다
+  const lum = (h) => {
+    const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+      .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const cr = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+  for (const k of ["light", "warm", "dark"]) {
+    await pick(k);
+    const v = await pT.evaluate(() => {
+      const st = getComputedStyle(document.documentElement);
+      return Object.fromEntries(["--bg", "--card", "--text", "--sub"].map((n) => [n, st.getPropertyValue(n).trim()]));
+    });
+    const six = (h) => h.length === 4 ? "#" + [...h.slice(1)].map((c) => c + c).join("") : h;
+    const t = cr(six(v["--text"]), six(v["--bg"])), u = cr(six(v["--sub"]), six(v["--card"]));
+    ok(`${k}: 본문 ≥ 7 · 보조 ≥ 4`, t >= 7 && u >= 4, `본문 ${t.toFixed(2)} 보조 ${u.toFixed(2)}`);
+    if (process.env.SHOT_DIR)   // 눈으로 볼 때만: SHOT_DIR=폴더 node verify_web.mjs
+      await pT.screenshot({ path: join(process.env.SHOT_DIR, `theme_${k}.png`) });
+  }
+  await cT.close();
+}
+
 console.log("\n[5] 자료검색 — 로그인 전에도 빈 화면이 아니다");
 await p.click('nav.tabs a[data-tab="/kb"]');
 await p.waitForTimeout(300);

@@ -4,6 +4,7 @@
 // 로그인이나 네트워크를 기다리며 빈 화면을 보여 주지 않는다.
 import { shell, paintState } from "./ui/chrome.js";
 import * as router from "./router.js";
+import * as theme from "./theme.js";
 import * as auth from "./auth.js";
 import * as store from "./store.js";
 import * as appdata from "./appdata.js";
@@ -56,6 +57,10 @@ router.on(/^\/docs$/, () => docs.screen(null));
 
 
 (async function start() {
+  theme.paintBar();                   // 고른 테마(index.html 이 먼저 넣음)에 위 막대 색을 맞춘다
+  try {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", theme.paintBar);
+  } catch (e) { /* 옛 브라우저 */ }
   // ⚠️ 누구로 로그인했는지 **먼저** 알아낸다. 모르는 채로 그리면 앞사람 자료를
   //    그대로 보여 주고, 앞사람 시트를 조회하기까지 한다(실제로 그랬다).
   //    통신이 늦으면 4초에 포기하고 이 기기의 마지막 사람으로 본다.

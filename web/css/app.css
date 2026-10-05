@@ -5,13 +5,30 @@
   --bg: #f5f7fa; --card: #ffffff; --text: #1e2733; --sub: #6b7a8d;
   --line: #d8e0ea; --accent: #5b8fbf; --accent-bg: #e8f0f8;
   --bad: #c0392b; --ok: #2e7d5b; --warn: #b06a00;
+  --bad-bg: #fdecea; --warn-bg: #ffe9cf; --violet: #7a5bd0; --on-accent: #fff;
   --tap: 48px;
 }
+/* 테마 — 정보 탭에서 고른다(js/theme.js). 고르지 않으면(자동) 폰 설정을 따른다.
+   ⚠️ 다크 색은 두 군데(자동+폰 다크 / 직접 고른 다크)에 같은 값으로 둔다.
+      한쪽만 고치면 고른 방법에 따라 색이 달라진다. */
+:root[data-theme="warm"] {
+  --bg: #fbf3ea; --card: #fffbf6; --text: #4a3b2f; --sub: #7a6552;
+  --line: #e6d5c3; --accent: #a9532a; --accent-bg: #f8e6d6;
+  --bad-bg: #fbe3dc; --warn-bg: #fbe6c8;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #10141a; --card: #171c24; --text: #e6ecf3; --sub: #93a2b5;
     --line: #263140; --accent: #7fb3e0; --accent-bg: #1b2735;
+    --bad: #ff8a80; --warn: #f0b060; --ok: #6fcf97;
+  --bad-bg: #3a1f1f; --warn-bg: #3a2d1a; --violet: #a892ea; --on-accent: #10141a;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #10141a; --card: #171c24; --text: #e6ecf3; --sub: #93a2b5;
+  --line: #263140; --accent: #7fb3e0; --accent-bg: #1b2735;
+  --bad: #ff8a80; --warn: #f0b060; --ok: #6fcf97;
+  --bad-bg: #3a1f1f; --warn-bg: #3a2d1a; --violet: #a892ea; --on-accent: #10141a;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; margin: 0; }
@@ -42,8 +59,7 @@ header .grow { flex: 1; }
   font-size: 12px; padding: 4px 9px; border-radius: 999px;
   background: var(--accent-bg); color: var(--accent); border: 0; cursor: pointer;
 }
-.chip.bad { background: #fdeaea; color: var(--bad); }
-@media (prefers-color-scheme: dark) { .chip.bad { background: #3a1f1f; } }
+.chip.bad { background: var(--bad-bg); color: var(--bad); }
 
 /* ---- 가운데 ---- */
 main { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
@@ -60,7 +76,7 @@ main { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
   flex: none; font-size: 13px; padding: 7px 12px; border-radius: 999px;
   border: 1px solid var(--line); background: var(--card); color: var(--sub);
 }
-.cats button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.cats button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 
 ul.list { list-style: none; margin: 0; padding: 0; }
 ul.list > li {
@@ -181,7 +197,7 @@ a.tel {
   display: block; width: 100%; min-height: var(--tap);
   margin: 6px 0 10px; padding: 12px;
   font-size: 16px; font-weight: 700; border: 0; border-radius: 12px;
-  background: var(--accent); color: #fff; cursor: pointer;
+  background: var(--accent); color: var(--on-accent); cursor: pointer;
 }
 .bigcopy.done { background: var(--ok); }
 pre.ment {
@@ -224,9 +240,7 @@ a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
 /* ---- 일정 / 할일 ---- */
 .notice { font-size: 13px; padding: 8px 10px; border-radius: 8px;
   background: var(--accent-bg); color: var(--accent); margin: 0 0 10px; }
-.notice.bad { background: #fdecea; color: var(--bad); }
-@media (prefers-color-scheme: dark) { .notice.bad { background: #3a1f1f; } }
-:root[data-theme="dark"] .notice.bad { background: #3a1f1f; }
+.notice.bad { background: var(--bad-bg); color: var(--bad); }
 
 .taskrow { display: flex; gap: 10px; align-items: flex-start;
   padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -254,14 +268,9 @@ a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
 .evbody { flex: 1; min-width: 0; }
 .evbody .t { display: block; word-break: break-word; }
 .evbody .d { font-size: 12px; color: var(--sub); }
-.tag.today { background: #ffe9cf; color: var(--warn); }
+.tag.today { background: var(--warn-bg); color: var(--warn); }
 .tag.tomorrow { background: var(--accent-bg); color: var(--accent); }
-.tag.past { background: #fdecea; color: var(--bad); }
-@media (prefers-color-scheme: dark) {
-  .tag.today { background: #3a2d1a; } .tag.past { background: #3a1f1f; }
-}
-:root[data-theme="dark"] .tag.today { background: #3a2d1a; }
-:root[data-theme="dark"] .tag.past { background: #3a1f1f; }
+.tag.past { background: var(--bad-bg); color: var(--bad); }
 
 /* ---- 수당계산기 ---- */
 .flab { display: block; font-size: 13px; color: var(--sub); margin: 12px 0 4px; }
@@ -306,9 +315,7 @@ a.bigcopy { text-align: center; text-decoration: none; line-height: 24px; }
 .wksec.green .wkhead { color: var(--ok); }
 .wksec.blue .wkhead { color: var(--accent); }
 .wksec.red .wkhead { color: var(--bad); }
-.wksec.violet .wkhead { color: #7a5bd0; }
-@media (prefers-color-scheme: dark) { .wksec.violet .wkhead { color: #a892ea; } }
-:root[data-theme="dark"] .wksec.violet .wkhead { color: #a892ea; }
+.wksec.violet .wkhead { color: var(--violet); }
 .wknote { font-size: 14px; font-weight: 600; text-align: right; margin: 6px 0 0; }
 .wkhint { font-size: 12px; color: var(--sub); margin: 6px 0 0; }
 .wksec .empty { padding: 14px 10px; }

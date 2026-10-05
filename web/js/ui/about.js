@@ -4,6 +4,7 @@ import { html, raw, render, $, $$ } from "./dom.js";
 import { bodyToHtml } from "../kb.js";
 import { setBody, markTab } from "./chrome.js";
 import * as auth from "../auth.js";
+import * as theme from "../theme.js";
 
 let _secs = null;
 
@@ -49,10 +50,20 @@ export async function screen() {
       <p><button class="chip" id="relogin">계정 바꾸기</button>
          <button class="chip" id="diag">화면 정보</button></p>
       <p id="diagout" style="color:var(--sub);font-size:13px"></p>
+      <h3 style="margin:18px 0 6px">테마</h3>
+      <div class="cats" id="themes">${raw(theme.THEMES.map(([k, t]) => html`
+        <button data-theme-pick="${k}" aria-pressed="${String(k === theme.current())}">${t}</button>`).join(""))}</div>
       <h3 style="margin:18px 0 6px">변경 이력</h3>
       <div id="clog" class="empty">불러오는 중…</div>
     </div>`);
 
+  for (const b of $$("#themes button")) {
+    b.onclick = () => {
+      theme.apply(b.dataset.themePick);
+      for (const x of $$("#themes button"))
+        x.setAttribute("aria-pressed", String(x === b));
+    };
+  }
   $("#relogin").onclick = () => auth.signIn().then(() => location.reload());
   $("#diag").onclick = () => {
     // 폴드7의 실제 CSS 크기를 확인할 때 쓴다 — 짐작하지 않으려고 둔다

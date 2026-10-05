@@ -20,7 +20,7 @@ const PRECACHE = [
   "./js/sheets.js", "./js/hangul.js", "./js/fmt.js", "./js/kb.js",
   "./js/customers.js", "./js/drive.js", "./js/commission.js", "./js/gcal.js", "./js/appdata.js",
   "./js/weekly.js",
-  "./js/router.js",
+  "./js/router.js", "./js/theme.js",
   "./js/ui/dom.js", "./js/ui/chrome.js", "./js/ui/kb.js", "./js/ui/about.js",
   "./js/ui/customers.js", "./js/ui/docs.js",
   "./js/ui/split.js", "./js/ui/viewer.js",
