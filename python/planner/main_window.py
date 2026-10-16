@@ -228,7 +228,6 @@ class MainWindow(QMainWindow):
         self.gtasks: list[google_client.GoogleTask] = []
         self.week_dates: list[date | None] = []
         self.todo_dates: list[date | None] = []
-        self.alarm_stack = 0
         self.last_backup: date | None = None
         self.last_fetch = datetime.min
         self._really_close = False
@@ -3063,10 +3062,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 알람 발생
     def fire_alarm(self, title: str, ment: str):
-        alarm_window.popup(title, ment, self.alarm_stack)
-        self.alarm_stack += 1
-        if self.alarm_stack > 4:
-            self.alarm_stack = 0
+        # 자리는 알람 창이 열린 알람들을 보고 정한다(늘 화면 안).
+        alarm_window.popup(title, ment)
 
     def check_alarms(self):
         now = datetime.now()
