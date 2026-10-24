@@ -45,18 +45,19 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: 자동업데이트 토큰 주입 (선택, 레포 Secret UPDATE_TOKEN)
+      # ⚠️ exe 안에 토큰을 넣지 않는다. 릴리스는 누구나 받을 수 있어서, 안에 든
+      #    토큰은 꺼내 쓸 수 있다(쓰기 권한이 있으면 가짜 업데이트를 올릴 수 있다).
+      #    저장소가 공개라 업데이트 확인에 토큰이 필요 없다.
+      #    예전에는 여기서 UPDATE_TOKEN 시크릿을 planner/_secret.py 로 박아 넣었다.
+      - name: exe 에 토큰이 들어가지 않았는지 확인
         working-directory: python
         shell: bash
-        env:
-          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
         run: |
-          if [ -n "$UPDATE_TOKEN" ]; then
-            printf "UPDATE_TOKEN = %s\n" "\"$UPDATE_TOKEN\"" > planner/_secret.py
-            echo "토큰 내장됨"
-          else
-            echo "UPDATE_TOKEN 시크릿 없음 → 토큰 미내장(비공개면 gh_token.txt 필요)"
+          if [ -e planner/_secret.py ]; then
+            echo "planner/_secret.py 가 있습니다 — 토큰을 exe 에 넣지 않습니다. 지우고 다시 빌드하세요."
+            exit 1
           fi
+          echo "토큰 없음 — 정상"
 
       - name: EXE 빌드 (PyInstaller)
         working-directory: python

@@ -149,6 +149,93 @@ except fo.OpError:
     ok("창고 밖은 못 지운다", True)
 ok("창고 밖 파일은 멀쩡하다", os.path.exists(src1))
 
+print("\n[4-2] 윈도면 휴지통으로 — 취소하면 영구 삭제로 넘어가지 않는다")
+_orig_avail, _orig_recycle = fo.recycle_available, fo._recycle
+sent = []
+
+
+def fake_bin(paths):
+    """휴지통으로 보낸 척 — 실제로는 따로 모아 둔다(되살릴 수 있는 곳)."""
+    sent.append(list(paths))
+    for p in paths:
+        shutil.move(p, os.path.join(tmp, "휴지통_" + os.path.basename(p)))
+    return True
+
+
+fo.recycle_available = lambda: True
+fo._recycle = fake_bin
+a1 = fo.save_bytes(b"1", d, "휴지통1.png")
+a2 = fo.save_bytes(b"2", d, "휴지통2.png")
+done, failed, binned = fo.remove_many([a1, a2], root)
+ok("휴지통으로 보냈다", binned and len(done) == 2 and not failed, (done, failed))
+ok("한 번에 넘긴다(윈도 확인 질문이 파일마다 뜨지 않게)", len(sent) == 1 and len(sent[0]) == 2)
+ok("되살릴 곳에 남아 있다", os.path.exists(os.path.join(tmp, "휴지통_휴지통1.png")))
+
+# 휴지통이 없는 드라이브에서 '영구 삭제할까요?' 에 [아니요] → 아무것도 안 지워짐
+fo._recycle = lambda paths: False
+a3 = fo.save_bytes(b"3", d, "남을것.png")
+done, failed, binned = fo.remove_many([a3], root)
+ok("취소하면 지우지 않는다(영구 삭제로 넘어가지 않음)", os.path.exists(a3) and not done)
+ok("왜 안 지웠는지 알려 준다", failed and "지우지 않았습니다" in failed[0], failed)
+try:
+    fo.delete(a3, root); ok("delete 도 취소면 OpError", False)
+except fo.OpError:
+    ok("delete 도 취소면 OpError", os.path.exists(a3))
+
+
+def boom(paths):
+    raise OSError("shell32 없음")
+
+
+fo._recycle = boom                 # 휴지통 함수가 터져도 영구 삭제하지 않는다
+done, failed, binned = fo.remove_many([a3], root)
+ok("휴지통이 터져도 지우지 않는다", os.path.exists(a3) and failed)
+
+fo._recycle = fake_bin             # 창고 밖·맨 위는 휴지통이어도 거절
+sent.clear()
+done, failed, binned = fo.remove_many([src1, root], root)
+ok("창고 밖·맨 위는 휴지통으로도 안 보낸다", not done and len(failed) == 2 and not sent)
+ok("창고 밖 파일은 멀쩡하다(휴지통 모드)", os.path.exists(src1))
+fo.recycle_available, fo._recycle = _orig_avail, _orig_recycle
+ok("윈도가 아니면 휴지통을 안 쓴다(이 검사 환경)", fo.recycle_available() is (os.name == "nt"))
+
+print("\n[4-3] 윈도 휴지통 호출 모양 (윈도 없이 — shell32 를 가짜로)")
+import ctypes as _ct  # noqa: E402
+import types as _ty  # noqa: E402
+got = {}
+
+
+def fake_shfo(ref):
+    op = ref._obj
+    T = type(op)
+    addr = _ct.c_void_p.from_buffer(op, T.pFrom.offset).value
+    got["from"] = _ct.wstring_at(addr, got["n"])      # 버퍼 길이만큼만 읽는다
+    got["flags"] = op.fFlags
+    got["func"] = op.wFunc
+    return 0
+
+
+want = os.path.abspath(os.path.join(tmp, "가.png")) + "\0" + \
+    os.path.abspath(os.path.join(tmp, "나 폴더")) + "\0\0"
+got["n"] = len(want)
+_had = getattr(_ct, "windll", None)
+_ct.windll = _ty.SimpleNamespace(shell32=_ty.SimpleNamespace(SHFileOperationW=fake_shfo))
+try:
+    r = fo._shell_recycle([os.path.join(tmp, "가.png"), os.path.join(tmp, "나 폴더")])
+finally:
+    if _had is None:
+        del _ct.windll
+    else:
+        _ct.windll = _had
+ok("성공을 돌려준다", r is True)
+ok("FO_DELETE", got.get("func") == 3)
+fl = got.get("flags", 0)
+ok("휴지통으로(FOF_ALLOWUNDO)", bool(fl & 0x40))
+ok("휴지통이 없으면 윈도가 묻는다(FOF_WANTNUKEWARNING)", bool(fl & 0x4000))
+ok("오류 창 끄기(FOF_NOERRORUI)는 안 쓴다 — 그 경고까지 꺼질 수 있다", not (fl & 0x400))
+ok("경로를 \\0 으로 잇고 \\0\\0 으로 끝낸다", got.get("from", "") == want,
+   repr(got.get("from", "")[:80]))
+
 print("\n[5] 이름 바꾸기 · 새 폴더")
 target = fo.save_bytes(b"x", d, "바꿀것.png")
 newp = fo.rename(target, "바뀐것.png", root)
@@ -699,6 +786,9 @@ esrc = inspect.getsource(CustomerFilesTab.eventFilter)
 ok("Delete 키로 지운다", "Key_Delete" in esrc)
 ok("Ctrl+V 로 붙여넣는다", "QKeySequence.Paste" in esrc)
 ok("끌어다 놓기는 표가 받는다", "dropEvent" in inspect.getsource(_FileTable))
+dsrc = inspect.getsource(CustomerFilesTab.delete_selected)
+ok("지우기는 한꺼번에 휴지통으로(remove_many)", "remove_many" in dsrc)
+ok("확인 창이 휴지통이라고 알려 준다", "휴지통으로 보냅니다" in dsrc)
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n" + ("실패 %d건: %s" % (len(FAIL), FAIL) if FAIL else "전부 통과"))

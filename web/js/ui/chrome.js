@@ -55,7 +55,11 @@ export function paintState() {
   } else {
     el.textContent = "다시 로그인";
     el.className = "chip bad";
-    el.onclick = () => auth.signIn().then(() => location.reload());
+    // 앱을 통째로 다시 띄우지 않는다 — 보던 화면 그대로 자료만 다시 받는다
+    // (계정이 바뀌면 boot 의 onEmail 이 앞사람 자료를 지우고 다시 그린다)
+    el.onclick = () => auth.signIn().then((t) => {
+      if (t) window.dispatchEvent(new CustomEvent("planner:reauthed"));
+    });
   }
 }
 

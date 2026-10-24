@@ -4,3 +4,4 @@ web/verify/.pdfjs/
 node_modules/
 .web_out/
 _site/
+python/planner/_secret.py

@@ -64,7 +64,9 @@ export async function screen() {
         x.setAttribute("aria-pressed", String(x === b));
     };
   }
-  $("#relogin").onclick = () => auth.signIn().then(() => location.reload());
+  // 계정 바꾸기는 계정 고르는 화면을 띄운다(그냥 다시 로그인은 같은 계정으로 바로 닫힌다)
+  $("#relogin").onclick = () =>
+    auth.signIn({ prompt: "select_account" }).then(() => location.reload());
   $("#diag").onclick = () => {
     // 폴드7의 실제 CSS 크기를 확인할 때 쓴다 — 짐작하지 않으려고 둔다
     render($("#diagout"), html`화면 ${innerWidth} × ${innerHeight} ·

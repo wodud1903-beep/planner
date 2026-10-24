@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import ntpath
 import os
 import shutil
 import subprocess
@@ -156,7 +157,6 @@ def apply_and_restart(new_exe: str) -> None:
     tdir = os.path.dirname(target) or "."
     base = os.path.basename(target)
     staged = os.path.join(tdir, "_update_" + base)
-    old_name = base + ".old"          # ren 은 경로 없이 파일명만
     old_full = target + ".old"
     try:
         if os.path.exists(staged):
@@ -172,7 +172,31 @@ def apply_and_restart(new_exe: str) -> None:
         log = os.path.join(tdir, "update_log.txt")
 
     bat = os.path.join(tempfile.gettempdir(), "planner_update.bat")
-    script = f"""@echo off
+    script = update_script(staged, target, old_full, log, pid)
+    # cmd 는 배치를 시스템 ANSI 코드페이지로 읽으므로 mbcs 로 저장(한글 경로 대응).
+    try:
+        with open(bat, "w", encoding="mbcs") as f:
+            f.write(script)
+    except (LookupError, UnicodeEncodeError):
+        # 폴백: mbcs 불가 환경이면 UTF-8 + chcp 65001
+        with open(bat, "w", encoding="utf-8") as f:
+            f.write("chcp 65001 >nul\n" + script)
+    subprocess.Popen(["cmd", "/c", bat],
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def update_script(staged: str, target: str, old_full: str, log: str, pid: int) -> str:
+    """교체 배치 본문. apply_and_restart 가 파일로 써서 돌린다.
+
+    따로 떼어 둔 것은 검사(tools/verify/verify_update.py)가 이 글을 그대로 받아
+    가짜 파일들 위에서 한 줄씩 돌려 보기 위해서다 — 윈도 없이도 '끝내 실패하면
+    프로그램이 사라지는가' 를 확인할 수 있다.
+    """
+    # 배치는 윈도에서만 돈다 — 경로도 윈도 규칙(ntpath)으로 자른다
+    # (윈도에선 os.path 가 곧 ntpath 라 같고, 검사 환경에서도 똑같이 나온다)
+    base = ntpath.basename(target)
+    old_name = ntpath.basename(old_full)
+    return f"""@echo off
 setlocal enableextensions enabledelayedexpansion
 set "SRC={staged}"
 set "DST={target}"
@@ -195,13 +219,19 @@ echo [update] old process ended (waited !N!s) >> "%LOG%"
 timeout /t 1 /nobreak >nul
 
 rem 2) 새 파일로 교체 (최대 60회 재시도, 잠겨 있으면 rename 트릭)
+rem    ⚠️ 직전 판(.old) 지우기는 **고리 밖에서 한 번만** 한다. 예전엔 고리 첫 줄에
+rem       있어서, 원본을 .old 로 비켜 둔 다음 바퀴에 그 원본을 지웠다 — 끝내 복사가
+rem       안 되면 새 판도 옛 판도 없어 프로그램이 아예 사라졌다.
+rem    지난번 교체가 도중에 멈춰 원본이 .old 로만 남아 있으면 먼저 되돌린다.
+if not exist "%DST%" if exist "%OLD%" ren "%OLD%" "{base}" >nul 2>&1
+del "%OLD%" >nul 2>&1
 set /a N=0
 :copyloop
-del "%OLD%" >nul 2>&1
 copy /Y "%SRC%" "%DST%" >nul 2>&1
 if not errorlevel 1 goto copied
 rem 아직 잠겨 있으면: 실행 파일도 '이름 변경'은 허용됨 → 비켜 놓고 복사
-ren "%DST%" "{old_name}" >nul 2>&1
+rem (이미 비켜 뒀으면 다시 비키지 않는다 — 비켜 둔 원본을 덮지 않게)
+if exist "%DST%" if not exist "%OLD%" ren "%DST%" "{old_name}" >nul 2>&1
 copy /Y "%SRC%" "%DST%" >nul 2>&1
 if not errorlevel 1 goto copied
 set /a N+=1
@@ -222,16 +252,10 @@ del "%SRC%" >nul 2>&1
 goto done
 :giveup
 echo [update] GIVE UP - target still locked >> "%LOG%"
+rem 원본을 비켜 둔 채 끝내지 않는다 — 제자리로 되돌리고 옛 판을 다시 띄운다
+if not exist "%DST%" if exist "%OLD%" ren "%OLD%" "{base}" >nul 2>&1
+if exist "%DST%" echo [update] old version restored >> "%LOG%"
+if exist "%DST%" explorer.exe "%DST%"
 :done
 del "%~f0" >nul 2>&1
 """
-    # cmd 는 배치를 시스템 ANSI 코드페이지로 읽으므로 mbcs 로 저장(한글 경로 대응).
-    try:
-        with open(bat, "w", encoding="mbcs") as f:
-            f.write(script)
-    except (LookupError, UnicodeEncodeError):
-        # 폴백: mbcs 불가 환경이면 UTF-8 + chcp 65001
-        with open(bat, "w", encoding="utf-8") as f:
-            f.write("chcp 65001 >nul\n" + script)
-    subprocess.Popen(["cmd", "/c", bat],
-                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

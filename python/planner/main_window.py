@@ -459,6 +459,8 @@ class MainWindow(QMainWindow):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_account_ready(self, email: str):
+        # 계정 확인이 (성공이든 실패든) 끝났다 — 이제부터 틱 백업이 이 폴더를 본다
+        self._account_checked = True
         if not email:
             # 계정을 확인하지 못하면 어느 폴더가 이 사람 데이터인지 알 수 없다.
             # 이때 동기화를 강행하면 공용 폴더(대개 비어 있음)를 번들로 올려
@@ -1772,7 +1774,10 @@ class MainWindow(QMainWindow):
                     v["doc"] = sheets.image_formula(url)
                 elif doc_cleared:
                     v["doc"] = ""       # 지우기를 누른 경우에만 S열을 비운다
-                sheets.update_row(self.gauth, sid, sname, cr.row, v)
+                # 고치기 **전** 이름·ID 로 그 고객이 아직 그 줄에 있는지 확인하고 쓴다
+                # (그 사이 시트가 정렬됐거나 폰에서 고객을 넣고 뺐을 수 있다)
+                cr.row = sheets.update_row(self.gauth, sid, sname, cr.row, v,
+                                           name=old.get("customer", ""), uid=cr.uid)
                 self.sig_sheet_written.emit(None, cr.row, "")
             except Exception as e:
                 cr.values = old         # 롤백 (UI 갱신은 핸들러에서)
@@ -2059,7 +2064,9 @@ class MainWindow(QMainWindow):
 
         def worker():
             try:
-                sheets.clear_row(self.gauth, sid, sname, cr.row)
+                # 정렬된 시트에서 다른 고객을 지우지 않도록 지우기 직전에 확인한다
+                cr.row = sheets.clear_row(self.gauth, sid, sname, cr.row,
+                                          name=cr.get("customer"), uid=cr.uid)
                 self.sig_sheet_written.emit(None, cr.row, "")
             except Exception as e:
                 self.sig_sheet_deleted_fail.emit(cr, str(e))
@@ -3116,7 +3123,7 @@ class MainWindow(QMainWindow):
     def _on_tick(self):
         self.check_alarms()
         today = date.today()
-        if self.last_backup != today:
+        if self.last_backup != today and self._tick_backup_ok():
             self._backup(manual=False)
         if self.chk_autofetch.isChecked() and self.gauth.is_connected():
             if (datetime.now() - self.last_fetch).total_seconds() >= 1800:
@@ -3402,12 +3409,30 @@ class MainWindow(QMainWindow):
     # 만드는 쪽(build_briefing / build_briefing_html)은 그 화면이 그대로 쓴다.
 
     # ------------------------------------------------------------ 백업
+    # 자동 백업이 실패하면 이만큼 쉬었다가 다시 해 본다(초)
+    BACKUP_RETRY_SEC = 600
+
+    def _tick_backup_ok(self) -> bool:
+        """1초 타이머가 지금 자동 백업을 해도 되나.
+
+        ⚠️ 구글에 연결된 PC 는 계정 확인이 끝나야 **그 사람의** 폴더를 안다.
+           예전엔 켜자마자(1초) 여기서 백업해서 공용 폴더를 백업했다.
+           계정 확인이 끝나면 _on_account_ready 가 직접 백업한다.
+        또 실패한 뒤에는 BACKUP_RETRY_SEC 동안 쉰다 — 예전엔 디스크가 가득 차거나
+        권한이 없으면 **매초** 파일을 다시 쓰려 했다.
+        """
+        if self.gauth.is_connected() and not getattr(self, "_account_checked", False):
+            return False
+        return datetime.now() >= getattr(self, "_backup_retry_at", datetime.min)
+
     def _backup(self, manual: bool):
         try:
             self._do_backup(manual)
+            self._backup_retry_at = datetime.min
         except Exception as e:
             # 백업이 실패해도 앱은 계속 돌아야 한다. last_backup 을 세우지 않으므로
-            # 다음 기회에 다시 시도한다(예전엔 여기서 터지면 매 초 예외가 났다).
+            # 다음 기회에 다시 시도한다 — 단 틱마다가 아니라 잠시 쉬었다가.
+            self._backup_retry_at = datetime.now() + timedelta(seconds=self.BACKUP_RETRY_SEC)
             if manual:
                 QMessageBox.warning(self, config.APP_NAME, "백업 실패:\n" + str(e))
 

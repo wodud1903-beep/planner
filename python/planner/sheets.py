@@ -800,6 +800,85 @@ def _copy_row_style(auth: GoogleAuth, sheet_id: str, gid: int,
     _check(r)
 
 
+class RowMoved(GoogleError):
+    """고친·지울 고객이 그 줄에 없다 — 시트가 그 사이 바뀌었다."""
+
+
+MOVED_MSG = ("시트가 그 사이 바뀌어 이 고객의 줄을 확실히 찾지 못했습니다.\n"
+             "[불러오기] 로 목록을 새로 받은 뒤 다시 해 주세요.\n"
+             "(엉뚱한 고객을 고치지 않도록 이번에는 저장하지 않았습니다)")
+
+
+def _read_col(auth: GoogleAuth, sheet_id: str, sheet_name: str, ci: int) -> list:
+    """한 열 전체 → [1행 값, 2행 값, …] (빈 칸은 "")."""
+    c = col_letter(ci)
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, f"{c}1:{c}"))
+    r = _http().get(url, headers=_headers(auth), timeout=20,
+                     params={"valueRenderOption": "FORMATTED_VALUE"})
+    _check(r)
+    return [str((row[0] if row else "") or "").strip()
+            for row in (r.json() or {}).get("values", [])]
+
+
+def _at(col: list, row: int) -> str:
+    return col[row - 1] if 0 < row <= len(col) else ""
+
+
+def locate_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+               row: int, name: str, uid: str = "") -> int:
+    """고치거나 지우기 **직전에** 그 고객이 아직 그 줄에 있는지 확인한다.
+
+    앱은 불러올 때의 줄 번호를 들고 있다. 그 사이 시트를 정렬하거나, 폰·다른 PC
+    에서 고객을 넣고 빼면 그 줄에는 **다른 고객**이 있다. 확인 없이 쓰면 엉뚱한
+    고객이 고쳐지거나 지워진다.
+
+    고객ID(U열)가 있으면 그것으로, 없으면 고객명(B열)으로 찾는다. 줄이 옮겨졌으면
+    새 줄 번호를 돌려주고, 못 찾거나 같은 이름이 여럿이면 RowMoved 로 멈춘다.
+    """
+    name = (name or "").strip()
+    uid = (uid or "").strip()
+    uids: list = []
+    if uid:
+        try:
+            uids = _read_col(auth, sheet_id, sheet_name, COL_UID)
+        except GoogleError:
+            uids = []                   # U열이 아직 없는 시트 — 이름으로 본다
+        if _at(uids, row) == uid:
+            return row
+        hits = [i + 1 for i, v in enumerate(uids) if v == uid]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            raise RowMoved(MOVED_MSG)
+    if not name:
+        raise RowMoved(MOVED_MSG)
+
+    def other_customer(r: int) -> bool:
+        # 이름이 같아도 **다른 고객ID** 가 적힌 줄은 동명이인이다
+        return bool(uid) and bool(_at(uids, r)) and _at(uids, r) != uid
+
+    names = _read_col(auth, sheet_id, sheet_name, 1)       # B 고객명
+    if _at(names, row) == name and not other_customer(row):
+        return row
+    hits = [i + 1 for i, v in enumerate(names) if v == name and not other_customer(i + 1)]
+    if len(hits) == 1:
+        return hits[0]
+    raise RowMoved(MOVED_MSG)
+
+
+def last_customer_row(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> int:
+    """지금 시트에서 고객명(B)이 적힌 마지막 줄. 못 읽으면 0."""
+    try:
+        names = _read_col(auth, sheet_id, sheet_name, 1)
+    except GoogleError:
+        return 0
+    for i in range(len(names), 0, -1):
+        if names[i - 1]:
+            return i
+    return 0
+
+
 def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
                values: dict, last_row: int, seq: str = "", uid: str = "") -> int:
     """맨 아래에 고객 한 줄 추가. 새 행 번호를 반환.
@@ -811,6 +890,10 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     행 번호 자체는 호출자가 미리 예약해서 넘긴다.
     """
     with _APPEND_LOCK:
+        # 앱이 들고 있는 마지막 줄은 불러올 때의 것이다. 그 사이 폰·다른 PC 가
+        # 고객을 더 넣었으면 그 줄 다음에 써야 한다 — 안 그러면 방금 넣은 고객을
+        # 덮어쓴다. 쓰기 직전에 실제 마지막 줄을 다시 본다.
+        last_row = max(last_row, last_customer_row(auth, sheet_id, sheet_name))
         new_row = last_row + 1
         try:
             gid = _sheet_gid(auth, sheet_id, sheet_name)
@@ -831,18 +914,31 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
 
 
 def update_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-               row: int, values: dict) -> None:
-    """기존 고객 줄 수정 — 직접기재 칸만 갱신(수식 칸 보존)."""
+               row: int, values: dict, name: str = "", uid: str = "") -> int:
+    """기존 고객 줄 수정 — 직접기재 칸만 갱신(수식 칸 보존). 실제로 쓴 줄을 돌려준다.
+
+    name·uid 는 **고치기 전** 고객명과 고객ID. 주면 쓰기 직전에 그 고객이 그 줄에
+    있는지 확인한다(locate_row). 줄이 옮겨졌으면 옮겨 간 줄에 쓴다.
+    """
+    if name or uid:
+        row = locate_row(auth, sheet_id, sheet_name, row, name, uid)
     _write_cells(auth, sheet_id, sheet_name, row, values)
+    return row
 
 
-def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int) -> None:
+def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int,
+              name: str = "", uid: str = "") -> int:
     """고객 한 줄 삭제 — 직접 입력한 칸만 비우고 **수식 칸은 그대로 둔다**.
 
     줄 자체를 지우면 아래 행이 밀려 다른 사람의 순번까지 바뀌므로,
     내용만 비워 빈 줄로 만든다. 순번(A)은 값일 때만 함께 비운다
     (수식이면 시트가 알아서 계산하도록 손대지 않는다).
+
+    name·uid 를 주면 지우기 직전에 그 고객이 그 줄에 있는지 확인한다 —
+    정렬된 시트에서 **다른 고객을 지우는 일**이 없게. 실제로 지운 줄을 돌려준다.
     """
+    if name or uid:
+        row = locate_row(auth, sheet_id, sheet_name, row, name, uid)
     blank = {key: "" for _ci, key, _label in FIELDS}
     extra = None
     try:
@@ -864,6 +960,7 @@ def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int) -> Non
         write_uid(auth, sheet_id, sheet_name, row, "")
     except Exception:
         pass
+    return row
 
 
 def sheet_url(sheet_id: str) -> str:

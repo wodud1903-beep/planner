@@ -1295,23 +1295,25 @@ class CustomerFilesTab(QWidget):
             if len(picked) > 5:
                 names += f" 외 {len(picked) - 5}개"
             what = f"{len(picked)}개({names})를"
+        to_bin = file_ops.recycle_available()
+        tail = ("휴지통으로 보냅니다 — 휴지통에서 되살릴 수 있습니다.\n"
+                "(휴지통이 없는 드라이브면 윈도가 영구 삭제할지 한 번 더 묻습니다)"
+                if to_bin else
+                "구글 드라이브에서도 지워지고, 되돌릴 수 없습니다.")
         if QMessageBox.question(
                 self, config.APP_NAME,
-                f"{what} 지울까요?{extra}\n\n"
-                "구글 드라이브에서도 지워지고, 되돌릴 수 없습니다.",
+                f"{what} 지울까요?{extra}\n\n{tail}",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No) != QMessageBox.Yes:
             return
-        failed = []
-        n_ok = 0
-        for n in picked:
-            try:
-                file_ops.delete(n.key, self.source.root)
-                n_ok += 1
-            except file_ops.OpError as e:
-                failed.append(f"{n.name} — {e}")
-        msg = (f"'{picked[0].name}' 을(를) 지웠습니다." if n_ok == 1
-               else f"{n_ok}개를 지웠습니다.")
+        # 한꺼번에 넘긴다 — 휴지통이 없는 드라이브에서 윈도의 확인 질문이 파일마다
+        # 뜨지 않게(file_ops._shell_recycle 설명)
+        done, failed, binned = file_ops.remove_many([n.key for n in picked],
+                                                    self.source.root)
+        n_ok = len(done)
+        verb = "휴지통으로 보냈습니다" if binned else "지웠습니다"
+        msg = (f"'{os.path.basename(done[0].rstrip(chr(92) + '/'))}' 을(를) {verb}."
+               if n_ok == 1 else f"{n_ok}개를 {verb}.")
         self._after_change(msg if n_ok else "", failed)
 
     def rename_selected(self):

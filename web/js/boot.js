@@ -41,6 +41,13 @@ auth.onEmail(async (mail) => {
   paintState();
 });
 paintState();
+// [다시 로그인] 이 끝나면 — 새로고침 없이 보던 화면의 자료만 다시 받는다
+addEventListener("planner:reauthed", () => {
+  paintState();
+  for (const m of [kbui, cust, docs, agenda, calc]) {
+    try { m.load(); } catch (e) { /* 하나가 탈나도 나머지는 받는다 */ }
+  }
+});
 
 router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
 router.on(/^\/kb$/, () => kbui.screen(null));

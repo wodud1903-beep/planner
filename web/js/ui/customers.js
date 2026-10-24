@@ -564,6 +564,14 @@ async function save(r, before) {
     //    PC 에서 같은 고객을 고쳤다면, 그냥 쓰면 그 수정이 조용히 지워진다.
     //    쓰기 직전에 그 줄만 다시 읽어, 내가 고치려는 칸이 그 사이 바뀌었으면 묻는다.
     const clash = await conflicts(r, before, patch);
+    if (clash === MOVED) {
+      // 그 줄에 이제 **다른 고객**이 있다(정렬·추가·삭제로 줄이 밀림).
+      // 그대로 쓰면 엉뚱한 고객이 고쳐진다 — 묻지도 않고 멈춘다.
+      msg.textContent = "시트가 그 사이 바뀌어 이 고객의 줄이 달라졌습니다. "
+        + "목록으로 돌아가 새로 불러온 뒤 다시 고쳐 주세요. (저장하지 않았습니다)";
+      btn.disabled = false;
+      return;
+    }
     if (clash.length) {
       const what = clash.map((k) => LABEL[k] || k).join(", ");
       if (!confirm(`그 사이 다른 곳에서 이 고객을 고쳤습니다 (${what}).\n`
@@ -592,7 +600,10 @@ async function save(r, before) {
   }
 }
 
-/** 내가 고치려는 칸 중, 불러온 뒤 시트에서 바뀐 것들. */
+const MOVED = "moved";
+
+/** 내가 고치려는 칸 중, 불러온 뒤 시트에서 바뀐 것들.
+ *  그 줄에 이제 다른 고객이 있으면(고객명이 다르면) MOVED. */
 async function conflicts(r, before, patch) {
   let now;
   try {
@@ -602,6 +613,9 @@ async function conflicts(r, before, patch) {
   }
   const { rows } = parseRowsOne(now, r.row);
   if (!rows) return [];
+  // ⚠️ 고친 칸만 비교하면, 그 줄에 다른 고객이 와 있어도 그 칸 값이 우연히 같으면
+  //    그냥 써 버린다. 먼저 **같은 고객인지**(고객명)부터 본다.
+  if (String(rows.customer || "").trim() !== String(before.customer || "").trim()) return MOVED;
   const out = [];
   for (const key of Object.keys(patch)) {
     const nowV = String(rows[key] || "").trim();

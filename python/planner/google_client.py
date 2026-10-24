@@ -84,6 +84,16 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         params = urllib.parse.parse_qs(qs)
         code = params.get("code", [""])[0]
         err = params.get("error", [""])[0]
+        # ⚠️ 우리가 보낸 state 를 그대로 들고 온 응답만 받는다. 같은 PC 의 다른
+        #    프로그램이 이 주소를 먼저 쳐서 엉뚱한 코드(남의 계정)를 끼워 넣지 못하게.
+        #    (브라우저가 덤으로 보내는 /favicon.ico 같은 요청도 여기서 걸러진다)
+        want = getattr(self.server, "expect_state", "")
+        if want and params.get("state", [""])[0] != want:
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write("잘못된 요청입니다.".encode("utf-8"))
+            return
         self.server.auth_code = code  # type: ignore[attr-defined]
         self.server.auth_error = err  # type: ignore[attr-defined]
 
@@ -101,6 +111,37 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):  # 콘솔 로그 억제
         pass
+
+
+def pkce_pair() -> tuple[str, str, str]:
+    """(state, code_verifier, code_challenge) — 로그인 한 번에 한 벌씩 새로 만든다."""
+    import base64
+    import hashlib
+    import secrets
+    state = secrets.token_urlsafe(24)
+    verifier = secrets.token_urlsafe(64)            # 86자 — 규격(43~128자) 안
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return state, verifier, challenge
+
+
+def build_auth_url(redirect: str, extra_scopes, state: str, challenge: str) -> str:
+    """구글 동의 화면 주소."""
+    want = list(config.GOOGLE_SCOPES)
+    for sc in (extra_scopes or []):
+        if sc and sc not in want:
+            want.append(sc)
+    return config.AUTH_ENDPOINT + "?" + urllib.parse.urlencode({
+        "client_id": config.GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect,
+        "response_type": "code",
+        "scope": " ".join(want),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
 
 
 class GoogleAuth:
@@ -131,11 +172,11 @@ class GoogleAuth:
     def _save(self):
         try:
             import json
-            self.cfg_file.write_text(
+            # 저장 중에 꺼져도 토큰 파일이 반쯤 잘리지 않게(그러면 다음 실행에 로그아웃된다)
+            config.atomic_write(
+                self.cfg_file,
                 json.dumps({"refresh_token": self.refresh_token,
-                            "scopes": list(self.scopes)}, ensure_ascii=False),
-                encoding="utf-8",
-            )
+                            "scopes": list(self.scopes)}, ensure_ascii=False))
         except Exception:
             pass
 
@@ -183,20 +224,13 @@ class GoogleAuth:
         httpd.auth_code = ""      # type: ignore[attr-defined]
         httpd.auth_error = ""     # type: ignore[attr-defined]
         httpd.timeout = 1
+        # 표준 보호 두 가지 — state(응답이 우리 요청의 것인지)와 PKCE(코드를 가로채도
+        # 우리만 아는 verifier 없이는 토큰으로 못 바꾼다)
+        state, verifier, challenge = pkce_pair()
+        httpd.expect_state = state  # type: ignore[attr-defined]
 
         redirect = f"http://127.0.0.1:{port}/"
-        want = list(config.GOOGLE_SCOPES)
-        for s in (extra_scopes or []):
-            if s and s not in want:
-                want.append(s)
-        auth_url = config.AUTH_ENDPOINT + "?" + urllib.parse.urlencode({
-            "client_id": config.GOOGLE_CLIENT_ID,
-            "redirect_uri": redirect,
-            "response_type": "code",
-            "scope": " ".join(want),
-            "access_type": "offline",
-            "prompt": "consent",
-        })
+        auth_url = build_auth_url(redirect, extra_scopes, state, challenge)
 
         webbrowser.open(auth_url)
 
@@ -214,16 +248,19 @@ class GoogleAuth:
         if not httpd.auth_code:  # type: ignore[attr-defined]
             raise GoogleError("인증 시간이 초과되었습니다. 다시 시도하세요.")
 
-        self._exchange_code(httpd.auth_code, redirect)  # type: ignore[attr-defined]
+        self._exchange_code(httpd.auth_code, redirect, verifier)  # type: ignore[attr-defined]
 
-    def _exchange_code(self, code: str, redirect: str) -> None:
-        resp = _http().post(config.TOKEN_ENDPOINT, data={
+    def _exchange_code(self, code: str, redirect: str, verifier: str = "") -> None:
+        data = {
             "code": code,
             "client_id": config.GOOGLE_CLIENT_ID,
             "client_secret": config.GOOGLE_CLIENT_SECRET,
             "redirect_uri": redirect,
             "grant_type": "authorization_code",
-        }, timeout=30)
+        }
+        if verifier:
+            data["code_verifier"] = verifier
+        resp = _http().post(config.TOKEN_ENDPOINT, data=data, timeout=30)
         if resp.status_code != 200:
             raise GoogleError(f"토큰 교환 실패: {resp.text}")
         j = resp.json()

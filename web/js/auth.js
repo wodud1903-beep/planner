@@ -64,16 +64,22 @@ function client() {
 }
 
 // 조용히 토큰 받기. prompt:'' 는 이미 동의했고 구글 세션이 살아 있으면 화면 없이 끝난다.
-export function acquire({ interactive = false, timeoutMs = 4000 } = {}) {
+//
+// prompt — "" : 필요할 때만 묻는다(이미 동의했으면 동의 화면이 안 나온다)
+//          "select_account" : 계정을 고르게 한다(계정 바꾸기)
+//          "consent" : 동의 화면을 꼭 띄운다
+// keep   — 실패해도 '다시 로그인' 상태로 바꾸지 않는다. 아직 쓸 수 있는 토큰이
+//          있는데 미리 갈아 끼우려다 실패한 경우다(그 토큰은 그대로 쓴다).
+export function acquire({ interactive = false, timeoutMs = 4000, prompt = "", keep = false } = {}) {
   return new Promise((resolve) => {
     const c = client();
-    if (!c) { setState(STATE.NEED); resolve(null); return; }
+    if (!c) { if (!keep) setState(STATE.NEED); resolve(null); return; }
     let done = false;
     const finish = (tok) => {
       if (done) return;
       done = true;
       if (tok) { setState(STATE.AUTHED); resolve(tok); }
-      else { setState(STATE.NEED); resolve(null); }
+      else { if (!keep) setState(STATE.NEED); resolve(null); }
     };
     c.callback = (resp) => {
       if (!resp || resp.error || !resp.access_token) { finish(null); return; }
@@ -91,7 +97,7 @@ export function acquire({ interactive = false, timeoutMs = 4000 } = {}) {
     // 조용한 시도는 답이 없을 수 있다 → 기다리다 포기한다
     if (!interactive) setTimeout(() => finish(null), timeoutMs);
     try {
-      c.requestAccessToken({ prompt: interactive ? "consent" : "" });
+      c.requestAccessToken({ prompt });
     } catch (e) { finish(null); }
   });
 }
@@ -133,15 +139,40 @@ export async function ensureEmail({ timeoutMs = 4000 } = {}) {
   ]);
 }
 
-export async function token({ interactive = false } = {}) {
-  if (_tok && _tok.expiresAt > Date.now()) return _tok.token;
+// 만료 몇 분 전부터 미리 갈아 끼울지
+export const REFRESH_AHEAD_MS = 5 * 60 * 1000;
+let _refreshing = null;
+
+/** 쓸 토큰. refresh:true 면 곧 만료될 토큰을 **미리** 갈아 끼운다.
+ *
+ * ⚠️ 예전엔 미리 갱신 타이머가 이 함수를 그냥 불렀는데, 아직 만료 전이면 첫 줄에서
+ *    지금 토큰을 돌려주고 끝나 **미리 갱신이 한 번도 일어나지 않았다.** 그래서
+ *    1시간마다 토큰이 끊겨 '다시 로그인' 을 눌러야 했다.
+ */
+export async function token({ interactive = false, refresh = false } = {}) {
+  const now = Date.now();
+  if (_tok && _tok.expiresAt > now) {
+    if (!refresh || _tok.expiresAt - now > REFRESH_AHEAD_MS) return _tok.token;
+    // 곧 만료 → 조용히 갈아 끼운다. 실패해도 지금 토큰은 아직 쓸 수 있다.
+    if (!_refreshing) {
+      _refreshing = acquire({ interactive: false, keep: true })
+        .finally(() => { _refreshing = null; });
+    }
+    const t = await _refreshing;
+    return t ? t.token : (_tok && _tok.expiresAt > Date.now() ? _tok.token : null);
+  }
   const cached = load();
   if (cached) { _tok = cached; setState(STATE.AUTHED); return cached.token; }
   const t = await acquire({ interactive });
   return t ? t.token : null;
 }
 
-export function signIn() { return acquire({ interactive: true, timeoutMs: 0 }); }
+/** [다시 로그인] — 동의 화면을 매번 띄우지 않는다(이미 동의했으면 바로 닫힌다).
+ *  권한이 새로 필요할 때만 구글이 알아서 동의를 묻는다.
+ *  계정을 바꿀 때는 prompt:"select_account". */
+export function signIn({ prompt = "" } = {}) {
+  return acquire({ interactive: true, timeoutMs: 0, prompt });
+}
 
 export function signOut() {
   _tok = null;
@@ -158,11 +189,10 @@ export function init() {
   }
   // 만료 5분 전에 미리 갈아 끼운다. 폰은 대부분 뒤에 가 있어서 타이머가 굼뜨므로
   // 화면이 앞으로 올 때도 한 번 본다.
-  setInterval(() => { if (_tok && _tok.expiresAt - Date.now() < 5 * 60 * 1000) token(); },
-              60 * 1000);
+  const soon = () => _tok && _tok.expiresAt - Date.now() < REFRESH_AHEAD_MS;
+  setInterval(() => { if (soon()) token({ refresh: true }); }, 60 * 1000);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && _tok
-        && _tok.expiresAt - Date.now() < 5 * 60 * 1000) token();
+    if (document.visibilityState === "visible" && soon()) token({ refresh: true });
   });
 }
 

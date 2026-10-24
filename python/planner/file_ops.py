@@ -4,7 +4,8 @@
 폴더에 대한 것이다 — 그 폴더는 구글 드라이브 데스크톱이 알아서 올려 준다.
 드라이브를 API 로 직접 조회하는 모드는 읽기 전용이라 여기 오지 않는다.
 
-지우는 것은 되돌릴 수 없으므로, 부르는 쪽에서 반드시 먼저 물어봐야 한다.
+지우는 것은 윈도면 휴지통으로 보낸다(remove_many). 그래도 부르는 쪽에서 반드시
+먼저 물어봐야 한다 — 휴지통이 없는 드라이브도 있다.
 """
 
 from __future__ import annotations
@@ -73,13 +74,16 @@ def inside(folder: str, path: str) -> bool:
 _inside = inside          # 안에서 쓰던 옛 이름
 
 
-def delete(path: str, root: str) -> None:
-    """파일이나 폴더를 지운다. 창고(root) 밖이면 거절한다."""
+def _check_removable(path: str, root: str) -> None:
     if not _inside(root, path):
         raise OpError("이 폴더 밖은 지울 수 없습니다.")
     if os.path.normcase(os.path.abspath(path)) == os.path.normcase(
             os.path.abspath(root)):
         raise OpError("맨 위 폴더는 지울 수 없습니다.")
+
+
+def _remove_now(path: str) -> None:
+    """바로(영구) 지운다 — 휴지통을 못 쓰는 곳에서만."""
     try:
         if os.path.isdir(path) and not os.path.islink(path):
             shutil.rmtree(path)
@@ -87,6 +91,94 @@ def delete(path: str, root: str) -> None:
             os.remove(path)
     except OSError as e:
         raise OpError(f"지우지 못했습니다: {e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 윈도 휴지통
+# ---------------------------------------------------------------------------
+def recycle_available() -> bool:
+    """이 PC 에서 휴지통으로 보낼 수 있나(윈도만)."""
+    return os.name == "nt"
+
+
+def _shell_recycle(paths: list) -> bool:
+    """윈도 휴지통으로 한꺼번에 보낸다. 다 됐으면 True, 취소·실패면 False.
+
+    SHFileOperationW(FO_DELETE + FOF_ALLOWUNDO) — 추가 설치 없이 윈도가 하는 그대로다.
+    ⚠️ FOF_WANTNUKEWARNING: 휴지통이 없는 곳(구글 드라이브 스트리밍 G: 같은 가상
+       드라이브, 네트워크 드라이브)에서는 **윈도가 "영구 삭제할까요?" 를 한 번 더
+       묻는다.** 이게 없으면 FOF_NOCONFIRMATION 때문에 말없이 영구 삭제된다.
+       여러 개를 한 번에 넘기는 것도 그 때문이다 — 하나씩 넘기면 그 질문이 파일마다 뜬다.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT),
+                    ("pFrom", wintypes.LPCWSTR), ("pTo", wintypes.LPCWSTR),
+                    ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p),
+                    ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+    FO_DELETE = 0x3
+    FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO = 0x4, 0x10, 0x40
+    FOF_WANTNUKEWARNING = 0x4000
+    # 경로들을 \0 으로 잇고 끝에 \0 을 하나 더 — 이 함수가 요구하는 모양이다
+    buf = ctypes.create_unicode_buffer(
+        "\0".join(os.path.abspath(p) for p in paths) + "\0\0")
+    op = SHFILEOPSTRUCTW()
+    op.wFunc = FO_DELETE
+    op.pFrom = ctypes.cast(buf, wintypes.LPCWSTR)
+    op.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_WANTNUKEWARNING
+    res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    return res == 0 and not op.fAnyOperationsAborted
+
+
+_recycle = _shell_recycle          # 검사에서 가짜로 바꿔 끼운다
+
+
+def remove_many(paths: list, root: str) -> tuple:
+    """여러 개를 지운다 — 윈도면 **휴지통으로**. (지운 것, 안 된 것 설명, 휴지통?)
+
+    휴지통으로 보내다 사용자가 취소했거나 실패한 것은 **영구 삭제로 넘어가지 않는다.**
+    (영구 삭제 경고에서 '아니요' 를 눌렀는데 지워지면 안 된다)
+    """
+    ok_paths, failed = [], []
+    for p in paths:
+        try:
+            _check_removable(p, root)
+            ok_paths.append(p)
+        except OpError as e:
+            failed.append(f"{os.path.basename(p.rstrip(chr(92) + '/')) or p} — {e}")
+    if not ok_paths:
+        return [], failed, False
+    if recycle_available() and _recycle is not None:
+        try:
+            _recycle(ok_paths)
+        except Exception:
+            pass                        # 아래에서 남은 것으로 판단한다
+        done = [p for p in ok_paths if not os.path.exists(p)]
+        for p in ok_paths:
+            if p not in done:
+                failed.append(f"{os.path.basename(p.rstrip(chr(92) + '/')) or p} — "
+                              "지우지 않았습니다(취소했거나 휴지통으로 보내지 못했습니다)")
+        return done, failed, True
+    done = []
+    for p in ok_paths:
+        try:
+            _remove_now(p)
+            done.append(p)
+        except OpError as e:
+            failed.append(f"{os.path.basename(p.rstrip(chr(92) + '/')) or p} — {e}")
+    return done, failed, False
+
+
+def delete(path: str, root: str) -> None:
+    """파일이나 폴더 하나를 지운다(윈도면 휴지통으로). 창고(root) 밖이면 거절한다."""
+    _check_removable(path, root)
+    done, failed, _bin = remove_many([path], root)
+    if not done:
+        raise OpError(failed[0].split(" — ", 1)[-1] if failed else "지우지 못했습니다.")
 
 
 def rename(path: str, new_name: str, root: str) -> str:

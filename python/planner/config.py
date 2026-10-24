@@ -11,13 +11,14 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.20.5"
+APP_VERSION = "1.20.6"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
-# 비공개 저장소면 릴리스 자산 다운로드에 읽기 권한 토큰이 필요.
-# 우선순위: (1) 빌드 시 주입된 내장 토큰(_secret.py) → (2) %APPDATA%\Planner\gh_token.txt
-# _secret.py 는 git 에 커밋하지 않고, GitHub Actions 의 UPDATE_TOKEN 시크릿에서 빌드 때만 생성된다.
+# 저장소가 공개라 토큰 없이 업데이트를 확인·내려받는다.
+# ⚠️ exe 안에 토큰을 넣지 않는다 — 공개 릴리스에 든 토큰은 누구나 꺼낼 수 있다.
+#    (빌드 워크플로가 _secret.py 가 있으면 빌드를 멈춘다)
+#    비공개로 바꿔야 한다면 그 PC 의 %APPDATA%\Planner\gh_token.txt 에 **읽기 전용** 토큰을 둔다.
 try:
     from ._secret import UPDATE_TOKEN as GITHUB_TOKEN  # noqa: F401
 except Exception:

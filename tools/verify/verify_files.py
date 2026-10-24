@@ -137,7 +137,11 @@ from planner import google_client
 sig = inspect.signature(google_client.GoogleAuth.authorize)
 ok("authorize 가 추가 권한을 받는다", "extra_scopes" in sig.parameters)
 srcs = inspect.getsource(google_client.GoogleAuth.authorize)
-ok("추가 권한을 실제로 붙인다", "extra_scopes" in srcs and "want" in srcs)
+ok("authorize 가 추가 권한을 주소 만드는 곳에 넘긴다",
+   "build_auth_url(redirect, extra_scopes" in srcs)
+_u = google_client.build_auth_url("http://127.0.0.1:1/", [config.SCOPE_DRIVE_READ], "s", "c")
+import urllib.parse
+ok("추가 권한을 실제로 붙인다", config.SCOPE_DRIVE_READ in urllib.parse.unquote(_u))
 
 print("\n[7] 화면 — 만들어지고, 실패해도 잠기지 않는다")
 # 폴더 훑기·상위로·자동 반영은 verify_browse.py 가 자세히 본다.

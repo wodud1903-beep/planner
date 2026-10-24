@@ -89,6 +89,9 @@ async function page(ctx) {
 
 console.log("\n[3] 뜬다 · 화면이 그려진다");
 let ctx = await browser.newContext();
+// 진짜 구글 로그인 스크립트는 막는다 — 받아지는 날엔 조용한 로그인 시도가 창을
+// 띄우고 몇 초씩 잡아먹어 화면 검사가 들쭉날쭉했다(다른 절들도 이렇게 막는다).
+await ctx.route("**/accounts.google.com/**", (r) => r.abort());
 let p = await page(ctx);
 const reqs = [];
 p.on("request", (r) => reqs.push(r.url()));
@@ -185,6 +188,91 @@ console.log("\n[4-3] 테마 — 정보 탭에서 고른다");
       await pT.screenshot({ path: join(process.env.SHOT_DIR, `theme_${k}.png`) });
   }
   await cT.close();
+}
+
+console.log("\n[4-4] 폰 로그인 — 1시간마다 끊기지 않게");
+{
+  const cL = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  // 구글 로그인 라이브러리를 가짜로 끼운다 — 부를 때 어떤 prompt 를 줬는지 적어 둔다
+  await cL.addInitScript(() => {
+    window.__prompts = [];
+    window.__fail = sessionStorage.getItem("__fail") === "1";   // 새로고침해도 이어진다
+    window.google = { accounts: { oauth2: { initTokenClient(cfg) {
+      const c = { callback: cfg.callback, requestAccessToken(o) {
+        window.__prompts.push(o ? o.prompt : undefined);
+        sessionStorage.setItem("__last_prompt", o ? o.prompt : "");   // 새로고침 뒤에도 본다
+        setTimeout(() => c.callback(window.__fail
+          ? { error: "interaction_required" }
+          : { access_token: "fresh-" + window.__prompts.length, expires_in: 3600 }), 10);
+      } };
+      return c;
+    } } } };
+  });
+  await cL.route("**/accounts.google.com/**", (r) => r.abort());
+  await cL.route("**/oauth2/v3/userinfo", (r) => r.fulfill({ json: { email: "me@example.com" } }));
+  await cL.route("**/*.googleapis.com/**", (r) => r.fulfill({ json: {} }));
+  const pL = await page(cL);
+  // 4분 뒤 만료되는 토큰을 들고 시작한다
+  await cL.addInitScript(() => {
+    if (!sessionStorage.getItem("__seeded")) {
+      sessionStorage.setItem("__seeded", "1");
+      sessionStorage.setItem("planner.tok", JSON.stringify({
+        token: "old-tok", expiresAt: Date.now() + 4 * 60e3, email: "me@example.com" }));
+    }
+  });
+  await pL.goto(s.url + "#/agenda", { waitUntil: "networkidle" });
+  const tok = () => pL.evaluate(() => JSON.parse(sessionStorage.getItem("planner.tok") || "{}").token);
+  ok("시작은 들고 있던 토큰", (await tok()) === "old-tok", await tok());
+  // 화면이 앞으로 올 때(=폰을 다시 켰을 때) 곧 만료될 토큰을 미리 갈아 끼운다
+  await pL.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pL.waitForTimeout(300);
+  ok("만료 전에 미리 갈아 끼운다(예전엔 아무 일도 안 했다)",
+     String(await tok()).startsWith("fresh-"), await tok());
+  ok("미리 갱신은 조용히(prompt 빈 값)",
+     (await pL.evaluate(() => window.__prompts)).every((x) => x === ""),
+     JSON.stringify(await pL.evaluate(() => window.__prompts)));
+
+  // 미리 갱신이 실패해도 지금 토큰은 그대로 쓰고 '다시 로그인' 으로 바꾸지 않는다
+  await pL.evaluate(() => {
+    window.__fail = true;
+    const t = JSON.parse(sessionStorage.getItem("planner.tok"));
+    t.expiresAt = Date.now() + 3 * 60e3;
+    sessionStorage.setItem("planner.tok", JSON.stringify(t));
+  });
+  await pL.reload({ waitUntil: "networkidle" });
+  await pL.evaluate(() => { window.__fail = true; document.dispatchEvent(new Event("visibilitychange")); });
+  await pL.waitForTimeout(300);
+  ok("미리 갱신이 실패해도 '다시 로그인' 이 안 뜬다(토큰이 아직 유효)",
+     await pL.locator("#statechip").isHidden());
+
+  // 진짜로 끊겼을 때 — [다시 로그인] 은 동의 화면을 강제하지 않고, 새로고침도 안 한다
+  await pL.evaluate(() => {
+    sessionStorage.removeItem("planner.tok");
+    sessionStorage.setItem("__fail", "1");     // 다시 켜도 조용한 로그인은 실패한다
+  });
+  await pL.reload({ waitUntil: "networkidle" });
+  await pL.waitForTimeout(4500);              // 조용한 시도(4초)가 실패하길 기다린다
+  ok("끊기면 '다시 로그인' 이 보인다", await pL.locator("#statechip").isVisible());
+  await pL.evaluate(() => {
+    window.__fail = false; sessionStorage.removeItem("__fail");
+    window.__prompts = []; window.__mark = "그대로";
+  });
+  await pL.click("#statechip");
+  await pL.waitForTimeout(500);
+  const pr = await pL.evaluate(() => window.__prompts);
+  ok("다시 로그인은 동의 화면을 강제하지 않는다(prompt 빈 값)", pr[0] === "", JSON.stringify(pr));
+  ok("새로고침하지 않는다(보던 화면 그대로)",
+     (await pL.evaluate(() => window.__mark)) === "그대로");
+  ok("다시 로그인 뒤 칩이 사라진다", await pL.locator("#statechip").isHidden());
+  // 계정 바꾸기는 계정 고르는 화면
+  await pL.evaluate(() => { location.hash = "#/about"; window.__prompts = []; });
+  await pL.waitForSelector("#relogin");
+  await pL.click("#relogin");
+  await pL.waitForTimeout(300);
+  ok("계정 바꾸기는 select_account",
+     (await pL.evaluate(() => sessionStorage.getItem("__last_prompt"))) === "select_account",
+     await pL.evaluate(() => sessionStorage.getItem("__last_prompt")));
+  await cL.close();
 }
 
 console.log("\n[5] 자료검색 — 로그인 전에도 빈 화면이 아니다");
@@ -1340,6 +1428,25 @@ console.log("\n[21] 폰에서 고객 고치기 — 시트를 망가뜨리지 않
   ok("그 사이 바뀌었으면 묻고, 취소하면 안 쓴다", writes.length === 0, writes.length);
   ok("왜 안 썼는지 말해 준다",
      (await pG.locator("#emsg").textContent()).includes("저장하지 않았"),
+     await pG.locator("#emsg").textContent());
+
+  // 그 줄에 **다른 고객**이 와 있으면(정렬·추가·삭제) 묻지도 않고 멈춘다
+  writes.length = 0;
+  let asked = false;
+  pG.once("dialog", (d) => { asked = true; d.accept(); });
+  rowNow = () => ["9", "박다른", ...SHEET[1].slice(2)];
+  // 앞 검사에서 [취소] 해 고치기 화면에 머물러 있다 → 상세로 돌아가 다시 연다
+  await pG.evaluate(() => { location.hash = "#/customers/2"; });
+  await pG.waitForSelector("#cedit");
+  await pG.click("#cedit");
+  await pG.waitForSelector("#esave");
+  await pG.fill("#e_status", "또바꾼값");
+  await pG.click("#esave");
+  await pG.waitForTimeout(900);
+  ok("줄에 다른 고객이 있으면 쓰지 않는다", writes.length === 0, writes.length);
+  ok("덮어쓸지 묻지도 않는다(눌러도 안 되는 일)", !asked);
+  ok("다시 불러오라고 말해 준다",
+     (await pG.locator("#emsg").textContent()).includes("새로 불러온 뒤"),
      await pG.locator("#emsg").textContent());
   await ctxG.close();
 }
