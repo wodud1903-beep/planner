@@ -1,0 +1,562 @@
+"""파일 미리보기 — 그림과 PDF, 돌려 보기까지.
+
+그림은 받은 바이트를 그대로 그리고, PDF 는 Qt 가 페이지를 그림으로 그려 준다
+(QtPdf). 스캔한 서류는 눕혀 찍힌 게 흔해서 돌려 보기가 꼭 필요하다.
+
+**그림도 여러 장일 수 있다.** 팩스는 TIFF 로 오는 일이 흔하고 대개 여러 장이다.
+예전엔 QPixmap.loadFromData 로 한 장만 읽어서 2장부터 조용히 사라졌다 — 서류를 다
+받은 줄 알고 넘어가게 되는, 가장 위험한 종류의 버그였다. 이제 QImageReader 로
+장 수를 세고 장을 넘긴다(PDF 와 같은 단추를 쓴다).
+
+돌린 각도는 파일마다 따로 기억한다 — 목록을 오가도 그 각도가 유지된다.
+창 크기가 바뀌면 다시 맞춰 그린다.
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QSize, Qt
+from PySide6.QtGui import (QColor, QImage, QImageReader, QPainter, QPixmap,
+                           QTransform)
+from PySide6.QtWidgets import (
+    QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout,
+    QWidget)
+
+from . import theme
+
+try:                                  # QtPdf 가 없는 환경에서도 그림은 보이게
+    from PySide6.QtPdf import QPdfDocument
+    HAVE_PDF = True
+except Exception:                     # pragma: no cover
+    QPdfDocument = None
+    HAVE_PDF = False
+
+
+class FilePreview(QWidget):
+    """그림·PDF 를 보여 주고, 돌리고, PDF 는 장을 넘긴다."""
+
+    def __init__(self, parent=None, on_send=None):
+        super().__init__(parent)
+        # 보고 있는 서류를 그 자리에서 카카오톡으로 보내려고 쓰는 길.
+        # 실제로 무엇을 보낼지는 목록을 들고 있는 쪽(고객정보 탭)이 안다.
+        self._on_send = on_send
+        self._angle = 0                 # 지금 보고 있는 것의 각도
+        self._angles: dict = {}         # 파일별로 기억해 둔 각도
+        self._key = ""
+        self._src = None                # 지금 장의 QPixmap (그림일 때)
+        self._img_data = None           # 그림 원본 바이트 — 장을 넘길 때 다시 읽는다
+        self._img_pages = 0             # 그림이 몇 장인가 (여러 장 TIFF·GIF)
+        self._doc = None                # QPdfDocument (PDF 일 때)
+        self._buf = None                # PDF 바이트 — 문서가 사는 동안 붙들어 둔다
+        self._page = 0
+        self._zoom = 0.0      # 0 이면 '칸에 맞춤', 그 외는 배율
+        self._pan_from = None   # 끌기 시작한 자리(화면 기준)
+        self._pan_at = (0, 0)   # 끌기 시작할 때의 스크롤 위치
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+
+        self.lbl_title = QLabel("")
+        self.lbl_title.setWordWrap(True)
+        self.lbl_title.setStyleSheet("font-weight:bold;")
+        v.addWidget(self.lbl_title)
+
+        # ---- 돌리기 · 장 넘기기 ----
+        bar = QHBoxLayout()
+        self.btn_left = QPushButton("↺ 왼쪽")
+        self.btn_left.setToolTip("왼쪽으로 90도 돌리기")
+        self.btn_left.clicked.connect(lambda: self.rotate(-90))
+        bar.addWidget(self.btn_left)
+        self.btn_right = QPushButton("↻ 오른쪽")
+        self.btn_right.setToolTip("오른쪽으로 90도 돌리기")
+        self.btn_right.clicked.connect(lambda: self.rotate(90))
+        bar.addWidget(self.btn_right)
+        self.btn_zoom_out = QPushButton("－")
+        self.btn_zoom_out.setToolTip("축소 (마우스 휠 내리기)")
+        self.btn_zoom_out.clicked.connect(lambda: self.zoom_by(1 / 1.25))
+        bar.addWidget(self.btn_zoom_out)
+        self.btn_zoom_in = QPushButton("＋")
+        self.btn_zoom_in.setToolTip("확대 (마우스 휠 올리기)")
+        self.btn_zoom_in.clicked.connect(lambda: self.zoom_by(1.25))
+        bar.addWidget(self.btn_zoom_in)
+        self.btn_fit = QPushButton("맞춤")
+        self.btn_fit.setToolTip("칸에 맞추기 (두 번 눌러도 됩니다)")
+        self.btn_fit.clicked.connect(self.zoom_fit)
+        bar.addWidget(self.btn_fit)
+        self.lbl_zoom = QLabel("")
+        self.lbl_zoom.setMinimumWidth(52)
+        self.lbl_zoom.setAlignment(Qt.AlignCenter)
+        bar.addWidget(self.lbl_zoom)
+        bar.addStretch()
+        # 보고 있는 그 서류를 바로 보낸다. 예전엔 미리보기로 확인한 뒤 다시
+        # 목록으로 가서 고르고 Ctrl+C 를 눌러야 했다.
+        self.btn_send = QPushButton("카톡으로 보내기")
+        self.btn_send.setToolTip(
+            "이 파일을 클립보드에 올립니다. 카카오톡 대화창에서 Ctrl+V 로 붙여 넣으세요")
+        self.btn_send.clicked.connect(self._send)
+        self.btn_send.setVisible(self._on_send is not None)
+        bar.addWidget(self.btn_send)
+        self.btn_prev = QPushButton("◀")
+        self.btn_prev.setToolTip("이전 장")
+        self.btn_prev.clicked.connect(lambda: self.go_page(self._page - 1))
+        bar.addWidget(self.btn_prev)
+        self.lbl_page = QLabel("")
+        self.lbl_page.setAlignment(Qt.AlignCenter)
+        self.lbl_page.setMinimumWidth(64)
+        bar.addWidget(self.lbl_page)
+        self.btn_next = QPushButton("▶")
+        self.btn_next.setToolTip("다음 장")
+        self.btn_next.clicked.connect(lambda: self.go_page(self._page + 1))
+        bar.addWidget(self.btn_next)
+        v.addLayout(bar)
+
+        # 확대하면 그림이 칸보다 커지므로 스크롤 안에 담는다.
+        self.view = QLabel("파일을 고르면 여기에 보입니다.")
+        self.view.setAlignment(Qt.AlignCenter)
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(self.view)
+        self.scroll.setWidgetResizable(True)      # '맞춤' 일 때는 칸에 맞춘다
+        self.scroll.setAlignment(Qt.AlignCenter)
+        self.scroll.setMinimumSize(QSize(220, 220))
+        self.scroll.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.scroll.setFrameShape(QScrollArea.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        v.addWidget(self.scroll, 1)
+
+        # 그림 위에서 끌면 옮겨 보게 하고, Ctrl+휠로 확대·축소한다.
+        #
+        # ⚠️ 휠은 반드시 여기서 가로채야 한다. 마우스는 늘 그림 위에 있는데,
+        #    그 휠 알림은 그림표(view)와 스크롤칸(viewport)이 먼저 받아 스크롤에
+        #    써 버리고 위로 올려 보내지 않는다. 그래서 FilePreview.wheelEvent 는
+        #    한 번도 불리지 않았고, 단추 설명에 적어 둔 'Ctrl + 마우스 휠' 이
+        #    실제로는 전혀 안 먹었다.
+        self.view.installEventFilter(self)
+        self.scroll.viewport().installEventFilter(self)
+        self.view.setMouseTracking(True)
+
+        self.apply_theme()
+        self._update_bar()
+
+    # ------------------------------------------------------------ 보여 주기
+    def _drop_doc(self):
+        """보던 PDF 를 놓아 준다.
+
+        ⚠️ 예전엔 QPdfDocument(self) 로 만들어 이 화면의 '자식' 으로 붙였다.
+        그러면 파이썬 쪽에서 손을 놓아도 C++ 객체는 화면이 살아 있는 한 안
+        없어진다. PDF 를 한 장씩 넘겨볼 때마다 그 문서와, 통째로 들고 있던 파일
+        내용이 그대로 쌓여서, 스캔 서류가 많은 폴더를 훑고 나면 메모리가 계속
+        늘었다. 그래서 지금은 부모 없이 만들어 파이썬이 혼자 임자가 되게 하고
+        (아래 show_pdf), 여기서 손을 놓는 즉시 없어지게 한다.
+        """
+        doc, self._doc = self._doc, None
+        if doc is not None:
+            try:
+                doc.close()          # 버퍼를 놓게 한 뒤에 버려야 안전하다
+            except Exception:
+                pass
+        self._buf = None
+
+    def show_message(self, text: str, title: str = ""):
+        self._drop_img()
+        self._drop_doc()
+        self._key = ""
+        self.lbl_title.setText(title)
+        self.view.setPixmap(QPixmap())
+        self.view.setText(text)
+        self._update_bar()
+
+    def _drop_img(self):
+        """보던 그림을 놓아 준다."""
+        self._src = None
+        self._img_data = None
+        self._img_pages = 0
+
+    @staticmethod
+    def _read_img(data: bytes, page: int = 0):
+        """그림에서 그 장을 읽는다 → (QImage|None, 장수).
+
+        ⚠️ 읽개(QImageReader)와 버퍼(QBuffer)를 **이 함수 밖으로 내보내지 않는다.**
+        읽개는 버퍼를 가리키고만 있어서, 버퍼가 먼저 없어지면 읽개가 죽을 때 이미
+        없어진 자리를 건드려 **프로그램이 통째로 꺼진다**. 실제로 두 번 겪었다 —
+        한 번은 장을 넘길 때, 한 번은 프로그램을 끝낼 때(둘 다 segfault).
+        그래서 붙들어 두지 않고, 여기서 만들어 여기서 **순서대로** 없앤다.
+        """
+        buf = QBuffer()
+        buf.setData(QByteArray(data))
+        buf.open(QBuffer.ReadOnly)
+        r = QImageReader(buf)
+        r.setAutoTransform(True)        # 사진의 회전 정보(EXIF)를 따른다
+        count = r.imageCount()
+        count = count if count and count > 0 else 1
+        img = None
+        if page <= 0 or r.jumpToImage(page):
+            got = r.read()
+            if not got.isNull():
+                img = got
+        del r                           # 읽개 먼저
+        del buf                         # 버퍼 나중
+        return img, count
+
+    def _load_img_page(self, page: int) -> bool:
+        """그림의 그 장을 읽어 self._src 에 올린다."""
+        if not self._img_data:
+            return False
+        img, _n = self._read_img(self._img_data, page)
+        if img is None:
+            return False
+        self._src = QPixmap.fromImage(img)
+        return True
+
+    def show_image(self, data: bytes, key: str, title: str = "") -> bool:
+        # 여러 장 TIFF·GIF 면 장수가 2 이상. 셀 수 없는 형식은 1 로 본다.
+        img, pages = self._read_img(data, 0)
+        if img is None:
+            self.show_message("그림을 읽지 못했습니다.", title)
+            return False
+        self._drop_doc()
+        self._drop_img()
+        self._img_data = bytes(data)
+        self._img_pages = pages
+        self._page = 0
+        self._src = QPixmap.fromImage(img)
+        self._key = key
+        self._angle = self._angles.get(key, 0)
+        self._zoom = 0.0            # 새 파일은 '맞춤' 부터
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lbl_title.setText(title)
+        self._redraw()
+        self._update_bar()
+        return True
+
+    def show_pdf(self, data: bytes, key: str, title: str = "") -> bool:
+        if not HAVE_PDF:
+            self.show_message(
+                "이 버전에서는 PDF 미리보기를 쓸 수 없습니다.\n"
+                "[연결 프로그램으로 열기] 를 눌러 주세요.", title)
+            return False
+        buf = QBuffer()
+        buf.setData(QByteArray(data))
+        if not buf.open(QBuffer.ReadOnly):
+            self.show_message("PDF 를 열지 못했습니다.", title)
+            return False
+        # 부모를 주지 않는다 — 파이썬이 임자여야 손을 놓는 즉시 없어진다(_drop_doc)
+        doc = QPdfDocument()
+        err = doc.load(buf)
+        # 잠긴 PDF 등은 여기서 걸린다
+        if doc.pageCount() <= 0:
+            doc.close()                 # 못 읽은 문서도 쌓이면 안 된다
+            self.show_message(
+                f"PDF 를 읽지 못했습니다. ({err})\n"
+                "[연결 프로그램으로 열기] 를 눌러 주세요.", title)
+            return False
+        self._drop_img()
+        self._drop_doc()                # 앞서 보던 PDF 를 먼저 놓아 준다
+        self._doc = doc
+        self._buf = buf                 # 문서가 이 버퍼를 계속 읽는다
+        self._key = key
+        self._angle = self._angles.get(key, 0)
+        self._page = 0
+        self._zoom = 0.0            # 새 파일은 '맞춤' 부터
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.lbl_title.setText(title)
+        self._redraw()
+        self._update_bar()
+        return True
+
+    # ------------------------------------------------------------ 조작
+    def rotate(self, delta: int):
+        if self._src is None and self._doc is None:
+            return
+        self._angle = (self._angle + delta) % 360
+        if self._key:
+            self._angles[self._key] = self._angle
+        self._redraw()
+
+    def go_page(self, page: int):
+        n = self.page_count
+        if n <= 1:
+            return
+        page = max(0, min(page, n - 1))
+        if page == self._page:
+            return
+        if self._doc is None:
+            # 그림은 그 장을 다시 읽어야 한다. 못 읽으면 자리를 지킨다.
+            keep, self._page = self._page, page
+            if not self._load_img_page(page):
+                self._page = keep
+                return
+        else:
+            self._page = page
+        self._redraw()
+        self._update_bar()
+
+    @property
+    def page_count(self) -> int:
+        if self._doc is not None:
+            return self._doc.pageCount()
+        return self._img_pages
+
+    @property
+    def angle(self) -> int:
+        return self._angle
+
+    # ------------------------------------------------------------ 확대
+    MIN_ZOOM, MAX_ZOOM = 0.1, 8.0
+
+    def zoom_fit(self):
+        """칸에 맞춰 보기(기본)."""
+        self._zoom = 0.0
+        self.scroll.setWidgetResizable(True)
+        # 맞춰 보는 동안에는 스크롤막대가 필요 없다. 켜 두면 막대가 생겼다
+        # 사라지며 칸 크기가 흔들려 맞춤 크기가 그때그때 달라진다.
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._redraw()
+        self._update_bar()
+
+    def zoom_by(self, factor: float):
+        """지금 크기를 기준으로 키우거나 줄인다."""
+        if self._src is None and self._doc is None:
+            return
+        cur = self._zoom or self._fit_scale()
+        self.set_zoom(cur * factor)
+
+    def set_zoom(self, scale: float):
+        scale = max(self.MIN_ZOOM, min(self.MAX_ZOOM, scale))
+        # 확대하기 전에 지금 화면 한가운데가 그림의 어디쯤인지 기억해 둔다.
+        # 그걸 안 하면 확대할 때마다 왼쪽 위 구석으로 튀어, 보고 있던 자리가
+        # 화면 밖으로 사라진다.
+        before = self._center_ratio()
+        self._zoom = scale
+        # 확대하면 그림이 칸보다 커진다 → 스크롤이 생기도록 칸을 놓아 준다
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._redraw()
+        self._center_on(before)
+        self._update_bar()
+
+    def _center_ratio(self):
+        """지금 보고 있는 한가운데가 그림 전체의 몇 % 지점인가 (0~1)."""
+        hb, vb = self.scroll.horizontalScrollBar(), self.scroll.verticalScrollBar()
+        vp = self.scroll.viewport().size()
+        w = max(1, self.view.width()), max(1, self.view.height())
+        if self.fitted:
+            return 0.5, 0.5
+        return ((hb.value() + vp.width() / 2) / w[0],
+                (vb.value() + vp.height() / 2) / w[1])
+
+    def _center_on(self, ratio):
+        """그 지점이 다시 한가운데 오도록 스크롤을 옮긴다."""
+        rx, ry = ratio
+        hb, vb = self.scroll.horizontalScrollBar(), self.scroll.verticalScrollBar()
+        vp = self.scroll.viewport().size()
+        hb.setValue(int(self.view.width() * rx - vp.width() / 2))
+        vb.setValue(int(self.view.height() * ry - vp.height() / 2))
+
+    @property
+    def zoom(self) -> float:
+        """지금 배율. '맞춤' 이어도 실제 배율을 돌려준다."""
+        return self._zoom or self._fit_scale()
+
+    @property
+    def fitted(self) -> bool:
+        return self._zoom == 0.0
+
+    # 배율 1.0 = '원래 크기'. 그림은 제 픽셀 크기, PDF 는 96dpi 로 친다
+    # (종이 크기는 포인트(72dpi)로 오므로 화면 기준으로 환산한다).
+    PDF_DPI = 96.0
+
+    def _natural(self) -> QSize:
+        """돌리기 전, 배율 1.0 일 때의 크기."""
+        if self._src is not None:
+            return self._src.size()
+        if self._doc is not None:
+            pt = self._doc.pagePointSize(self._page)
+            if pt.width() > 0 and pt.height() > 0:
+                k = self.PDF_DPI / 72.0
+                return QSize(max(1, int(pt.width() * k)),
+                             max(1, int(pt.height() * k)))
+        return QSize(0, 0)
+
+    def _fit_scale(self) -> float:
+        """칸에 맞췄을 때의 배율. 그리지 않고 크기만으로 구한다."""
+        nat = self._natural()
+        if nat.width() <= 0 or nat.height() <= 0:
+            return 1.0
+        w, h = nat.width(), nat.height()
+        if self._angle in (90, 270):
+            w, h = h, w                 # 돌리면 가로세로가 바뀐다
+        box = self._box()
+        return max(0.01, min(box.width() / w, box.height() / h))
+
+    def _render(self, scale: float):
+        """그 배율로 그린 뒤 돌려서 돌려준다.
+
+        PDF 는 보여 줄 크기로 '직접' 그린다 — 작게 그려 놓고 늘리면 글자가
+        뭉개지기 때문이다. 그림은 원본을 그 크기로 줄이거나 늘린다.
+        """
+        nat = self._natural()
+        if nat.width() <= 0:
+            return None
+        w = max(1, int(nat.width() * scale))
+        h = max(1, int(nat.height() * scale))
+        if self._src is not None:
+            pix = self._src.scaled(w, h, Qt.KeepAspectRatio,
+                                   Qt.SmoothTransformation)
+        else:
+            img = self._doc.render(self._page, QSize(w, h))
+            if not isinstance(img, QImage) or img.isNull():
+                return None
+            # 종이는 흰색으로 깔아 준다. 그냥 그리면 글자만 있고 배경이 비어서,
+            # 어두운 화면에서는 검은 바탕에 검은 글씨가 되어 안 보인다.
+            page = QImage(img.size(), QImage.Format_RGB32)
+            page.fill(QColor("#FFFFFF"))
+            q = QPainter(page)
+            q.drawImage(0, 0, img)
+            q.end()
+            pix = QPixmap.fromImage(page)
+        if self._angle:
+            pix = pix.transformed(QTransform().rotate(self._angle),
+                                  Qt.SmoothTransformation)
+        return pix
+
+    # ---------------------------------------------------------------- 끌어서 옮기기
+    #
+    # 확대하면 그림이 칸보다 커진다. 그때는 스크롤막대를 잡는 대신 그림을
+    # 직접 끌어서 보고 싶은 자리로 옮길 수 있게 한다(지도 앱과 같은 조작).
+    def eventFilter(self, obj, ev):
+        if obj is self.view or obj is self.scroll.viewport():
+            t = ev.type()
+            # 휠 = 확대·축소. 그림 위에서 굴려도 먹어야 하므로 여기서 잡는다.
+            #
+            # Ctrl 을 안 눌러도 확대되게 했다 — 미리보기 칸에서는 굴리면 커지는 쪽이
+            # 자연스럽고, 서류를 볼 때 매번 Ctrl 을 같이 누르는 게 번거롭다.
+            # 확대한 뒤 자리를 옮기는 것은 **끌기**로 한다(이미 그렇게 동작한다).
+            if t == QEvent.Wheel:
+                if self._src is not None or self._doc is not None:
+                    self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
+                    ev.accept()
+                    return True
+        if obj is self.view:
+            t = ev.type()
+            if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                if self._can_pan():
+                    self._pan_from = ev.globalPosition().toPoint()
+                    self._pan_at = (self.scroll.horizontalScrollBar().value(),
+                                    self.scroll.verticalScrollBar().value())
+                    self.view.setCursor(Qt.ClosedHandCursor)
+                    return True
+            elif t == QEvent.MouseMove and self._pan_from is not None:
+                d = ev.globalPosition().toPoint() - self._pan_from
+                # 끄는 방향으로 그림이 따라오게 — 스크롤은 반대로 움직인다
+                self.scroll.horizontalScrollBar().setValue(self._pan_at[0] - d.x())
+                self.scroll.verticalScrollBar().setValue(self._pan_at[1] - d.y())
+                return True
+            elif t == QEvent.MouseButtonRelease and self._pan_from is not None:
+                self._pan_from = None
+                self._update_cursor()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _can_pan(self) -> bool:
+        """칸보다 그림이 커야 옮길 자리가 있다."""
+        if self._src is None and self._doc is None:
+            return False
+        vp = self.scroll.viewport().size()
+        return (self.view.width() > vp.width() + 1
+                or self.view.height() > vp.height() + 1)
+
+    def _update_cursor(self):
+        self.view.setCursor(Qt.OpenHandCursor if self._can_pan()
+                            else Qt.ArrowCursor)
+
+    def wheelEvent(self, ev):
+        """휠로 확대·축소 (칸 바깥에서 굴렸을 때의 대비책).
+
+        실제로는 위 eventFilter 가 먼저 잡는다 — 마우스는 늘 그림 위에 있고, 그
+        휠 알림은 여기까지 올라오지 않기 때문이다.
+        """
+        if self._src is not None or self._doc is not None:
+            self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
+            ev.accept()
+            return
+        super().wheelEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev):
+        """두 번 누르면 '맞춤' 과 '원래 크기(100%)' 를 오간다."""
+        if self._src is None and self._doc is None:
+            return
+        if self.fitted:
+            self.set_zoom(1.0)
+        else:
+            self.zoom_fit()
+
+    # ------------------------------------------------------------ 그리기
+    def _box(self) -> QSize:
+        s = self.scroll.viewport().size()
+        return QSize(max(80, s.width()), max(80, s.height()))
+
+    def _redraw(self):
+        if self._src is None and self._doc is None:
+            return
+        scale = self._fit_scale() if self.fitted else self._zoom
+        pix = self._render(max(self.MIN_ZOOM, min(scale, self.MAX_ZOOM)))
+        if pix is None or pix.isNull():
+            return
+        self.view.setText("")
+        self.view.setPixmap(pix)
+        if self.fitted:
+            self.view.resize(self.scroll.viewport().size())
+        else:
+            self.view.resize(pix.size())
+        self._update_cursor()
+
+
+    def set_send_action(self, on_send) -> None:
+        """'카톡으로 보내기' 를 누르면 할 일을 정해 준다(없으면 단추를 숨긴다)."""
+        self._on_send = on_send
+        self.btn_send.setVisible(on_send is not None)
+        self._update_bar()
+
+    def _send(self):
+        if self._on_send is not None:
+            self._on_send()
+
+    def _update_bar(self):
+        has = self._src is not None or self._doc is not None
+        self.btn_left.setEnabled(has)
+        self.btn_right.setEnabled(has)
+        for b in (self.btn_zoom_in, self.btn_zoom_out, self.btn_fit):
+            b.setEnabled(has)
+        self.btn_send.setEnabled(has)
+        self.lbl_zoom.setText(
+            ("맞춤" if self.fitted else f"{self._zoom * 100:.0f}%") if has else "")
+        n = self.page_count
+        multi = n > 1
+        self.btn_prev.setVisible(multi)
+        self.btn_next.setVisible(multi)
+        self.lbl_page.setVisible(multi)
+        if multi:
+            self.btn_prev.setEnabled(self._page > 0)
+            self.btn_next.setEnabled(self._page < n - 1)
+            self.lbl_page.setText(f"{self._page + 1} / {n}")
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if self.fitted:            # 확대 중이면 크기를 건드리지 않는다
+            self._redraw()
+
+    def apply_theme(self):
+        self.view.setStyleSheet(
+            f"color:{theme.c('subtext')};border:1px solid {theme.c('border')};"
+            f"border-radius:6px;")
+        self.lbl_page.setStyleSheet(f"color:{theme.c('subtext')};")
+        self.lbl_zoom.setStyleSheet(f"color:{theme.c('subtext')};")
+        self.scroll.setStyleSheet(
+            f"QScrollArea {{ border:1px solid {theme.c('border')};"
+            f" border-radius:6px; }}")

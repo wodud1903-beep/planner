@@ -1,0 +1,100 @@
+name: Build 업무자료검색 EXE
+
+# 업무자료검색(kbsearch/) 전용 빌드 — 일정관리기 빌드(build-exe.yml)와 따로 돈다.
+#  - kbsearch/ 가 바뀌면 검사 + 빌드 → 아티팩트(업무자료검색-windows)
+#  - kb-v* 태그를 밀면 릴리스에 업무자료검색.exe 첨부 → 모든 PC 가 그 판으로 자동 업데이트
+#  - 수동 실행(Actions 탭 → Run workflow, 태그 입력)
+#
+# ⚠️ 릴리스는 make_latest: false 로 낸다. 일정관리기 업데이트는 releases/latest 를 보므로
+#    이 릴리스가 '최신' 이 되면 일정관리기 PC 들이 자기 새 판을 못 찾는다.
+# ⚠️ 태그의 판 번호와 kbsearch/kbsearch/config.py 의 APP_VERSION 이 다르면 멈춘다.
+#    다르게 나가면 받은 PC 가 '아직 옛 판' 이라 여겨 업데이트를 끝없이 되풀이한다.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'kbsearch/**'
+      - '.github/workflows/build-kbsearch.yml'
+    tags:
+      - 'kb-v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '릴리스 태그 (예: kb-v1.0.1). 입력하면 그 태그로 릴리스를 만들고 exe 를 첨부. 비우면 빌드만.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/kb-v') && github.ref_name || '') }}
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r kbsearch/requirements.txt
+          pip install pyinstaller
+
+      - name: 태그와 프로그램 판 번호가 같은지 확인 (릴리스 때만)
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          case "$RELEASE_TAG" in
+            kb-v*) ;;
+            *) echo "태그는 kb-v 로 시작해야 합니다: $RELEASE_TAG"; exit 1 ;;
+          esac
+          want="${RELEASE_TAG#kb-v}"
+          have=$(python -c "import re,pathlib;print(re.search(r'APP_VERSION = \"([^\"]+)\"', pathlib.Path('kbsearch/kbsearch/config.py').read_text(encoding='utf-8')).group(1))")
+          echo "태그 $want / APP_VERSION $have"
+          if [ "$want" != "$have" ]; then
+            echo "판 번호가 다릅니다 — config.py 의 APP_VERSION 을 $want 로 바꾼 뒤 다시 태그하세요."
+            exit 1
+          fi
+
+      - name: 검사
+        working-directory: kbsearch
+        run: python verify/run_all.py
+
+      - name: EXE 빌드 (PyInstaller)
+        working-directory: kbsearch
+        run: pyinstaller kbsearch.spec --noconfirm --clean
+
+      - name: 아티팩트 업로드 (릴리스 없는 빌드만)
+        if: env.RELEASE_TAG == ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: 업무자료검색-windows
+          path: kbsearch/dist/업무자료검색.exe
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: 릴리스 본문 준비 (kbsearch/CHANGELOG.md 에서)
+        if: env.RELEASE_TAG != ''
+        run: python kbsearch/release_notes.py "${{ env.RELEASE_TAG }}" RELEASE_NOTES.md
+
+      - name: 릴리스 배포
+        if: env.RELEASE_TAG != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: 업무자료검색 ${{ env.RELEASE_TAG }}
+          body_path: RELEASE_NOTES.md
+          files: kbsearch/dist/업무자료검색.exe
+          make_latest: 'false'
