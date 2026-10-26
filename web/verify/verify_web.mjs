@@ -650,7 +650,7 @@ console.log("\n[11-2] 자료 첨부(그림·PDF) — 보이고, 크게 보고, �
       return r.fulfill({ json: { values: [
         ["카테고리", "금융사", "제목", "태그", "본문", "체크리스트(줄바꿈)"],
         ["전자약정", "신한", "신한 전자약정", "", "■ 진행 순서\n1. 링크 발송", ""],
-        ["심사서류", "", "개인 심사서류", "", "신분증", ""]] } });
+        ["심사서류", "", "개인 심사서류", "", "신분증", "신분증\n주민등록등본"]] } });
     }
     if (u.includes("!G1:G")) {
       if (gBad) return r.fulfill({ status: 400, json: { error: { message: "exceeds grid limits" } } });
@@ -695,6 +695,9 @@ console.log("\n[11-2] 자료 첨부(그림·PDF) — 보이고, 크게 보고, �
   await pK.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();
   await pK.waitForTimeout(400);
   ok("제목이 다른 첨부는 붙지 않는다", (await pK.locator("#kbatt").count()) === 0);
+  ok("자료검색에 체크리스트·[체크리스트 복사] 가 없다(PC 와 같게)",
+     (await pK.locator("#kbcopyc").count()) === 0
+     && !(await pK.locator("#kbdetail").innerText()).includes("체크리스트"));
   // 첨부 이름으로도 찾는다
   await pK.goto(s.url + "#/kb", { waitUntil: "networkidle" });
   await pK.fill("#kbq", "약정 안내");

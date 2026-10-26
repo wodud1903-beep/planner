@@ -186,10 +186,8 @@ class KbView(QWidget):
         self.txt_body.setReadOnly(True)
         self.txt_body.setOpenExternalLinks(True)
         rv.addWidget(self.txt_body, 3)
-        self.lbl_check_cap = QLabel("체크리스트")
-        rv.addWidget(self.lbl_check_cap)
-        self.lst_check = QListWidget()
-        rv.addWidget(self.lst_check, 2)
+        # 체크리스트는 이 화면에 보여 주지 않는다(지점장 요청). 자료에는 그대로 남아
+        # 고객관리 [서류] 의 체크 목록 재료로 쓰인다 — 편집 창의 칸도 그대로다.
         # 첨부(그림·PDF) — 골라서 Ctrl+C 또는 끌어서 카톡으로, 두 번 누르면 크게
         self.lbl_att_cap = QLabel("첨부")
         rv.addWidget(self.lbl_att_cap)
@@ -199,15 +197,12 @@ class KbView(QWidget):
         brow = QHBoxLayout()
         self.btn_copy_body = QPushButton("본문 복사")
         self.btn_copy_body.clicked.connect(self._copy_body)
-        self.btn_copy_check = QPushButton("체크리스트 복사")
-        self.btn_copy_check.clicked.connect(self._copy_check)
         self.btn_copy_att = QPushButton("첨부 복사")
         self.btn_copy_att.setToolTip(
             "고른 첨부(안 고르면 전부)를 복사합니다. 카카오톡 대화창에서 Ctrl+V 로 붙여 넣으세요.\n"
             "첨부를 끌어서 카톡 창에 놓아도 됩니다.")
         self.btn_copy_att.clicked.connect(lambda: self.copy_attachments())
         brow.addWidget(self.btn_copy_body)
-        brow.addWidget(self.btn_copy_check)
         brow.addWidget(self.btn_copy_att)
         brow.addStretch()
         rv.addLayout(brow)
@@ -272,9 +267,7 @@ class KbView(QWidget):
         if not it:
             self.lbl_title.setText("")
             self.txt_body.clear()
-            self.lst_check.clear()
             self.btn_copy_body.setEnabled(False)
-            self.btn_copy_check.setEnabled(False)
             self._fill_attachments({})
             return
         # 금융사가 제목과 같으면(캐피탈 자료) 한 번만 보여 준다
@@ -293,14 +286,7 @@ class KbView(QWidget):
             + (f"<br><span style='color:{theme.c('subtext')};'>{tail}</span>"
                if tail else ""))
         self.txt_body.setHtml(body_to_html(it.get("body", "")))
-        checks = it.get("checklist") or []
-        self.lst_check.clear()
-        for c in checks:
-            self.lst_check.addItem("□  " + c)
-        self.lst_check.setVisible(bool(checks))
-        self.lbl_check_cap.setVisible(bool(checks))
         self.btn_copy_body.setEnabled(bool(it.get("body", "").strip()))
-        self.btn_copy_check.setEnabled(bool(checks))
         self._fill_attachments(it)
 
     # ------------------------------------------------------------ 첨부
@@ -420,6 +406,28 @@ class KbView(QWidget):
                            parent=self)
         dlg.exec()
 
+    def save_attachment_as(self, att: dict) -> None:
+        """오른쪽 단추 [다른 이름으로 저장] — 바탕화면 등에 파일로 꺼내 둔다."""
+        p = kb_files.cached(att)
+        if not p:
+            self._errs.pop(att.get("id"), None)
+            self._fetch_async(att)
+            self.lbl_status.setText("첨부를 받는 중입니다 — 잠시 뒤 다시 해 주세요.")
+            return
+        import os
+        import shutil
+        from PySide6.QtWidgets import QFileDialog
+        dest, _f = QFileDialog.getSaveFileName(
+            self, "다른 이름으로 저장",
+            os.path.join(os.path.expanduser("~"), "Desktop", att.get("name", p.name)))
+        if not dest:
+            return
+        try:
+            shutil.copyfile(p, dest)
+            self.lbl_status.setText(f"저장했습니다: {dest}")
+        except OSError as e:
+            self.lbl_status.setText("저장하지 못했습니다: " + str(e))
+
     # ------------------------------------------------------------ 복사
     def _copy(self, text: str, what: str) -> None:
         if not text.strip():
@@ -434,10 +442,6 @@ class KbView(QWidget):
     def _copy_body(self) -> None:
         it = self.lst.current_item_data() or {}
         self._copy(it.get("body", ""), "본문")
-
-    def _copy_check(self) -> None:
-        it = self.lst.current_item_data() or {}
-        self._copy("\n".join(it.get("checklist") or []), "체크리스트")
 
     def focus_search(self) -> None:
         self.ed_find.setFocus()
@@ -456,8 +460,6 @@ class KbView(QWidget):
     # ------------------------------------------------------------ 테마
     def apply_theme(self) -> None:
         self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
-        self.lbl_check_cap.setStyleSheet(
-            f"color:{theme.c('subtext')};font-weight:bold;")
         self.lbl_att_cap.setStyleSheet(
             f"color:{theme.c('subtext')};font-weight:bold;")
         self._show(self.lst.currentRow())
@@ -526,6 +528,14 @@ class KbTab(QWidget):
         if gone and auth is not None and auth.is_connected():
             threading.Thread(target=kb_files.trash, args=(auth, sorted(gone)),
                              daemon=True).start()
+        # 이름을 바꾼 첨부는 드라이브의 파일 이름도 맞춘다(드라이브에서 찾아볼 때) — 뒤에서
+        ren = [r for r in (getattr(KbEditDialog, "last_renamed", []) or []) if r[0] not in gone]
+        KbEditDialog.last_renamed = []
+        if ren and auth is not None and auth.is_connected():
+            def _rename(pairs=ren):
+                for fid, name in pairs:
+                    kb_files.rename_remote(auth, fid, name)
+            threading.Thread(target=_rename, daemon=True).start()
         try:
             kb.save_mine(mine)
         except Exception as e:
@@ -718,16 +728,19 @@ class KbEditDialog(QDialog):
         right.addWidget(self.lbl_att)
         arow = QHBoxLayout()
         self.lst_att = AttachList(self, editable=True)
-        self.lst_att.setFixedHeight(176)
+        self.lst_att.setFixedHeight(184)
         arow.addWidget(self.lst_att, 1)
         abtn = QVBoxLayout()
         self.btn_att_paste = QPushButton("붙여넣기 (Ctrl+V)")
         self.btn_att_paste.clicked.connect(self.paste_attachments)
         self.btn_att_add = QPushButton("파일 추가…")
         self.btn_att_add.clicked.connect(self._add_files)
+        self.btn_att_ren = QPushButton("이름 바꾸기")
+        self.btn_att_ren.setToolTip("고른 첨부의 이름을 바꿉니다 (두 번 누르기 · F2 도 됩니다)")
+        self.btn_att_ren.clicked.connect(self.rename_attachment)
         self.btn_att_del = QPushButton("빼기")
         self.btn_att_del.clicked.connect(self.remove_attachments)
-        for b in (self.btn_att_paste, self.btn_att_add, self.btn_att_del):
+        for b in (self.btn_att_paste, self.btn_att_add, self.btn_att_ren, self.btn_att_del):
             abtn.addWidget(b)
         abtn.addStretch()
         arow.addLayout(abtn)
@@ -827,7 +840,7 @@ class KbEditDialog(QDialog):
         self.lst_att.fill(list(it.get("files") or []))
         for w in (self.cmb_cat, self.ed_fin, self.ed_title, self.ed_tags,
                   self.txt_body, self.txt_check, self.lst_att,
-                  self.btn_att_paste, self.btn_att_add, self.btn_att_del):
+                  self.btn_att_paste, self.btn_att_add, self.btn_att_ren, self.btn_att_del):
             w.setEnabled(on)
 
     def _touch(self, *_a) -> None:
@@ -981,6 +994,45 @@ class KbEditDialog(QDialog):
         keep = [a for i, a in enumerate(self.lst_att.atts()) if i not in rows]
         self.lst_att.fill(keep)
 
+    def rename_attachment(self, new_name: str | None = None) -> None:
+        """고른 첨부 하나의 이름을 바꾼다. 확장자는 지킨다(kb_files.fix_name).
+
+        올리기 전이면 그 이름으로 올라가고, 이미 올린 것이면 [저장] 때 드라이브의
+        파일 이름도 같이 바꾼다. 카톡으로 보낼 때도 새 이름으로 간다.
+        new_name 을 주면 묻지 않는다(검사용).
+        """
+        rows = self.lst_att.selected_rows()
+        if not rows:
+            li = self.lst_att.currentItem()
+            rows = [self.lst_att.row(li)] if li is not None else []
+        if len(rows) != 1:
+            QMessageBox.information(self, config.APP_NAME, "이름을 바꿀 첨부를 하나 고르세요.")
+            return
+        atts = self.lst_att.atts()
+        att = dict(atts[rows[0]])
+        old = att.get("name", "")
+        if new_name is None:
+            import os
+            from PySide6.QtWidgets import QInputDialog
+            stem, ext = os.path.splitext(old)
+            txt, okd = QInputDialog.getText(self, "첨부 이름 바꾸기",
+                                            f"새 이름 (확장자 {ext} 는 그대로 둡니다):", text=stem)
+            if not okd:
+                return
+            new_name = txt
+        name = kb_files.fix_name(new_name, old)
+        if not name or name == old:
+            return
+        if any(a.get("name") == name for i, a in enumerate(atts) if i != rows[0]):
+            QMessageBox.information(self, config.APP_NAME, f"'{name}' 은(는) 이미 있습니다.")
+            return
+        att["name"] = name
+        if att.get("id"):
+            att.setdefault("_was", old)          # [저장] 때 드라이브·캐시 이름도 바꾼다
+        atts[rows[0]] = att
+        self.lst_att.fill(atts)
+        self.lst_att.item(rows[0]).setSelected(True)
+
     def _pending(self) -> list:
         """아직 안 올린 첨부 → [(묶음 이름, 자료, 첨부)]."""
         out = []
@@ -1046,17 +1098,36 @@ class KbEditDialog(QDialog):
             return False
         return True
 
+    def renamed(self) -> list:
+        """이름을 바꾼 '이미 올린' 첨부 → [(id, 새 이름)]."""
+        out = []
+        for lst in (self.shared, self.mine):
+            for it in lst:
+                for a in it.get("files") or []:
+                    if a.get("id") and a.get("_was") and a.get("_was") != a.get("name"):
+                        out.append((a["id"], a["name"]))
+        return out
+
     def _ok(self) -> None:
         self._stash()
         if not self._upload_pending():
             return
+        # 받아 둔 파일도 새 이름으로 — 카톡에 새 이름으로 가고, 다시 받지 않는다
+        for fid, name in self.renamed():
+            kb_files.rename_cache({"id": fid, "name": name}, name)
         self.accept()
 
     @classmethod
     def run(cls, account: str = "", parent=None, auth=None):
-        """반환: (공통 목록, 내 메모 목록) 또는 None(취소)."""
+        """반환: (공통 목록, 내 메모 목록) 또는 None(취소).
+
+        이름을 바꾼 첨부는 KbTab 이 드라이브 이름도 바꿀 수 있게 `last_renamed` 에 남긴다.
+        """
         d = cls(account, parent, auth=auth)
         if d.exec() != QDialog.Accepted:
             return None
+        cls.last_renamed = d.renamed()
         return ([x for x in d.shared if (x.get("title") or "").strip()],
                 [x for x in d.mine if (x.get("title") or "").strip()])
+
+    last_renamed: list = []

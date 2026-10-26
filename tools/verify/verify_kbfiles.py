@@ -386,6 +386,124 @@ pump(20)
 ok("뺀 것만 휴지통으로", sorted(trashed) == sorted(["P1", "Z9", att2["id"]]), trashed)
 ok("남긴 첨부는 그대로", att["id"] not in trashed)
 
+print("\n[10] 자료검색에는 체크리스트가 없다")
+v2 = KbView()
+v2.show()
+pump()
+from PySide6.QtWidgets import QPushButton as _QPB  # noqa: E402
+btns = [b.text() for b in v2.findChildren(_QPB)]
+ok("[체크리스트 복사] 단추가 없다", not any("체크리스트" in t for t in btns), btns)
+ok("체크리스트 칸이 없다", not hasattr(v2, "lst_check"))
+ok("편집 창의 체크리스트 칸은 그대로(고객관리 서류 체크 재료)",
+   hasattr(KbEditDialog("", None), "txt_check"))
+
+print("\n[11] 첨부 이름 바꾸기 — 올리기 전·후 모두, 확장자는 지킨다")
+ok("확장자 빠지면 붙인다", kb_files.fix_name("위임장", "붙여넣은 그림 1026.png") == "위임장.png")
+ok("확장자를 바꾸면 원래 것을 붙인다", kb_files.fix_name("위임장.jpg", "a.png") == "위임장.jpg.png")
+ok("못 쓰는 글자는 _", kb_files.fix_name('신분증:앞/뒤', "a.png") == "신분증_앞_뒤.png")
+ok("비면 바꾸지 않는다", kb_files.fix_name("  ", "a.png") == "")
+up = kb_files.upload(A, png_bytes("#123456"), "붙여넣은 그림 1026_101500.png", public=False)
+kb.save_mine([{"title": "이름 시험", "body": "", "files": [up]}])
+config.is_rates_admin = lambda e: False
+d2 = KbEditDialog("me@x", None, auth=A)
+d2.show()
+d2.lst.setCurrentRow(0)
+pump()
+d2.lst_att.clearSelection()
+d2.lst_att.item(0).setSelected(True)
+d2.rename_attachment("신분증 사본")
+ok("이미 올린 첨부 이름이 바뀐다", d2.lst_att.atts()[0]["name"] == "신분증 사본.png")
+d2.drop_attachments(md)                                     # 아직 안 올린 그림
+d2.lst_att.clearSelection()
+d2.lst_att.item(1).setSelected(True)
+d2.rename_attachment("서명 화면")
+ok("올리기 전 첨부도 바뀐다", d2.lst_att.atts()[1]["name"] == "서명 화면.png")
+d2.lst_att.clearSelection()
+d2.lst_att.item(1).setSelected(True)
+d2.rename_attachment("신분증 사본")
+ok("같은 이름은 안 된다", d2.lst_att.atts()[1]["name"] == "서명 화면.png")
+ups = []
+kb_files.upload = lambda auth, data, name, public: (ups.append(name), real_upload(auth, data, name, public))[1]
+d2._ok()
+kb_files.upload = real_upload
+ok("올리기 전 첨부는 새 이름으로 올라간다", ups == ["서명 화면.png"], ups)
+ok("받아 둔 파일도 새 이름으로 옮긴다(카톡에 새 이름으로)",
+   kb_files.cached({"id": up["id"], "name": "신분증 사본.png"}) is not None
+   and not (kb_files.cache_dir() / up["id"] / "붙여넣은 그림 1026_101500.png").exists())
+ok("드라이브 이름을 바꿀 목록", d2.renamed() == [(up["id"], "신분증 사본.png")], d2.renamed())
+mine_saved = [x for x in d2.mine if x["title"] == "이름 시험"][0]
+ok("저장되는 첨부에 옛 이름 표시는 남지 않는다",
+   all("_was" not in f for f in kb.clean_files(mine_saved["files"])))
+# KbTab 이 드라이브 이름도 바꾼다
+renamed_remote = []
+real_rr = kb_files.rename_remote
+kb_files.rename_remote = lambda auth, fid, name: renamed_remote.append((fid, name)) or True
+KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None: (
+    setattr(cls, "last_renamed", [(up["id"], "신분증 사본.png")]) or
+    ([], [{"title": "이름 시험", "files": [dict(up, name="신분증 사본.png")]}])))
+tab2 = KbTab()
+tab2.set_auth(A)
+tab2._edit()
+pump(30)
+kb_files.rename_remote = real_rr
+ok("드라이브 파일 이름도 바꾼다", renamed_remote == [(up["id"], "신분증 사본.png")], renamed_remote)
+# 다른 PC — 캐시에 옛 이름으로 남은 파일을 새 이름으로 찾아 쓴다
+old = {"id": "OTHER", "name": "옛이름.png"}
+kb_files._store(old, b"img")
+p_new = kb_files.cached({"id": "OTHER", "name": "새이름.png"})
+ok("다른 PC 가 바꾼 이름도 다시 받지 않고 쓴다", p_new is not None and p_new.name == "새이름.png")
+
+print("\n[12] 크게 보기 창 — 최대화 단추 · 전체 화면")
+from PySide6.QtCore import Qt  # noqa: E402
+from planner.kb_attach import AttachViewer  # noqa: E402
+
+av = AttachViewer({"id": "x", "name": "그림.png"}, png_bytes(), on_send=lambda: None)
+fl = av.windowFlags()
+ok("최대화 단추가 있다", bool(fl & Qt.WindowMaximizeButtonHint))
+ok("닫기 단추도 있다", bool(fl & Qt.WindowCloseButtonHint))
+av.show()
+pump()
+av.toggle_full()
+pump()
+ok("[전체 화면] 으로 화면 가득", bool(av.windowState() & Qt.WindowFullScreen))
+from PySide6.QtGui import QKeyEvent  # noqa: E402
+from PySide6.QtCore import QEvent  # noqa: E402
+QApplication.sendEvent(av, QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+pump()
+ok("Esc 로 돌아오고 창은 그대로", not (av.windowState() & Qt.WindowFullScreen) and av.isVisible())
+av.close()
+
+print("\n[13] 자료검색 — 첨부 위에서 오른쪽 단추 → [복사하기] → 카톡에 붙여넣기")
+kb.save_shared(shared)
+v3 = KbView()
+v3.set_auth(A)
+v3.show()
+v3.lst.setCurrentRow(0)
+pump(40)
+v3.lst_att.clearSelection()
+v3.lst_att.item(0).setSelected(True)
+li = v3.lst_att.item(1)                       # 고르지 않은 것 위에서 누른다
+m = v3.lst_att.menu_for(li)
+acts = [a.text() for a in m.actions()]
+ok("메뉴 첫 줄이 [복사하기]", acts and acts[0].startswith("복사하기"), acts)
+ok("크게 보기 · 다른 이름으로 저장도 있다",
+   any("크게" in a for a in acts) and any("다른 이름" in a for a in acts))
+ok("누른 그 첨부만 고른다", [x.row() for x in v3.lst_att.selectedIndexes()] == [1])
+m.actions()[0].trigger()
+pump()
+cbm = QGuiApplication.clipboard().mimeData()
+got_urls = [u.toLocalFile() for u in cbm.urls()]
+ok("[복사하기] 는 그 파일을 클립보드에(카톡 Ctrl+V)",
+   len(got_urls) == 1 and got_urls[0].endswith("관리자가 올린 것.png"), got_urls)
+ok("그림이면 그림으로도", cbm.hasImage())
+v3.lst_att.selectAll()
+m2 = v3.lst_att.menu_for(v3.lst_att.item(0))
+ok("여럿 고르고 누르면 'N개 복사하기'", m2.actions()[0].text().startswith("3개 복사하기"),
+   m2.actions()[0].text())
+em = d2.lst_att.menu_for(d2.lst_att.item(0)) if d2.lst_att.count() else None
+ok("편집 창 오른쪽 단추엔 [이름 바꾸기]",
+   em is not None and any("이름 바꾸기" in a.text() for a in em.actions()))
+
 print()
 if FAIL:
     print(f"{len(FAIL)}건 실패")

@@ -88,14 +88,64 @@ def cache_path(att: dict) -> Path:
 
 
 def cached(att: dict) -> Path | None:
-    """이미 받아 둔 파일이면 그 경로. 없으면 None."""
+    """이미 받아 둔 파일이면 그 경로. 없으면 None.
+
+    이름을 바꾼 첨부는 캐시 폴더(id)에 **옛 이름으로** 남아 있을 수 있다(다른 PC 가
+    바꾼 경우). 그 파일을 새 이름으로 옮겨 쓴다 — 다시 받지 않게, 그리고 카톡에
+    새 이름으로 가게.
+    """
     p = cache_path(att)
     try:
         if p.exists() and p.stat().st_size > 0:
             return p
+        d = p.parent
+        if d.is_dir():
+            olds = [x for x in d.iterdir() if x.is_file() and not x.name.endswith(".part")
+                    and x.stat().st_size > 0]
+            if len(olds) == 1:
+                os.replace(olds[0], p)
+                return p
     except OSError:
         pass
     return None
+
+
+def fix_name(new: str, old: str) -> str:
+    """새 이름을 다듬는다 — 못 쓰는 글자는 _ 로, 확장자는 원래 것을 지킨다.
+
+    확장자를 바꾸면(그림.png → 그림.jpg) 종류가 어긋나 카톡·뷰어가 못 연다.
+    빠졌거나 다르면 원래 확장자를 붙인다. 비면 "" (바꾸지 않는다).
+    """
+    name = _BAD.sub("_", str(new or "")).strip().strip(".")
+    if not name:
+        return ""
+    ext = os.path.splitext(old or "")[1]
+    if ext and os.path.splitext(name)[1].lower() != ext.lower():
+        name += ext
+    return name[:150]
+
+
+def rename_cache(att: dict, new_name: str) -> None:
+    """받아 둔 파일을 새 이름으로 옮긴다(없으면 아무 일도 안 한다)."""
+    p = cached(att)
+    if not p:
+        return
+    q = cache_path({"id": att.get("id", ""), "name": new_name})
+    try:
+        if p != q:
+            os.replace(p, q)
+    except OSError:
+        pass
+
+
+def rename_remote(auth, fid: str, name: str) -> bool:
+    """드라이브의 파일 이름도 바꾼다(드라이브에서 찾아볼 때 맞게). 실패해도 넘어간다."""
+    try:
+        r = _http().patch(f"{config.DRIVE_FILES_URL}/{fid}", headers=auth._headers(),
+                          timeout=20, json={"name": name})
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 def _store(att: dict, data: bytes) -> Path:

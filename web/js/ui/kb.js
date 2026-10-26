@@ -136,14 +136,8 @@ export function showDetail(i) {
     <p class="s" style="color:var(--sub);margin:0 0 10px">
       ${[it.finance, it.category].filter(Boolean).join(" · ")}</p>
     ${raw(kb.bodyToHtml(it.body))}
-    ${raw(it.checklist && it.checklist.length
-      ? `<p class="kbhead">체크리스트</p><ul class="chk">${
-          it.checklist.map((c) => `<li>${esc2(c)}</li>`).join("")}</ul>`
-      : "")}
     <p style="margin-top:16px">
       <button class="chip" id="kbcopy">본문 복사</button>
-      ${raw(it.checklist && it.checklist.length
-        ? ' <button class="chip" id="kbcopyc">체크리스트 복사</button>' : "")}
     </p>
     ${raw(attachHtml(it.files || []))}
     <div id="kbview"></div>`);
@@ -158,11 +152,7 @@ export function showDetail(i) {
   };
   const c1 = $("#kbcopy");
   if (c1) { c1.dataset.t = c1.textContent; c1.onclick = () => copy(it.body, c1); }
-  const c2 = $("#kbcopyc");
-  if (c2) {
-    c2.dataset.t = c2.textContent;
-    c2.onclick = () => copy(it.checklist.map((x) => "· " + x).join("\n"), c2);
-  }
+  // 체크리스트는 자료검색에 보여 주지 않는다(PC 와 같게) — 고객관리 서류 체크의 재료로만 쓴다
 }
 
 // ---------------------------------------------------------------- 첨부(그림·PDF)

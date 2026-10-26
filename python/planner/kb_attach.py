@@ -11,11 +11,11 @@ clipfiles.file_mime 을 쓴다.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QItemSelectionModel, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QDrag, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QListView, QListWidget,
-    QListWidgetItem, QPushButton, QVBoxLayout,
+    QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
 )
 
 from . import kb_files, theme
@@ -119,6 +119,8 @@ class AttachList(QListWidget):
       owner.copy_attachments()           : Ctrl+C
       owner.open_attachment(att)         : 두 번 누르기
       owner.drop_attachments(QMimeData)  : 편집 창에서 끌어다 놓기·붙여넣기
+      owner.save_attachment_as(att)      : 오른쪽 단추 [다른 이름으로 저장]
+      owner.rename_attachment()          : 편집 창 — 두 번 누르기 · F2 · [이름 바꾸기]
     """
 
     def __init__(self, owner, editable: bool = False, parent=None):
@@ -196,6 +198,9 @@ class AttachList(QListWidget):
         if ev.matches(QKeySequence.Copy) and hasattr(self._owner, "copy_attachments"):
             self._owner.copy_attachments()
             return
+        if self._editable and ev.key() == Qt.Key_F2 and hasattr(self._owner, "rename_attachment"):
+            self._owner.rename_attachment()
+            return
         if (self._editable and ev.matches(QKeySequence.Paste)
                 and hasattr(self._owner, "paste_attachments")):
             self._owner.paste_attachments()
@@ -207,9 +212,52 @@ class AttachList(QListWidget):
         super().keyPressEvent(ev)
 
     def _dbl(self, li):
+        # 편집 창에서는 두 번 누르면 이름 바꾸기, 보기 화면에서는 크게 보기
+        if self._editable:
+            fn = getattr(self._owner, "rename_attachment", None)
+            if callable(fn):
+                self.setCurrentItem(li)
+                fn()
+            return
         fn = getattr(self._owner, "open_attachment", None)
         if callable(fn):
             fn(li.data(Qt.UserRole) or {})
+
+    # ---- 오른쪽 단추 ----
+    def menu_for(self, li) -> QMenu | None:
+        """그 첨부 위에서 오른쪽 단추를 눌렀을 때의 메뉴(띄우지는 않는다 — 검사가 쓴다)."""
+        if li is None:
+            return None
+        if not li.isSelected():          # 고르지 않은 것 위에서 누르면 그것만 고른다
+            self.clearSelection()
+            li.setSelected(True)
+        # ⚠️ 그냥 setCurrentItem 하면 여럿 고른 것이 그 하나로 줄어든다(선택을 새로 짠다)
+        self.setCurrentItem(li, QItemSelectionModel.NoUpdate)
+        att = li.data(Qt.UserRole) or {}
+        o = self._owner
+        m = QMenu(self)
+        if self._editable:
+            if hasattr(o, "rename_attachment"):
+                m.addAction("이름 바꾸기 (F2)", o.rename_attachment)
+            if hasattr(o, "remove_attachments"):
+                m.addAction("빼기 (Delete)", o.remove_attachments)
+            return m
+        n = len(self.selectedItems())
+        if hasattr(o, "copy_attachments"):
+            a = m.addAction(("복사하기" if n <= 1 else f"{n}개 복사하기")
+                            + " (Ctrl+C) — 카카오톡에 붙여넣기",
+                            lambda: o.copy_attachments(self.selected_atts()))
+            m.setDefaultAction(a)
+        if hasattr(o, "open_attachment"):
+            m.addAction("크게 보기", lambda a=att: o.open_attachment(a))
+        if hasattr(o, "save_attachment_as"):
+            m.addAction("다른 이름으로 저장…", lambda a=att: o.save_attachment_as(a))
+        return m
+
+    def contextMenuEvent(self, ev):  # noqa: N802
+        m = self.menu_for(self.itemAt(ev.pos()))
+        if m is not None and m.actions():
+            m.exec(ev.globalPos())
 
     # ---- 편집 창: 끌어다 놓기 ----
     def _wants(self, md) -> bool:
@@ -240,11 +288,18 @@ class AttachList(QListWidget):
 # 크게 보기
 # ---------------------------------------------------------------------------
 class AttachViewer(QDialog):
-    """첨부 하나를 크게 — 돌리기·확대·PDF 장 넘기기 + [카톡으로 보내기]."""
+    """첨부 하나를 크게 — 돌리기·확대·PDF 장 넘기기 + [카톡으로 보내기].
+
+    창 위 막대에 **최대화** 단추가 있고, [전체 화면](F11)으로 화면 가득 볼 수 있다.
+    전체 화면에서는 Esc 나 F11 로 돌아온다(Esc 를 한 번 더 누르면 닫힌다).
+    ⚠️ QDialog 는 윈도에서 기본으로 최대화 단추가 없다 — 창 모양을 직접 정해 준다.
+    """
 
     def __init__(self, att: dict, data: bytes, on_send=None, parent=None):
         super().__init__(parent)
         from .file_preview import FilePreview
+        self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
+                            | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         self.setWindowTitle(att.get("name", "첨부"))
         self.resize(920, 760)
         v = QVBoxLayout(self)
@@ -258,8 +313,29 @@ class AttachViewer(QDialog):
         if not shown:
             self.preview.show_message("이 파일을 보여 줄 수 없습니다.", att.get("name", ""))
         row = QHBoxLayout()
+        self.btn_full = QPushButton("전체 화면 (F11)")
+        self.btn_full.setToolTip("화면 가득 보기 — Esc 나 F11 로 돌아옵니다")
+        self.btn_full.clicked.connect(self.toggle_full)
+        row.addWidget(self.btn_full)
         row.addStretch()
         b = QPushButton("닫기")
         b.clicked.connect(self.accept)
         row.addWidget(b)
         v.addLayout(row)
+
+    def toggle_full(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+            self.btn_full.setText("전체 화면 (F11)")
+        else:
+            self.showFullScreen()
+            self.btn_full.setText("전체 화면 끝내기 (Esc)")
+
+    def keyPressEvent(self, ev):    # noqa: N802
+        if ev.key() == Qt.Key_F11:
+            self.toggle_full()
+            return
+        if ev.key() == Qt.Key_Escape and self.isFullScreen():
+            self.toggle_full()               # 전체 화면이면 먼저 돌아오기만 한다
+            return
+        super().keyPressEvent(ev)
