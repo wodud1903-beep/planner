@@ -13,7 +13,7 @@ import re
 import threading
 from html import escape as _esc
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextBrowser,
@@ -130,6 +130,7 @@ class KbView(QWidget):
     """검색창 + 결과 + 내용. 탭에서도, 빠른검색 창에서도 쓴다."""
 
     picked = Signal(dict)          # 자료를 골랐을 때(빠른검색이 쓴다)
+    SEARCH_DELAY_MS = 120
     _sig_fetched = Signal(str, str, str)   # (첨부 id, PC 경로, 오류) — 받기 끝
 
     def __init__(self, parent=None, compact: bool = False):
@@ -154,7 +155,13 @@ class KbView(QWidget):
         self.ed_find.setPlaceholderText(
             "찾을 내용을 치세요  —  예: 신한 전자약정 · 개인 심사서류")
         self.ed_find.setClearButtonEnabled(True)
-        self.ed_find.liveText.connect(self._refilter)
+        # 타자가 멎으면 한 번만 찾는다(120ms) — 폰 웹앱과 같은 방식. 한 글자마다
+        # 목록·첨부를 다시 그리면 무거운 자료에서 타자가 밀렸다.
+        self._find_timer = QTimer(self)
+        self._find_timer.setSingleShot(True)
+        self._find_timer.setInterval(self.SEARCH_DELAY_MS)
+        self._find_timer.timeout.connect(self._refilter)
+        self.ed_find.liveText.connect(lambda _t: self._find_timer.start())
         top.addWidget(self.ed_find, 1)
         self.cmb_cat = QComboBox()
         searchcombo.install(self.cmb_cat)
@@ -252,11 +259,17 @@ class KbView(QWidget):
         cat = self.cmb_cat.currentData() or ""
         q = self.ed_find.live_text()
         found = kb.search(self.items, q, cat)
-        self.lst.fill(found)
-        if found:
-            self.lst.setCurrentRow(0)
-        else:
-            self._show(-1)
+        # ⚠️ 목록을 다시 채우는 동안에는 '고른 줄이 바뀜' 신호를 막는다. 안 막으면
+        #    비우는 순간 '아무것도 안 고름' 이 와서 오른쪽(첨부 줄)을 비웠다가 다시
+        #    채운다 — 검색할 때마다 첨부를 통째로 다시 그리던 이유다. 다 채운 뒤 한 번만 보여 준다.
+        self.lst.blockSignals(True)
+        try:
+            self.lst.fill(found)
+            if found:
+                self.lst.setCurrentRow(0)
+        finally:
+            self.lst.blockSignals(False)
+        self._show(self.lst.currentRow() if found else -1)
         n, total = len(found), len(self.items)
         self.lbl_status.setText(
             f"{n}건 찾음 (전체 {total}건)" if q.strip() or cat
@@ -294,7 +307,18 @@ class KbView(QWidget):
         """첨부를 받을 때 쓸 구글 로그인(없어도 공개 첨부는 받는다)."""
         self.auth = auth
 
+    @staticmethod
+    def _att_key(it: dict) -> tuple:
+        return (it.get("source", ""), it.get("title", ""),
+                tuple((f.get("id"), f.get("name")) for f in (it.get("files") or [])))
+
     def _fill_attachments(self, it: dict) -> None:
+        # ⚠️ 같은 자료면 줄을 다시 만들지 않는다. 검색어를 칠 때마다 첫 자료가 같아도
+        #    첨부 줄을 갈아엎어서, 큰 그림이 붙은 자료에서 타자마다 멈칫했다.
+        key = self._att_key(it)
+        if key == getattr(self, "_att_shown", None) and self.lst_att.count() == len(key[2]):
+            return
+        self._att_shown = key
         files = [dict(f) for f in (it.get("files") or [])]
         for f in files:
             if f.get("id") in self._errs:
@@ -402,8 +426,10 @@ class KbView(QWidget):
         except OSError as e:
             self.lbl_status.setText("첨부를 열지 못했습니다: " + str(e))
             return
+        # 창은 닫히면 스스로 없어진다(WA_DeleteOnClose) — 원본을 든 채 남지 않는다
         dlg = AttachViewer(att, data, on_send=lambda a=att: self.copy_attachments([a]),
                            parent=self)
+        del data
         dlg.exec()
 
     def save_attachment_as(self, att: dict) -> None:
@@ -455,13 +481,21 @@ class KbView(QWidget):
         """
         self.cmb_cat.setCurrentIndex(0)
         self.ed_find.setText(str(query or "").strip())
+        self.flush_search()             # 넘어온 말은 기다리지 않고 바로 찾는다
         self.focus_search()
+
+    def flush_search(self) -> None:
+        """기다리는 검색이 있으면 지금 한다(Enter 를 바로 누른 경우 등)."""
+        if self._find_timer.isActive():
+            self._find_timer.stop()
+            self._refilter()
 
     # ------------------------------------------------------------ 테마
     def apply_theme(self) -> None:
         self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
         self.lbl_att_cap.setStyleSheet(
             f"color:{theme.c('subtext')};font-weight:bold;")
+        self._att_shown = None          # 테마가 바뀌면 PDF·받는 중 표시 색도 다시
         self._show(self.lst.currentRow())
 
 
@@ -588,6 +622,7 @@ class QuickSearch(QDialog):
 
     def keyPressEvent(self, ev):
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.view.flush_search()     # 치자마자 Enter 면 마지막 글자까지 찾은 뒤에
             it = self.view.lst.current_item_data()
             if it:
                 self._pick(it)

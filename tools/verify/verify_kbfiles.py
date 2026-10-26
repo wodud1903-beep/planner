@@ -504,6 +504,77 @@ em = d2.lst_att.menu_for(d2.lst_att.item(0)) if d2.lst_att.count() else None
 ok("편집 창 오른쪽 단추엔 [이름 바꾸기]",
    em is not None and any("이름 바꾸기" in a.text() for a in em.actions()))
 
+print("\n[14] 멈춤·꺼짐 막기 — 큰 그림을 작게 풀고, 다시 풀지 않고, 다 본 창은 없앤다")
+from planner import kb_attach  # noqa: E402
+
+big = png_bytes("#884422", 4000, 3000)              # 폰 사진만 한 그림
+bigs = []
+for i in range(10):
+    a = {"id": f"BIG{i}", "name": f"사진{i}.png", "mime": "image/png", "size": len(big)}
+    kb_files._store(a, big)
+    bigs.append(a)
+img = kb_attach._decode_small(path=str(kb_files.cached(bigs[0])))
+ok("작은 그림은 처음부터 작게 푼다(원본 4000×3000 을 통째로 풀지 않음)",
+   img is not None and max(img.width(), img.height()) <= kb_attach.THUMB,
+   (img.width(), img.height()) if img is not None else None)
+kb_attach._THUMBS.clear()
+n0 = kb_attach.decode_count
+kb_attach.icon_for(bigs[0])
+kb_attach.icon_for(bigs[0])
+ok("같은 파일은 두 번째에 다시 풀지 않는다(캐시)", kb_attach.decode_count - n0 == 1,
+   kb_attach.decode_count - n0)
+
+kb.save_shared([{"category": "전자약정", "title": "사진 많은 자료", "body": "본문",
+                 "files": bigs},
+                {"category": "기타", "title": "다른 자료", "body": "x"}])
+v4 = KbView()
+v4.set_auth(A)
+v4.show()
+pump(30)
+v4.lst.setCurrentRow(0)
+pump(20)
+rebuilt = []
+_orig_fill = v4.lst_att.fill
+v4.lst_att.fill = lambda files, _f=_orig_fill: (rebuilt.append(len(files)), _f(files))[1]
+n0 = kb_attach.decode_count
+for ch in "사진 많은 자료 사진 많은 자":          # 첫 자료가 그대로인 채로 20자 남짓
+    v4.ed_find.setText(v4.ed_find.text() + ch)
+    pump(3)
+time.sleep(0.2)
+pump(10)
+ok("검색어만 바뀌고 같은 자료면 첨부 줄을 다시 만들지 않는다", rebuilt == [], rebuilt)
+ok("검색은 타자가 멎은 뒤 한 번(글자마다 목록을 갈아엎지 않음)",
+   [v4.lst.item(i).text() for i in range(v4.lst.count())] == ["사진 많은 자료"])
+ok("20자를 쳐도 그림을 다시 풀지 않는다", kb_attach.decode_count - n0 == 0,
+   kb_attach.decode_count - n0)
+
+# 크게 보기 창 — 닫으면 그림·PDF 를 놓고 창도 없어진다
+gone = []
+cached_pdf = {"id": "PDFX", "name": "안내.pdf", "mime": "application/pdf"}
+kb_files._store(cached_pdf, b"%PDF-1.4 fake")
+av2 = AttachViewer({"id": "BIG0", "name": "사진0.png"}, big, on_send=lambda: None, parent=v4)
+av2.destroyed.connect(lambda *_: gone.append(1))
+av2.show()
+pump()
+pv = av2.preview
+av2.done(0)
+ok("닫으면 그림을 놓는다", pv._src is None and pv._img_data is None)
+for _ in range(20):
+    pump(2)
+    QApplication.sendPostedEvents(None, 0)
+ok("닫힌 창은 없어진다(메모리에 쌓이지 않음)", gone == [1])
+m = v4.lst_att.menu_for(v4.lst_att.item(0))
+dead = []
+m.destroyed.connect(lambda *_: dead.append(1))
+m.deleteLater()
+from PySide6.QtCore import QEvent as _QE  # noqa: E402
+for _ in range(10):
+    pump(2)
+    QApplication.sendPostedEvents(None, _QE.DeferredDelete)
+ok("오른쪽 단추 메뉴도 쓰고 나면 없앤다", dead == [1])
+import inspect as _insp  # noqa: E402
+ok("메뉴를 띄운 뒤 deleteLater 한다", "m.deleteLater()" in _insp.getsource(kb_attach.AttachList.contextMenuEvent))
+
 print()
 if FAIL:
     print(f"{len(FAIL)}건 실패")

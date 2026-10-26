@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QComboBox, QLineEdit,
 )
 
-from . import config, theme
+from . import config, crashlog, theme
 from .main_window import MainWindow
 
 # 중복 실행 방지용 로컬 소켓 이름 (한 사용자당 하나만 실행)
@@ -71,6 +71,13 @@ def main() -> int:
     # 이미 실행 중이면 기존 창만 띄우고 이 프로세스는 즉시 종료한다.
     if _activate_existing():
         return 0
+    # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py). 두 번째 실행은 위에서 이미 빠졌으므로
+    # 여기는 '실제로 도는 하나' 만 지난다.
+    prev_crash = crashlog.start()
+    app.aboutToQuit.connect(crashlog.clean_exit)
+    # 윈도를 끌 때(앱을 켜 둔 채)도 정상 종료다 — 다음에 '비정상' 이라고 묻지 않게
+    app.commitDataRequest.connect(crashlog.clean_exit)
+
     # 이전 비정상 종료로 남은 소켓 잔재 정리 후 서버로 대기
     QLocalServer.removeServer(_SINGLE_KEY)
     _server = QLocalServer()
@@ -100,6 +107,10 @@ def main() -> int:
     theme.apply_to_app(app)
 
     win = MainWindow()
+    crashlog.start_watchdog(app)        # 화면이 15초 넘게 멈추면 그때 상황을 적는다
+    if prev_crash:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(2500, lambda: crashlog.show_notice(win, prev_crash))
 
     # 두 번째 실행이 신호를 보내오면 기존 창을 앞으로 띄운다.
     def _on_second_instance():
