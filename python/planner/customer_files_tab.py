@@ -18,15 +18,17 @@ import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QBuffer, QEvent, QMimeData, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QCursor, QDrag, QGuiApplication, QImage, QKeySequence)
+    QCursor, QDrag, QGuiApplication, QKeySequence)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
-    QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
+    QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
     QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import config, customer_files, file_ops, theme
+from .clipfiles import file_mime as _clip_file_mime
+from .livesearch import LiveLineEdit
 from .file_preview import FilePreview
 
 # 목록 맨 윗줄에 놓는 '상위 폴더로' 자리. 진짜 파일이 아니라 표시용 표식이다.
@@ -272,21 +274,9 @@ class _FileTable(QTableWidget):
             QTimer.singleShot(0, lambda p=paths, r=row: self._on_drop(p, r))
 
 
-def file_mime(paths: list) -> QMimeData:
-    """파일을 클립보드·드래그에 실을 형태로 담는다.
-
-    - 파일 목록(urls)  : 카카오톡·탐색기가 '파일'로 받는다. 이게 본체다.
-    - 글자(경로)        : 경로를 글자로 받는 곳이 있다.
-    - 그림(그림 파일일 때): 파일을 못 받고 그림만 받는 곳(한글·워드 등)을 위해.
-    """
-    md = QMimeData()
-    md.setUrls([QUrl.fromLocalFile(p) for p in paths])
-    md.setText("\n".join(paths))
-    if len(paths) == 1:
-        img = QImage(paths[0])
-        if not img.isNull():
-            md.setImageData(img)
-    return md
+# 클립보드·끌기 모양은 자료검색 첨부와 함께 쓴다 — clipfiles.py 로 옮겼다.
+# (이 이름으로 가져다 쓰는 곳이 있어 여기서도 그대로 보인다)
+file_mime = _clip_file_mime
 
 
 class CustomerFilesTab(QWidget):
@@ -353,11 +343,12 @@ class CustomerFilesTab(QWidget):
         # ---- 검색 ----
         srow = QHBoxLayout()
         srow.addWidget(QLabel("검색:"))
-        self.ed_search = QLineEdit()
+        # 한글 마지막 글자(조합 중)까지 바로 찾는다 — livesearch.py 설명
+        self.ed_search = LiveLineEdit()
         self.ed_search.setPlaceholderText(
             "고객명 · 폴더명 · 파일명 — 전체에서 찾습니다 (초성도 됩니다)")
         self.ed_search.setClearButtonEnabled(True)
-        self.ed_search.textChanged.connect(self._on_search_changed)
+        self.ed_search.liveText.connect(self._on_search_changed)
         srow.addWidget(self.ed_search, 1)
         self.lbl_count = QLabel("")
         self.lbl_count.setStyleSheet(f"color:{theme.c('subtext')};")
@@ -573,7 +564,7 @@ class CustomerFilesTab(QWidget):
         #    검색 목록을 버린 상태)에 검색 목록을 다시 만들 사람이 아무도 없었다.
         #    그러면 찾은 것이 0건으로 비거나 지운 파일이 계속 보였다.
         self._ensure_index()
-        q = self.ed_search.text().strip()
+        q = self.ed_search.live_text().strip()
         if q:
             # 검색 중이면 화면은 검색 결과를 지킨다 — 다만 방금 읽은 내용으로
             # 다시 그려 준다(넣고 뺀 것이 바로 보이게).
@@ -609,13 +600,13 @@ class CustomerFilesTab(QWidget):
         # 이미 읽는 중이거나 창이 안 보이면 건너뛴다 — 괜히 일하지 않는다
         if self._listing or not self.isVisible() or self.source is None:
             return
-        if self.ed_search.text().strip():
+        if self.ed_search.live_text().strip():
             return                      # 검색 중에는 화면을 흔들지 않는다
         self._list_current(quiet=True)
 
     # ------------------------------------------------------------ 검색
     def _on_search_changed(self):
-        q = self.ed_search.text().strip()
+        q = self.ed_search.live_text().strip()
         if not q:
             self._search_timer.stop()
             self._show_browse()
@@ -631,7 +622,7 @@ class CustomerFilesTab(QWidget):
     SEARCH_DELAY = 130
 
     def _run_search(self):
-        q = self.ed_search.text().strip()
+        q = self.ed_search.live_text().strip()
         if q:
             # 아직 다 못 훑었어도 지금까지 찾은 것으로 바로 보여 준다.
             # 기다리게 하지 않는 편이 낫고, 대개 찾는 것은 이미 그 안에 있다.
@@ -713,9 +704,9 @@ class CustomerFilesTab(QWidget):
     def _on_index_progress(self, gen: int):
         if gen != self._index_gen:
             return                      # 먼저 떠났다가 늦게 온 훑기
-        if not self.ed_search.text().strip():
+        if not self.ed_search.live_text().strip():
             return
-        self._show_search(self.ed_search.text().strip(), partial=True)
+        self._show_search(self.ed_search.live_text().strip(), partial=True)
 
     def _on_indexed(self, nodes, err: str):
         gen, _, msg = (err or "").partition("\x00")
@@ -729,7 +720,7 @@ class CustomerFilesTab(QWidget):
         # 못 읽은 폴더가 있었는지 기억해 둔다 — 그 폴더의 서류는 검색에 안 나오는데,
         # 말해 주지 않으면 '서류가 없다' 고 오해하게 된다.
         self._index_failed = int(getattr(self.source, "failed", 0) or 0)
-        q = self.ed_search.text().strip()
+        q = self.ed_search.live_text().strip()
         if q:
             self._show_search(q)
 
@@ -835,7 +826,7 @@ class CustomerFilesTab(QWidget):
             self._sort_desc = not self._sort_desc
         else:
             self._sort_key, self._sort_desc = name, False
-        q = self.ed_search.text().strip()
+        q = self.ed_search.live_text().strip()
         if q:
             self._show_search(q)
         else:
@@ -1030,7 +1021,7 @@ class CustomerFilesTab(QWidget):
             return
         if n.is_dir:
             # 검색 결과에서 폴더를 누르면 그 폴더로 들어간다
-            if self.ed_search.text().strip():
+            if self.ed_search.live_text().strip():
                 self.ed_search.blockSignals(True)
                 self.ed_search.clear()
                 self.ed_search.blockSignals(False)

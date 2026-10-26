@@ -21,7 +21,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout,
-    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon,
+    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon,
     QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -37,6 +37,7 @@ from .customer_files_tab import CustomerFilesTab
 from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
 from .kb_tab import KbTab, QuickSearch
+from .livesearch import LiveLineEdit
 from .doc_viewer import DocViewer
 from .edit_dialog import EditDialog
 from .google_button import GoogleSignInButton
@@ -786,6 +787,7 @@ class MainWindow(QMainWindow):
         self.tab_greet.on_changed = self._touch_sync
         self.tabs.addTab(self.tab_greet, "멘트복사")
         self.tab_kb = KbTab()
+        self.tab_kb.set_auth(self.gauth)        # 첨부(그림·PDF) 올리기·받기
         self.tab_kb.on_changed = self._touch_sync
         self.tab_kb.on_push_shared = self._push_kb_shared
         self.tabs.addTab(self.tab_kb, "자료검색")
@@ -962,10 +964,11 @@ class MainWindow(QMainWindow):
         # 브리핑과 한 화면이 되었으니 하루를 여는 자리에 있는 편이 맞다.
         row.addStretch()
         row.addWidget(QLabel("검색:"))
-        self.ed_cust_find = QLineEdit()
+        # 한글 마지막 글자(조합 중)까지 바로 찾는다 — livesearch.py 설명
+        self.ed_cust_find = LiveLineEdit()
         self.ed_cust_find.setPlaceholderText("고객명 · 차종 · 금융사")
         self.ed_cust_find.setFixedWidth(220)
-        self.ed_cust_find.textChanged.connect(lambda _t: self.refresh_customers())
+        self.ed_cust_find.liveText.connect(lambda _t: self.refresh_customers())
         row.addWidget(self.ed_cust_find)
         v.addLayout(row)
 
@@ -1536,7 +1539,7 @@ class MainWindow(QMainWindow):
         return sorted(allrows, key=key, reverse=True)
 
     def refresh_customers(self):
-        q = (self.ed_cust_find.text() or "").strip().lower() if hasattr(self, "ed_cust_find") else ""
+        q = (self.ed_cust_find.live_text() or "").strip().lower() if hasattr(self, "ed_cust_find") else ""
         self.tbl_cust.setRowCount(0)
         rows = self._visible_sheet_rows()
         shown = 0

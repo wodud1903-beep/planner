@@ -98,6 +98,19 @@ ul.list button.row {
 .kbgap { margin: 6px 0; }
 .kbsep { border: 0; border-top: 1px dashed var(--line); margin: 12px 0 6px; }
 .kbbody a { color: var(--accent); }
+/* 자료 첨부(그림·PDF) — 누르면 크게, [보내기] 로 폰 공유 창(카카오톡) */
+.kbatt { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px; margin: 4px 0 12px; }
+.attcard { display: flex; flex-direction: column; gap: 4px; padding: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+.attthumb { padding: 0; border: 0; background: var(--bg); border-radius: 6px;
+  cursor: pointer; aspect-ratio: 4 / 3; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; }
+.attimg { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attpdf { font-weight: 800; font-size: 18px; color: var(--bad); background: var(--bad-bg);
+  padding: 6px 14px; border-radius: 6px; }
+.attname { font-size: 12px; color: var(--sub); word-break: break-all; line-height: 1.3; }
+.attbtns { display: flex; gap: 4px; flex-wrap: wrap; }
 .chk { list-style: none; padding: 0; margin: 8px 0 0; }
 .chk li { padding: 6px 0 6px 22px; position: relative; border-bottom: 1px solid var(--line); }
 .chk li::before { content: "☐"; position: absolute; left: 2px; color: var(--sub); }

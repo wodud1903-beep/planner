@@ -86,21 +86,42 @@ export async function batch(sheetId, tab, ranges) {
 
 // ---------------------------------------------------------------- 업무자료(KB)
 // A:F = 카테고리 | 금융사 | 제목 | 태그 | 본문 | 체크리스트(줄바꿈)
+// G   = 첨부 — {"title": 제목, "files": [{id, name, mime, size}]} (PC 앱이 쓴다)
+//
+// ⚠️ G 는 **따로** 읽는다. 탭이 F 까지만 있으면 G 범위는 격자 밖이라 400 이 나고,
+//    같이 묶으면 자료 목록까지 통째로 실패한다(sheets.py 의 KB_FILES_COL 설명).
+//    제목이 같을 때만 붙인다 — 옛 PC 가 A:F 만 다시 써서 줄이 밀려도 엉뚱한 자료에
+//    그림이 붙지 않게.
+export function kbFilesFrom(cell, title) {
+  let o;
+  try { o = cell && String(cell).trim() ? JSON.parse(cell) : null; } catch (e) { return []; }
+  if (!o || typeof o !== "object" || String(o.title || "").trim() !== title) return [];
+  return (Array.isArray(o.files) ? o.files : [])
+    .filter((f) => f && String(f.id || "").trim() && String(f.name || "").trim())
+    .map((f) => ({ id: String(f.id).trim(), name: String(f.name).trim(),
+                   mime: String(f.mime || "").trim(), size: Number(f.size) || 0 }));
+}
+
 export async function readKb(sheetId, tab) {
   const rows = await values(sheetId, tab, "A1:F");
+  let g = [];
+  try { g = await values(sheetId, tab, "G1:G"); } catch (e) { g = []; }   // 첨부만 없음
   const out = [];
-  for (const row of rows) {
+  rows.forEach((row, i) => {
     const title = (row[2] || "").trim();
-    if (!title || title === "제목") continue;   // 머리글 줄은 값으로 걸러낸다
-    out.push({
+    if (!title || title === "제목") return;     // 머리글 줄은 값으로 걸러낸다
+    const it = {
       category: (row[0] || "").trim(),
       finance: (row[1] || "").trim(),
       title,
       tags: (row[3] || "").trim(),
       body: (row[4] || "").replace(/\r\n/g, "\n"),
       checklist: (row[5] || "").split("\n").map((x) => x.trim()).filter(Boolean),
-    });
-  }
+    };
+    const files = kbFilesFrom((g[i] || [])[0] || "", title);
+    if (files.length) it.files = files;
+    out.push(it);
+  });
   return out;
 }
 

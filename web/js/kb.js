@@ -10,7 +10,9 @@ export function index(items) {
     it, i,
     t0: prepare(it.title || ""),
     t1: prepare(`${it.finance || ""} ${it.tags || ""}`),
-    t2: prepare([it.category, it.body, (it.checklist || []).join(" ")].join(" ")),
+    // 첨부 이름으로도 찾는다(planner/kb.py 의 haystack 과 같다)
+    t2: prepare([it.category, it.body, (it.checklist || []).join(" "),
+                 (it.files || []).map((f) => f.name || "").join(" ")].join(" ")),
   }));
 }
 

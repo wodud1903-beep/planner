@@ -20,6 +20,7 @@ from PySide6.QtCore import QEvent, QObject, QStringListModel, Qt, QTimer
 from PySide6.QtWidgets import QComboBox, QCompleter, QLineEdit
 
 from . import hangul
+from .livesearch import LiveLineEdit
 
 POPUP_NAME = "searchpopup"     # 테마 스타일시트가 이 이름으로 팝업을 칠한다
 
@@ -59,12 +60,17 @@ class ComboSearch(QObject):
 
         combo.setEditable(True)
         combo.setInsertPolicy(QComboBox.NoInsert)
+        # 입력칸을 조합 중 한글까지 알려 주는 것으로 — 마지막 글자를 치는 도중에도
+        # 목록이 걸러지게(livesearch.py 설명). 완성기를 달기 **전에** 바꿔야 한다.
+        if not isinstance(combo.lineEdit(), LiveLineEdit):
+            combo.setLineEdit(LiveLineEdit(combo))
 
         self._comp = _Completer(self._texts, self)
         self._comp.activated[str].connect(self._pick)
         combo.setCompleter(self._comp)
 
         le = combo.lineEdit()
+        le.composing.connect(self._on_composing)
         le.installEventFilter(self)
         combo.installEventFilter(self)
         le.editingFinished.connect(self._resolve)
@@ -91,8 +97,16 @@ class ComboSearch(QObject):
         self._comp.complete()
 
     def show_filtered(self) -> None:
-        self._comp.setCompletionPrefix(self.combo.lineEdit().text())
+        le = self.combo.lineEdit()
+        txt = le.live_text() if isinstance(le, LiveLineEdit) else le.text()
+        self._comp.setCompletionPrefix(txt)
         self._comp.complete()
+
+    def _on_composing(self, _txt: str) -> None:
+        """한글 조합 중 — Qt 완성기는 조합이 끝나야 움직이므로 직접 걸러 편다."""
+        # (입력기 이벤트는 사용자가 치고 있는 칸에만 온다 — 포커스를 따로 볼 필요가 없다)
+        if self.combo.isEnabled() and self.combo.isVisible():
+            self.show_filtered()
 
     def _pick(self, text: str) -> None:
         i = self.combo.findText(text, Qt.MatchFixedString)

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from html import escape as _esc
 
 from PySide6.QtCore import Qt, Signal
@@ -19,7 +20,10 @@ from PySide6.QtWidgets import (
     QTextEdit, QVBoxLayout, QWidget,
 )
 
-from . import config, kb, searchcombo, theme
+from . import config, kb, kb_files, searchcombo, theme
+from .clipfiles import file_mime
+from .kb_attach import AttachList, AttachViewer
+from .livesearch import LiveLineEdit
 
 ALL_CATEGORY = "전체 분류"
 HEAD_MARK = "■"          # 본문에서 '한 덩어리' 의 머리글을 나타내는 표시
@@ -45,6 +49,8 @@ def _same(a: dict, b: dict) -> bool:
             return False
     if kb.norm_body(a.get("body", "")).strip() != kb.norm_body(b.get("body", "")).strip():
         return False
+    # 첨부는 비교하지 않는다 — 기본 자료에는 첨부가 없어서, 첨부를 붙인 자료가
+    # 전부 '내용이 다르다' 로 잡혀 덮어쓸지 묻게 된다(덮어써도 첨부는 남긴다).
     return [x.strip() for x in (a.get("checklist") or [])] == \
            [x.strip() for x in (b.get("checklist") or [])]
 
@@ -124,11 +130,18 @@ class KbView(QWidget):
     """검색창 + 결과 + 내용. 탭에서도, 빠른검색 창에서도 쓴다."""
 
     picked = Signal(dict)          # 자료를 골랐을 때(빠른검색이 쓴다)
+    _sig_fetched = Signal(str, str, str)   # (첨부 id, PC 경로, 오류) — 받기 끝
 
     def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
         self.items: list = []
         self._compact = compact
+        self.auth = None               # 첨부를 받을 때 쓰는 구글 로그인(set_auth)
+        self._inflight: set = set()    # 받는 중인 첨부 id
+        self._errs: dict = {}          # id → 받기 실패 이유
+        self._want_copy: list = []     # 받기가 끝나면 복사할 첨부(Ctrl+C 를 먼저 누른 경우)
+        self._want_open = None         # 받기가 끝나면 크게 볼 첨부
+        self._sig_fetched.connect(self._on_fetched)
 
         v = QVBoxLayout(self)
         m = 0 if compact else 10
@@ -136,11 +149,12 @@ class KbView(QWidget):
         v.setSpacing(8)
 
         top = QHBoxLayout()
-        self.ed_find = QLineEdit()
+        # 한글 마지막 글자(조합 중)까지 바로 찾는다 — livesearch.py 설명
+        self.ed_find = LiveLineEdit()
         self.ed_find.setPlaceholderText(
             "찾을 내용을 치세요  —  예: 신한 전자약정 · 개인 심사서류")
         self.ed_find.setClearButtonEnabled(True)
-        self.ed_find.textChanged.connect(self._refilter)
+        self.ed_find.liveText.connect(self._refilter)
         top.addWidget(self.ed_find, 1)
         self.cmb_cat = QComboBox()
         searchcombo.install(self.cmb_cat)
@@ -176,13 +190,25 @@ class KbView(QWidget):
         rv.addWidget(self.lbl_check_cap)
         self.lst_check = QListWidget()
         rv.addWidget(self.lst_check, 2)
+        # 첨부(그림·PDF) — 골라서 Ctrl+C 또는 끌어서 카톡으로, 두 번 누르면 크게
+        self.lbl_att_cap = QLabel("첨부")
+        rv.addWidget(self.lbl_att_cap)
+        self.lst_att = AttachList(self)
+        self.lst_att.setMinimumHeight(176)
+        rv.addWidget(self.lst_att, 2)
         brow = QHBoxLayout()
         self.btn_copy_body = QPushButton("본문 복사")
         self.btn_copy_body.clicked.connect(self._copy_body)
         self.btn_copy_check = QPushButton("체크리스트 복사")
         self.btn_copy_check.clicked.connect(self._copy_check)
+        self.btn_copy_att = QPushButton("첨부 복사")
+        self.btn_copy_att.setToolTip(
+            "고른 첨부(안 고르면 전부)를 복사합니다. 카카오톡 대화창에서 Ctrl+V 로 붙여 넣으세요.\n"
+            "첨부를 끌어서 카톡 창에 놓아도 됩니다.")
+        self.btn_copy_att.clicked.connect(lambda: self.copy_attachments())
         brow.addWidget(self.btn_copy_body)
         brow.addWidget(self.btn_copy_check)
+        brow.addWidget(self.btn_copy_att)
         brow.addStretch()
         rv.addLayout(brow)
 
@@ -227,9 +253,10 @@ class KbView(QWidget):
                     for i in range(self.cmb_cat.count())] or [0])
         self.cmb_cat.setFixedWidth(max(150, min(280, wide + 48)))
 
-    def _refilter(self) -> None:
+    def _refilter(self, *_a) -> None:
         cat = self.cmb_cat.currentData() or ""
-        found = kb.search(self.items, self.ed_find.text(), cat)
+        q = self.ed_find.live_text()
+        found = kb.search(self.items, q, cat)
         self.lst.fill(found)
         if found:
             self.lst.setCurrentRow(0)
@@ -237,7 +264,7 @@ class KbView(QWidget):
             self._show(-1)
         n, total = len(found), len(self.items)
         self.lbl_status.setText(
-            f"{n}건 찾음 (전체 {total}건)" if self.ed_find.text().strip() or cat
+            f"{n}건 찾음 (전체 {total}건)" if q.strip() or cat
             else f"전체 {total}건")
 
     def _show(self, _row: int) -> None:
@@ -248,6 +275,7 @@ class KbView(QWidget):
             self.lst_check.clear()
             self.btn_copy_body.setEnabled(False)
             self.btn_copy_check.setEnabled(False)
+            self._fill_attachments({})
             return
         # 금융사가 제목과 같으면(캐피탈 자료) 한 번만 보여 준다
         fin = it.get("finance", "")
@@ -273,6 +301,124 @@ class KbView(QWidget):
         self.lbl_check_cap.setVisible(bool(checks))
         self.btn_copy_body.setEnabled(bool(it.get("body", "").strip()))
         self.btn_copy_check.setEnabled(bool(checks))
+        self._fill_attachments(it)
+
+    # ------------------------------------------------------------ 첨부
+    def set_auth(self, auth) -> None:
+        """첨부를 받을 때 쓸 구글 로그인(없어도 공개 첨부는 받는다)."""
+        self.auth = auth
+
+    def _fill_attachments(self, it: dict) -> None:
+        files = [dict(f) for f in (it.get("files") or [])]
+        for f in files:
+            if f.get("id") in self._errs:
+                f["_err"] = self._errs[f["id"]]
+        self.lst_att.fill(files)
+        on = bool(files)
+        self.lbl_att_cap.setText(
+            f"첨부 ({len(files)})  —  골라서 Ctrl+C 또는 끌어서 카톡으로 · 두 번 누르면 크게"
+            if on else "첨부")
+        self.lbl_att_cap.setVisible(on)
+        self.lst_att.setVisible(on)
+        self.btn_copy_att.setVisible(on)
+        # 보자마자 받아 둔다 — 그림이 바로 보이고, Ctrl+C 를 기다리게 하지 않게
+        for f in files:
+            if not kb_files.cached(f) and f.get("id") not in self._errs:
+                self._fetch_async(f)
+
+    def _fetch_async(self, att: dict) -> None:
+        fid = att.get("id", "")
+        if not fid or fid in self._inflight:
+            return
+        self._inflight.add(fid)
+        auth = self.auth
+
+        def worker():
+            try:
+                p = kb_files.fetch(auth, att)
+                self._sig_fetched.emit(fid, str(p), "")
+            except Exception as e:
+                self._sig_fetched.emit(fid, "", str(e).splitlines()[0][:120])
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_fetched(self, fid: str, path: str, err: str) -> None:
+        self._inflight.discard(fid)
+        if err:
+            self._errs[fid] = err
+        self.lst_att.refresh(fid, err)
+        if self._want_copy and not any(a.get("id") in self._inflight for a in self._want_copy):
+            want, self._want_copy = self._want_copy, []
+            # ⚠️ 하나라도 못 받았으면 여기서 멈춘다. 다시 copy_attachments 를 부르면
+            #    또 받으러 가고, 또 실패하고… 끝없이 돈다.
+            if any(not kb_files.cached(a) for a in want):
+                self.lbl_status.setText("첨부를 받지 못해 복사하지 못했습니다"
+                                        + (f": {err}" if err else "."))
+            else:
+                self.copy_attachments(want)
+        if self._want_open is not None and self._want_open.get("id") == fid:
+            att, self._want_open = self._want_open, None
+            if not err:
+                self.open_attachment(att)
+            else:
+                self.lbl_status.setText("첨부를 받지 못했습니다: " + err)
+
+    def attach_paths(self, atts: list) -> list:
+        """카톡으로 보낼 PC 경로. 아직 안 받은 것은 받기를 시작하고 뺀다."""
+        out, missing = [], 0
+        for a in atts or []:
+            p = kb_files.cached(a)
+            if p:
+                out.append(str(p))
+            else:
+                missing += 1
+                self._errs.pop(a.get("id"), None)     # 다시 해 본다
+                self._fetch_async(a)
+        if missing and not out:
+            self.lbl_status.setText("첨부를 받는 중입니다 — 잠시 뒤 다시 해 주세요.")
+        return out
+
+    def copy_attachments(self, atts: list | None = None) -> None:
+        """고른 첨부(없으면 전부)를 클립보드에 — 카톡 대화창에서 Ctrl+V."""
+        if atts is None:
+            atts = self.lst_att.selected_atts() or self.lst_att.atts()
+        if not atts:
+            return
+        if any(not kb_files.cached(a) for a in atts):
+            # 아직 받는 중 — 다 받으면 그때 복사한다(누른 것을 잊지 않는다)
+            self._want_copy = list(atts)
+            for a in atts:
+                if not kb_files.cached(a):
+                    self._errs.pop(a.get("id"), None)
+                    self._fetch_async(a)
+            if not any(a.get("id") in self._inflight for a in atts):
+                self._want_copy = []
+                self.lbl_status.setText("첨부를 받지 못해 복사하지 못했습니다.")
+                return
+            self.lbl_status.setText("첨부를 받는 중입니다 — 받는 대로 복사합니다…")
+            return
+        paths = [str(kb_files.cached(a)) for a in atts]
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.clipboard().setMimeData(file_mime(paths))
+        what = atts[0].get("name", "") if len(atts) == 1 else f"첨부 {len(atts)}개"
+        self.lbl_status.setText(f"{what} 복사됨 ✓  카카오톡에서 Ctrl+V 로 붙여 넣으세요.")
+
+    def open_attachment(self, att: dict) -> None:
+        """두 번 누르기 — 크게 보기(돌리기·PDF 장 넘기기) + [카톡으로 보내기]."""
+        p = kb_files.cached(att)
+        if not p:
+            self._want_open = att
+            self._errs.pop(att.get("id"), None)
+            self._fetch_async(att)
+            self.lbl_status.setText("첨부를 받는 중입니다…")
+            return
+        try:
+            data = p.read_bytes()
+        except OSError as e:
+            self.lbl_status.setText("첨부를 열지 못했습니다: " + str(e))
+            return
+        dlg = AttachViewer(att, data, on_send=lambda a=att: self.copy_attachments([a]),
+                           parent=self)
+        dlg.exec()
 
     # ------------------------------------------------------------ 복사
     def _copy(self, text: str, what: str) -> None:
@@ -312,7 +458,14 @@ class KbView(QWidget):
         self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
         self.lbl_check_cap.setStyleSheet(
             f"color:{theme.c('subtext')};font-weight:bold;")
+        self.lbl_att_cap.setStyleSheet(
+            f"color:{theme.c('subtext')};font-weight:bold;")
         self._show(self.lst.currentRow())
+
+
+def _file_ids(items: list) -> set:
+    return {f.get("id") for it in (items or []) for f in (it.get("files") or [])
+            if f.get("id")}
 
 
 class KbTab(QWidget):
@@ -347,6 +500,10 @@ class KbTab(QWidget):
     def set_account(self, email: str) -> None:
         self.account = email or ""
 
+    def set_auth(self, auth) -> None:
+        """첨부를 올리고 받을 때 쓰는 구글 로그인."""
+        self.view.set_auth(auth)
+
     def reload(self) -> None:
         self.view.reload()
 
@@ -358,10 +515,17 @@ class KbTab(QWidget):
 
     def _edit(self) -> None:
         admin = config.is_rates_admin(self.account)
-        got = KbEditDialog.run(self.account, self)
+        auth = self.view.auth
+        before = _file_ids(kb.load_mine()) | (_file_ids(kb.load_shared()) if admin else set())
+        got = KbEditDialog.run(self.account, self, auth=auth)
         if got is None:
             return
         shared, mine = got
+        # 자료에서 뺀 첨부는 드라이브 휴지통으로(30일 안엔 되살릴 수 있다) — 뒤에서
+        gone = before - _file_ids(mine) - (_file_ids(shared) if admin else set())
+        if gone and auth is not None and auth.is_connected():
+            threading.Thread(target=kb_files.trash, args=(auth, sorted(gone)),
+                             daemon=True).start()
         try:
             kb.save_mine(mine)
         except Exception as e:
@@ -400,6 +564,8 @@ class QuickSearch(QDialog):
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 12, 12, 12)
         self.view = KbView(compact=True)
+        # 첨부를 받으려면 구글 로그인이 있어야 한다(없어도 공개 첨부는 받는다)
+        self.view.set_auth(getattr(parent, "gauth", None))
         self.view.picked.connect(self._pick)
         v.addWidget(self.view, 1)
         self.lbl = QLabel("Enter = 본문 복사 후 닫기   ·   Esc = 닫기")
@@ -426,13 +592,52 @@ class QuickSearch(QDialog):
         self.view.focus_search()
 
 
+class _BodyEdit(QTextEdit):
+    """본문 칸. 글자는 글자로, **그림·파일을 붙이면 첨부로** 보낸다.
+
+    네이버 메모처럼 쓰다가 Ctrl+V 하면 된다. 예전엔 그림을 붙이면 본문 안에
+    보이지 않는 빈 글자(￼)로 섞여 들어가 저장할 때 사라졌다.
+
+    ⚠️ 글자가 같이 들어 있으면 **글자가 먼저**다. 엑셀·워드에서 칸을 복사하면
+       글자와 함께 그 모양을 찍은 그림도 실려 오는데, 그걸 첨부로 받으면
+       붙여 넣으려던 글이 안 들어간다.
+    """
+
+    def __init__(self, on_files, parent=None):
+        super().__init__(parent)
+        self._on_files = on_files
+        self.setAcceptRichText(False)
+
+    @staticmethod
+    def _local_files(md) -> bool:
+        return md is not None and md.hasUrls() and any(u.isLocalFile() for u in md.urls())
+
+    def canInsertFromMimeData(self, md):     # noqa: N802 — Qt 이름
+        if self._local_files(md) or md.hasImage():
+            return True
+        return super().canInsertFromMimeData(md)
+
+    def insertFromMimeData(self, md):        # noqa: N802
+        if self._local_files(md):
+            self._on_files(md)
+            return
+        if md.hasText() and md.text().strip():
+            self.insertPlainText(md.text())
+            return
+        if md.hasImage():
+            self._on_files(md)
+            return
+        super().insertFromMimeData(md)
+
+
 class KbEditDialog(QDialog):
     """자료 편집 — 공통(관리자만) / 내 메모."""
 
-    def __init__(self, account: str = "", parent=None):
+    def __init__(self, account: str = "", parent=None, auth=None):
         super().__init__(parent)
         self.setWindowTitle("업무자료 편집")
-        self.resize(860, 620)
+        self.resize(900, 720)
+        self.auth = auth
         self.admin = config.is_rates_admin(account)
         self.shared = [dict(x) for x in kb.load_shared()]
         self.mine = [dict(x) for x in kb.load_mine()]
@@ -505,8 +710,28 @@ class KbEditDialog(QDialog):
         right.addWidget(self.ed_tags)
 
         right.addWidget(QLabel("본문"))
-        self.txt_body = QTextEdit()
+        self.txt_body = _BodyEdit(self.drop_attachments)
         right.addWidget(self.txt_body, 3)
+
+        # 첨부(그림·PDF) — 본문 칸이나 여기서 Ctrl+V, 탐색기에서 끌어다 놓기
+        self.lbl_att = QLabel("첨부 (그림·PDF) — 본문 칸에서 Ctrl+V 해도 여기로 들어옵니다")
+        right.addWidget(self.lbl_att)
+        arow = QHBoxLayout()
+        self.lst_att = AttachList(self, editable=True)
+        self.lst_att.setFixedHeight(176)
+        arow.addWidget(self.lst_att, 1)
+        abtn = QVBoxLayout()
+        self.btn_att_paste = QPushButton("붙여넣기 (Ctrl+V)")
+        self.btn_att_paste.clicked.connect(self.paste_attachments)
+        self.btn_att_add = QPushButton("파일 추가…")
+        self.btn_att_add.clicked.connect(self._add_files)
+        self.btn_att_del = QPushButton("빼기")
+        self.btn_att_del.clicked.connect(self.remove_attachments)
+        for b in (self.btn_att_paste, self.btn_att_add, self.btn_att_del):
+            abtn.addWidget(b)
+        abtn.addStretch()
+        arow.addLayout(abtn)
+        right.addLayout(arow)
 
         right.addWidget(QLabel("체크리스트 (한 줄에 하나)"))
         self.txt_check = QTextEdit()
@@ -581,6 +806,8 @@ class KbEditDialog(QDialog):
                 "body": kb.norm_body(self.txt_body.toPlainText()),
                 "checklist": [c.strip() for c in
                               self.txt_check.toPlainText().splitlines() if c.strip()],
+                # 첨부는 이 창의 줄(lst_att)이 들고 있다 — 아직 안 올린 것도 함께
+                "files": self.lst_att.atts(),
             }
 
     def _on_row(self, row: int) -> None:
@@ -597,8 +824,10 @@ class KbEditDialog(QDialog):
         # toPlainText() 로 거둘 때 점선·머리글 장식까지 본문에 섞여 저장된다.
         self.txt_body.setPlainText(it.get("body", ""))
         self.txt_check.setPlainText("\n".join(it.get("checklist") or []))
+        self.lst_att.fill(list(it.get("files") or []))
         for w in (self.cmb_cat, self.ed_fin, self.ed_title, self.ed_tags,
-                  self.txt_body, self.txt_check):
+                  self.txt_body, self.txt_check, self.lst_att,
+                  self.btn_att_paste, self.btn_att_add, self.btn_att_del):
             w.setEnabled(on)
 
     def _touch(self, *_a) -> None:
@@ -662,6 +891,8 @@ class KbEditDialog(QDialog):
 
         if overwrite:
             for i, x in differ:
+                if lst[i].get("files"):       # 내용만 기본으로 — 붙여 둔 첨부는 그대로
+                    x["files"] = lst[i]["files"]
                 lst[i] = x
         lst.extend(missing)
         self._cur = -1
@@ -690,14 +921,141 @@ class KbEditDialog(QDialog):
         self._cur = -1
         self._fill()
 
+    # ---- 첨부 ----
+    def _editing(self) -> bool:
+        return 0 <= self._cur < len(self._cur_list())
+
+    def drop_attachments(self, md) -> None:
+        """붙여넣기·끌어다 놓기로 들어온 그림·파일을 지금 자료의 첨부로."""
+        if not self._editing():
+            QMessageBox.information(self, config.APP_NAME, "먼저 왼쪽에서 자료를 고르세요.")
+            return
+        got, bad = kb_files.from_mime(md)
+        # 같은 것을 두 번 붙이지 않는다 — 붙여 넣은 그림은 이름에 시각이 붙어
+        # 이름으로는 못 가린다. 아직 안 올린 것은 **내용**으로, 올린 것은 이름·크기로 본다.
+        import hashlib
+        have = set()
+        for a in self.lst_att.atts():
+            if a.get("_data"):
+                have.add(hashlib.sha1(a["_data"]).hexdigest())
+            have.add((a.get("name"), int(a.get("size") or 0)))
+        for name, data in got:
+            if hashlib.sha1(data).hexdigest() in have or (name, len(data)) in have:
+                continue
+            have.add(hashlib.sha1(data).hexdigest())
+            att = {"id": "", "name": name, "mime": kb_files.mime_of(name),
+                   "size": len(data), "_data": data}
+            items = self.lst_att.atts() + [att]
+            self.lst_att.fill(items)
+        if bad:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "넣지 못한 것:\n" + "\n".join(bad[:10]))
+        elif not got:
+            QMessageBox.information(
+                self, config.APP_NAME,
+                "붙여 넣을 그림이나 PDF 가 없습니다.\n"
+                "카카오톡·캡처에서 그림을 복사하거나, 탐색기에서 파일을 복사한 뒤 눌러 주세요.")
+
+    def paste_attachments(self) -> None:
+        from PySide6.QtGui import QGuiApplication
+        self.drop_attachments(QGuiApplication.clipboard().mimeData())
+
+    def _add_files(self) -> None:
+        if not self._editing():
+            return
+        from PySide6.QtCore import QMimeData, QUrl
+        from PySide6.QtWidgets import QFileDialog
+        paths, _f = QFileDialog.getOpenFileNames(
+            self, "첨부할 그림·PDF", "",
+            "그림·PDF (*.png *.jpg *.jpeg *.gif *.webp *.bmp *.pdf)")
+        if not paths:
+            return
+        md = QMimeData()
+        md.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        self.drop_attachments(md)
+
+    def remove_attachments(self) -> None:
+        rows = set(self.lst_att.selected_rows())
+        if not rows:
+            return
+        keep = [a for i, a in enumerate(self.lst_att.atts()) if i not in rows]
+        self.lst_att.fill(keep)
+
+    def _pending(self) -> list:
+        """아직 안 올린 첨부 → [(묶음 이름, 자료, 첨부)]."""
+        out = []
+        for src, lst in ((kb.SRC_SHARED, self.shared), (kb.SRC_MINE, self.mine)):
+            for it in lst:
+                for att in it.get("files") or []:
+                    if not att.get("id"):
+                        out.append((src, it, att))
+        return out
+
+    def _upload_pending(self) -> bool:
+        """[저장] 전에 새 첨부를 올린다. 다 됐으면 True.
+
+        하나라도 실패하면 창을 닫지 않는다. 이미 올라간 것은 첨부 정보로 바뀌어 있어
+        다시 누르면 남은 것만 올린다.
+        """
+        todo = self._pending()
+        if not todo:
+            return True
+        if self.auth is None or not self.auth.is_connected():
+            QMessageBox.warning(self, config.APP_NAME,
+                                "첨부를 올리려면 구글 로그인이 필요합니다.\n[설정] 에서 로그인해 주세요.")
+            return False
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+        prog = QProgressDialog("첨부를 구글 드라이브에 올리는 중…", None, 0, len(todo), self)
+        prog.setWindowTitle(config.APP_NAME)
+        prog.setMinimumDuration(0)
+        prog.setValue(0)
+        errors = []
+        for n, (src, it, att) in enumerate(todo, 1):
+            prog.setLabelText(f"첨부를 올리는 중… ({n}/{len(todo)})  {att.get('name', '')}")
+            box = {}
+
+            def work(a=att, pub=(src == kb.SRC_SHARED), out=box):
+                try:
+                    out["att"] = kb_files.upload(self.auth, a["_data"], a["name"], pub)
+                except Exception as e:
+                    out["err"] = str(e)
+            th = threading.Thread(target=work, daemon=True)
+            th.start()
+            while th.is_alive():                 # 창이 굳지 않게 돌려 가며 기다린다
+                QApplication.processEvents()
+                th.join(0.05)
+            if "att" in box:
+                files = it.get("files") or []
+                for i, a in enumerate(files):
+                    if a is att:
+                        files[i] = box["att"]
+            else:
+                errors.append(box.get("err") or att.get("name", ""))
+            prog.setValue(n)
+        prog.close()
+        if errors:
+            QMessageBox.warning(self, config.APP_NAME,
+                                "첨부를 올리지 못했습니다(저장하지 않았습니다):\n"
+                                + "\n".join(errors[:6])
+                                + "\n\n인터넷을 확인한 뒤 [저장] 을 다시 눌러 주세요."
+                                  " 이미 올라간 것은 다시 올리지 않습니다.")
+            # 줄을 다시 그린다(올라간 것은 이제 id 가 있다). _on_row 를 부르면 안 된다 —
+            # 그건 먼저 화면의 옛 줄로 자료를 덮어써(_stash) 올라간 것을 잊게 만든다.
+            if self._editing():
+                self.lst_att.fill(list(self._cur_list()[self._cur].get("files") or []))
+            return False
+        return True
+
     def _ok(self) -> None:
         self._stash()
+        if not self._upload_pending():
+            return
         self.accept()
 
     @classmethod
-    def run(cls, account: str = "", parent=None):
+    def run(cls, account: str = "", parent=None, auth=None):
         """반환: (공통 목록, 내 메모 목록) 또는 None(취소)."""
-        d = cls(account, parent)
+        d = cls(account, parent, auth=auth)
         if d.exec() != QDialog.Accepted:
             return None
         return ([x for x in d.shared if (x.get("title") or "").strip()],

@@ -628,6 +628,93 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   await ctx5.close();
 }
 
+console.log("\n[11-2] 자료 첨부(그림·PDF) — 보이고, 크게 보고, 폰 공유 창으로 보낸다");
+{
+  const cK = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await cK.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+    // 폰 공유 창을 가짜로 — 무엇을 넘겼는지 적어 둔다
+    window.__shared = [];
+    navigator.canShare = () => true;
+    navigator.share = async (d) => { window.__shared.push((d.files || []).map((f) => f.name)); };
+  });
+  const PNG = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "base64");
+  let gBad = false;
+  await cK.route("**/accounts.google.com/**", (r) => r.abort());
+  await cK.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("!A1:F")) {
+      return r.fulfill({ json: { values: [
+        ["카테고리", "금융사", "제목", "태그", "본문", "체크리스트(줄바꿈)"],
+        ["전자약정", "신한", "신한 전자약정", "", "■ 진행 순서\n1. 링크 발송", ""],
+        ["심사서류", "", "개인 심사서류", "", "신분증", ""]] } });
+    }
+    if (u.includes("!G1:G")) {
+      if (gBad) return r.fulfill({ status: 400, json: { error: { message: "exceeds grid limits" } } });
+      return r.fulfill({ json: { values: [["첨부"], [JSON.stringify({ title: "신한 전자약정",
+        files: [{ id: "IMG1", name: "링크 화면.png", mime: "image/png" },
+                { id: "PDF1", name: "약정 안내.pdf", mime: "application/pdf" }] })],
+        [JSON.stringify({ title: "다른 제목", files: [{ id: "X", name: "남의것.png" }] })]] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  await cK.route("**/www.googleapis.com/drive/v3/files/**", (r) => {
+    const u = r.request().url();
+    if (u.includes("/IMG1")) return r.fulfill({ body: PNG, contentType: "image/png" });
+    if (u.includes("/PDF1")) return r.fulfill({ body: "%PDF-1.4 test", contentType: "application/pdf" });
+    return r.fulfill({ status: 404, json: { error: { message: "not found" } } });
+  });
+  await cK.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [], items: [] } }));
+  const pK = await page(cK);
+  await pK.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pK.waitForSelector("#kblist button.row", { timeout: 8000 });
+  await pK.locator("#kblist button.row", { hasText: "신한 전자약정" }).click();
+  await pK.waitForSelector("#kbatt .attcard", { timeout: 8000 });
+  ok("첨부 둘이 카드로 보인다", (await pK.locator("#kbatt .attcard").count()) === 2);
+  ok("첨부 이름", (await pK.locator("#kbatt").innerText()).includes("약정 안내.pdf"));
+  await pK.waitForFunction(() => {
+    const i = document.querySelector("#kbatt .attimg");
+    return i && i.src.startsWith("blob:") && i.complete;
+  }, null, { timeout: 8000 }).catch(() => {});
+  ok("그림은 바로 그려진다", (await pK.locator("#kbatt .attimg").first().getAttribute("src") || "")
+     .startsWith("blob:"));
+  ok("PDF 는 PDF 표시", (await pK.locator("#kbatt .attpdf").count()) === 1);
+  await pK.locator('#kbatt .attcard[data-k="0"] button[data-act="send"]').click();
+  await pK.waitForTimeout(300);
+  ok("[보내기] 는 폰 공유 창에 그 파일을 넘긴다(카카오톡 고르기)",
+     JSON.stringify(await pK.evaluate(() => window.__shared)) === JSON.stringify([["링크 화면.png"]]),
+     JSON.stringify(await pK.evaluate(() => window.__shared)));
+  await pK.locator('#kbatt .attcard[data-k="0"] button.chip[data-act="open"]').click();
+  await pK.waitForSelector("#kbview .vhead", { timeout: 5000 }).catch(() => {});
+  ok("[크게] 는 확대 보기", (await pK.locator("#kbview .vhead").count()) === 1);
+  // 다른 자료(제목이 다른 G 칸)는 첨부가 안 붙는다
+  await pK.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pK.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();
+  await pK.waitForTimeout(400);
+  ok("제목이 다른 첨부는 붙지 않는다", (await pK.locator("#kbatt").count()) === 0);
+  // 첨부 이름으로도 찾는다
+  await pK.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pK.fill("#kbq", "약정 안내");
+  await pK.waitForTimeout(400);
+  ok("첨부 이름으로도 찾는다",
+     (await pK.locator("#kblist button.row").allTextContents()).some((t) => t.includes("신한 전자약정")));
+  // G 열이 없는 시트(400)여도 자료 목록은 산다
+  gBad = true;
+  await pK.evaluate(async () => {
+    const db = await new Promise((ok) => { const q = indexedDB.open("planner", 1); q.onsuccess = () => ok(q.result); });
+    await new Promise((ok) => { const t = db.transaction("data", "readwrite"); t.objectStore("data").clear(); t.oncomplete = ok; });
+  });
+  await pK.reload({ waitUntil: "networkidle" });
+  await pK.fill("#kbq", "");
+  await pK.waitForSelector("#kblist button.row", { timeout: 8000 }).catch(() => {});
+  ok("G 열이 격자 밖(400)이어도 자료 목록은 뜬다",
+     (await pK.locator("#kblist button.row").count()) === 2);
+  await cK.close();
+}
+
 console.log("\n[12] 펼친 화면 — 머리말이 옆으로 서지 않는다 · 경계선을 끌 수 있다");
 {
   const ctx6 = await browser.newContext({ viewport: { width: 1000, height: 1100 } });

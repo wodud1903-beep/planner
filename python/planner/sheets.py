@@ -1161,8 +1161,35 @@ def write_rates(auth: GoogleAuth, sheet_id: str, rates: dict,
 # 로그인하든 같은 최신본을 본다. (편집은 관리자 계정에서만)
 # ---------------------------------------------------------------------------
 KB_TAB = "업무자료"
-_KB_HEADER = ["카테고리", "금융사", "제목", "태그", "본문", "체크리스트(줄바꿈)"]
+_KB_HEADER = ["카테고리", "금융사", "제목", "태그", "본문", "체크리스트(줄바꿈)",
+              "첨부(앱 전용 · 지우지 마세요)"]
 KB_COLS = "A1:F"
+# G 첨부 — {"title": 제목, "files": [{id, name, mime, size}]} JSON.
+# ⚠️ A:F 와 **따로** 읽는다. 탭이 F 열까지만 있으면 G 범위는 격자 밖이라 400 이 나고,
+#    같이 묶어 읽으면 자료 목록까지 통째로 실패한다(고객 시트 U열에서 겪은 그 사고).
+#    제목을 같이 적어 두는 것은, 옛 버전 PC 가 A:F 만 다시 써서 줄이 밀려도 엉뚱한
+#    자료에 그림이 붙지 않게 하려는 것이다 — 제목이 같을 때만 붙인다.
+KB_FILES_COL = "G"
+
+
+def _kb_files_cell(title: str, files: list) -> str:
+    from . import kb
+    files = kb.clean_files(files)     # 편집 창 안의 것(그림 바이트 등)은 싣지 않는다
+    if not files:
+        return ""
+    return json.dumps({"title": title, "files": files}, ensure_ascii=False)
+
+
+def _kb_files_from(cell: str, title: str) -> list:
+    """G 칸 → 첨부 목록. 제목이 다르거나 못 읽으면 []."""
+    from . import kb
+    try:
+        o = json.loads(cell) if (cell or "").strip() else None
+    except Exception:
+        return []
+    if not isinstance(o, dict) or str(o.get("title", "")).strip() != title:
+        return []
+    return kb.clean_files(o.get("files"))
 
 
 def read_kb(auth: GoogleAuth, sheet_id: str, tab: str = KB_TAB):
@@ -1176,20 +1203,35 @@ def read_kb(auth: GoogleAuth, sheet_id: str, tab: str = KB_TAB):
     if r.status_code != 200:
         return None
     rows = (r.json() or {}).get("values", [])
+    # 첨부(G) — 따로 묻고, 안 되면 첨부 없이 간다(위 KB_FILES_COL 설명)
+    gcol: list = []
+    try:
+        rg = _http().get(config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(tab, f"{KB_FILES_COL}1:{KB_FILES_COL}")),
+            headers=_headers(auth), timeout=20)
+        if rg.status_code == 200:
+            gcol = [str((x[0] if x else "") or "")
+                    for x in (rg.json() or {}).get("values", [])]
+    except Exception:
+        gcol = []
     out = []
-    for row in rows:
+    for i, row in enumerate(rows):
         vals = [str(x).strip() for x in row] + [""] * 6
         category, finance, title, tags, body, checks = vals[:6]
         if not title or title == "제목":       # 빈 줄·머리글
             continue
-        out.append({
+        it = {
             "category": category,
             "finance": finance,
             "title": title,
             "tags": tags,
             "body": body,
             "checklist": [c.strip() for c in checks.splitlines() if c.strip()],
-        })
+        }
+        files = _kb_files_from(gcol[i] if i < len(gcol) else "", title)
+        if files:
+            it["files"] = files
+        out.append(it)
     return out or None
 
 
@@ -1198,35 +1240,49 @@ def write_kb(auth: GoogleAuth, sheet_id: str, items: list,
     """공유 업무자료를 덮어쓴다. 탭이 없으면 만든다."""
     meta = _http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
                         headers=_headers(auth), timeout=30,
-                        params={"fields": "sheets(properties(sheetId,title))"})
+                        params={"fields": "sheets(properties(sheetId,title,"
+                                          "gridProperties(columnCount)))"})
     _check(meta)
-    titles = [(sh.get("properties", {}) or {}).get("title")
-              for sh in (meta.json() or {}).get("sheets", [])]
-    if tab not in titles:
+    props = {(sh.get("properties", {}) or {}).get("title"): (sh.get("properties", {}) or {})
+             for sh in (meta.json() or {}).get("sheets", [])}
+    if tab not in props:
         r = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
                           headers=_headers(auth), timeout=30,
                           json={"requests": [{"addSheet": {
                               "properties": {"title": tab}}}]})
         _check(r)
+    else:
+        # 첨부(G)를 쓰려면 열이 7개는 있어야 한다 — 모자라면 늘린다
+        p = props[tab]
+        ncol = int(((p.get("gridProperties") or {}).get("columnCount")) or 26)
+        if ncol < 7:
+            r = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+                             headers=_headers(auth), timeout=30,
+                             json={"requests": [{"appendDimension": {
+                                 "sheetId": p.get("sheetId", 0), "dimension": "COLUMNS",
+                                 "length": 7 - ncol}}]})
+            _check(r)
 
     # 지운 자료까지 반영되도록 비우고 새로 쓴다
     rc = _http().post(
         config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
-        + "/values/" + _rng(tab, "A1:F10000") + ":clear",
+        + "/values/" + _rng(tab, "A1:G10000") + ":clear",
         headers=_headers(auth), timeout=30, json={})
     _check(rc)
 
     values = [list(_KB_HEADER)]
     for it in (items or []):
-        if not (it.get("title") or "").strip():
+        title = (it.get("title") or "").strip()
+        if not title:
             continue
         values.append([
             it.get("category", ""), it.get("finance", ""), it.get("title", ""),
             it.get("tags", ""), it.get("body", ""),
             "\n".join(it.get("checklist") or []),
+            _kb_files_cell(title, it.get("files") or []),
         ])
     url = config.SHEETS_VALUES_URL.format(
-        sheet_id=sheet_id, rng=_rng(tab, f"A1:F{len(values)}"))
+        sheet_id=sheet_id, rng=_rng(tab, f"A1:G{len(values)}"))
     r = _http().put(url, headers=_headers(auth), timeout=30,
                      params={"valueInputOption": "RAW"},
                      json={"values": values})

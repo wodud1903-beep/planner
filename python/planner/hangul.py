@@ -51,6 +51,45 @@ def _squash(s: str) -> str:
     return "".join((s or "").split()).lower()
 
 
+def _tail_ranges(ch: str) -> list:
+    """끝 글자가 **아직 조합 중**일 수 있으면, 이어서 될 수 있는 글자들의 범위.
+
+    한글 입력기는 마지막 글자를 다 치기 전까지 들고 있다("정" 을 치면 ㅈ → 저 → 정).
+    검색창이 그 도중의 글로 찾을 때 "저" 가 "정" 을 못 찾으면 결과가 0건으로
+    깜빡였다가 돌아온다. 그래서 끝 글자는 그 글자로 **시작하는** 글자까지 맞는 것으로 본다.
+      · 받침 없는 글자 "시" → 시·식·신·실·심… (받침이 붙을 수 있다)
+      · 홀로 친 초성 "ㅈ"   → 자~짛 (모음이 붙을 수 있다, ㅅ 이면 ㅆ 도)
+    받침이 있는 글자("신")는 다 친 것으로 보고 넓히지 않는다.
+    """
+    code = ord(ch)
+    if HANGUL_BASE <= code <= HANGUL_LAST and (code - HANGUL_BASE) % 28 == 0:
+        return [(code, code + 27)]
+    if ch in _CHOSUNG_SET:
+        idx = {CHOSUNG.index(ch)}
+        for dbl, single in _LOOSE.items():     # 홑자음은 겹자음 글자까지(ㅅ → 쏘)
+            if single == ch:
+                idx.add(CHOSUNG.index(dbl))
+        return [(HANGUL_BASE + i * 588, HANGUL_BASE + i * 588 + 587) for i in sorted(idx)]
+    return []
+
+
+def _tail_hit(hay: str, tok: str) -> bool:
+    """`tok` 의 끝 글자를 '조합 중' 으로 보고 찾는다(앞부분은 그대로 일치)."""
+    ranges = _tail_ranges(tok[-1])
+    if not ranges:
+        return False
+    head = tok[:-1]
+    start = 0
+    while True:
+        i = hay.find(head, start)
+        if i < 0:
+            return False
+        j = i + len(head)
+        if j < len(hay) and any(lo <= ord(hay[j]) <= hi for lo, hi in ranges):
+            return True
+        start = i + 1
+
+
 def _token_hit(hay: str, hay_cho: str, token: str) -> bool:
     tok = _squash(token)
     if not tok:
@@ -58,7 +97,10 @@ def _token_hit(hay: str, hay_cho: str, token: str) -> bool:
     if tok in hay:
         return True
     # 초성만 친 경우(ㄱㄴㄷ…) 또는 초성이 섞인 경우 — 초성 문자열에서 찾는다
-    return _loose(tok) in hay_cho
+    if _loose(tok) in hay_cho:
+        return True
+    # 끝 글자를 아직 치는 중일 수 있다("전자약저" → 전자약정)
+    return _tail_hit(hay, tok)
 
 
 def prepare(item: str) -> tuple:

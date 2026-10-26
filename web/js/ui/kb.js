@@ -6,6 +6,8 @@ import * as kb from "../kb.js";
 import { RATES_SHEET_ID, KB_TAB } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
 import * as router from "../router.js";
+import * as drive from "../drive.js";
+import * as viewer from "./viewer.js";
 import { attach } from "./split.js";
 
 let _items = [];
@@ -142,7 +144,10 @@ export function showDetail(i) {
       <button class="chip" id="kbcopy">본문 복사</button>
       ${raw(it.checklist && it.checklist.length
         ? ' <button class="chip" id="kbcopyc">체크리스트 복사</button>' : "")}
-    </p>`);
+    </p>
+    ${raw(attachHtml(it.files || []))}
+    <div id="kbview"></div>`);
+  paintAttachments(it.files || []);
   const back = $("#kbback");
   if (back) back.onclick = () => { split.classList.remove("detail"); router.go("/kb"); };
   const copy = (text, btn) => {
@@ -158,4 +163,113 @@ export function showDetail(i) {
     c2.dataset.t = c2.textContent;
     c2.onclick = () => copy(it.checklist.map((x) => "· " + x).join("\n"), c2);
   }
+}
+
+// ---------------------------------------------------------------- 첨부(그림·PDF)
+//
+// PC 앱이 자료에 붙여 둔 그림·PDF. 그림은 바로 보이고, [크게] 로 확대·PDF 장 넘기기,
+// [보내기] 로 폰의 공유 창(카카오톡 고르기)에 넘긴다. 공유를 못 하는 브라우저면
+// [저장] 으로 내려받는다.
+let _att = { urls: [], blobs: new Map(), view: null };
+
+function releaseAttachments() {
+  for (const u of _att.urls) URL.revokeObjectURL(u);
+  if (_att.view) _att.view.close();
+  _att = { urls: [], blobs: new Map(), view: null };
+}
+
+export function attachHtml(files) {
+  if (!files.length) return "";
+  const cards = files.map((f, i) => {
+    const pdf = drive.isPdf(f.name);
+    return `<div class="attcard" data-k="${i}">
+        <button class="attthumb" data-act="open" aria-label="${esc2(f.name)} 크게 보기">${pdf
+          ? '<span class="attpdf">PDF</span>'
+          : `<img class="attimg" alt="${esc2(f.name)}">`}</button>
+        <span class="attname">${esc2(f.name)}</span>
+        <span class="attbtns">
+          <button class="chip" data-act="open">크게</button>
+          <button class="chip" data-act="send">보내기</button>
+        </span>
+      </div>`;
+  }).join("");
+  return `<p class="kbhead">첨부 (${files.length})</p><div class="kbatt" id="kbatt">${cards}</div>`;
+}
+
+const canShareFiles = () => {
+  try {
+    return typeof navigator.share === "function" && typeof navigator.canShare === "function"
+      && navigator.canShare({ files: [new File(["x"], "x.png", { type: "image/png" })] });
+  } catch (e) { return false; }
+};
+
+async function blobOf(f) {
+  if (_att.blobs.has(f.id)) return _att.blobs.get(f.id);
+  let b = null;
+  try { b = await drive.download(f.id); } catch (e) { b = null; }
+  if (b) _att.blobs.set(f.id, b);
+  return b;
+}
+
+function paintAttachments(files) {
+  releaseAttachments();
+  const box = $("#kbatt");
+  if (!box || !files.length) return;
+  if (!canShareFiles()) {
+    for (const b of $$('button[data-act="send"]', box)) b.textContent = "저장";
+  }
+  files.forEach(async (f, i) => {
+    const card = $(`.attcard[data-k="${i}"]`, box);
+    if (!card) return;
+    card.onclick = (e) => {
+      const act = e.target.closest("[data-act]");
+      if (act) onAttach(f, act.dataset.act, act);
+    };
+    if (drive.isPdf(f.name)) return;
+    const img = $(".attimg", card);
+    const b = await blobOf(f);
+    if (b) {
+      const u = URL.createObjectURL(b);
+      _att.urls.push(u);
+      img.src = u;
+    } else {
+      // 로그인이 안 됐거나 못 받으면 — 공개 첨부는 드라이브 작은 그림으로라도 보여 준다
+      img.src = `https://drive.google.com/thumbnail?id=${encodeURIComponent(f.id)}&sz=w800`;
+    }
+  });
+}
+
+async function onAttach(f, act, btn) {
+  const b = await blobOf(f);
+  if (act === "open") {
+    if (!b) { window.open(drive.openInDrive(f.id), "_blank", "noopener"); return; }
+    const box = $("#kbview");
+    if (!box) return;
+    if (_att.view) _att.view.close();
+    _att.view = viewer.mount(box, { blob: b, name: f.name, isPdf: drive.isPdf(f.name),
+                                    driveUrl: drive.openInDrive(f.id) });
+    _att.view.onClose(() => { _att.view.close(); _att.view = null; render(box, ""); });
+    box.scrollIntoView({ block: "start", behavior: "smooth" });
+    return;
+  }
+  // 보내기 — 폰의 공유 창으로(카카오톡을 고르면 그 대화로 간다)
+  if (!b) {
+    btn.textContent = "받지 못함";
+    setTimeout(() => { btn.textContent = canShareFiles() ? "보내기" : "저장"; }, 1500);
+    return;
+  }
+  const type = b.type || f.mime || (drive.isPdf(f.name) ? "application/pdf" : "image/png");
+  const file = new File([b], f.name, { type });
+  if (canShareFiles() && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: f.name }); } catch (e) { /* 닫음 */ }
+    return;
+  }
+  const a = document.createElement("a");
+  const u = URL.createObjectURL(b);
+  _att.urls.push(u);
+  a.href = u;
+  a.download = f.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }

@@ -48,6 +48,29 @@ def norm_body(text: str) -> str:
     return "\n".join(line.rstrip() for line in str(text or "").split("\n"))
 
 
+def clean_files(files) -> list:
+    """첨부(그림·PDF) 목록을 저장 형식으로 — [{id, name, mime, size}].
+
+    드라이브 파일 id 가 없는 것(아직 안 올린 것)은 버린다. 올리기 전의 첨부는
+    편집 창 안에서만 산다(kb_tab.KbEditDialog).
+    """
+    out = []
+    for f in files or []:
+        if not isinstance(f, dict):
+            continue
+        fid = str(f.get("id", "")).strip()
+        name = str(f.get("name", "")).strip()
+        if not fid or not name:
+            continue
+        try:
+            size = max(0, int(f.get("size") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        out.append({"id": fid, "name": name,
+                    "mime": str(f.get("mime", "")).strip(), "size": size})
+    return out
+
+
 def _clean(o) -> dict | None:
     """저장 형식으로 다듬는다. 제목이 없으면 버린다(검색이 안 되는 자료)."""
     if not isinstance(o, dict):
@@ -58,7 +81,7 @@ def _clean(o) -> dict | None:
     checks = o.get("checklist") or []
     if isinstance(checks, str):
         checks = checks.splitlines()
-    return {
+    out = {
         "category": str(o.get("category", "")).strip(),
         "finance": str(o.get("finance", "")).strip(),
         "title": title,
@@ -66,6 +89,10 @@ def _clean(o) -> dict | None:
         "body": norm_body(o.get("body", "")),
         "checklist": [str(c).strip() for c in checks if str(c).strip()],
     }
+    files = clean_files(o.get("files"))
+    if files:                       # 첨부가 없는 자료는 예전 모양 그대로 둔다
+        out["files"] = files
+    return out
 
 
 def _load_file(name: str) -> list:
@@ -128,6 +155,8 @@ def haystack(item: dict) -> str:
         item.get("title", ""), item.get("finance", ""), item.get("category", ""),
         item.get("tags", ""), item.get("body", ""),
         " ".join(item.get("checklist") or []),
+        # 첨부 이름으로도 찾는다("위임장" 을 치면 위임장.pdf 가 든 자료가 나온다)
+        " ".join(f.get("name", "") for f in (item.get("files") or [])),
     ])
 
 
