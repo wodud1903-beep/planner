@@ -4,7 +4,8 @@
   1. 이미 켜져 있으면 그 창을 띄우고 끝낸다(한 PC 에 하나만).
   2. 업데이트 확인 — 새 판이 있으면 받아 바꾸기 전에는 넘어가지 않는다(update_ui).
      인터넷이 안 돼 확인을 못 하면 그냥 켠다(켜 둔 동안 다시 확인한다).
-  3. 서비스 스위치(config.SERVICE_ON) — 꺼진 판이면 안내만 하고 끝낸다.
+  3. 서비스 스위치 — 꺼진 판(config.SERVICE_ON)이거나 웹 스위치가 꺼졌으면(switch.py)
+     안내만 하고 끝낸다. 업데이트를 먼저 보므로 다시 켜는 판도 받을 수 있다.
   4. 메인 창. `/tray` 로 켜지면(PC 시작 시 자동 실행) 창 없이 트레이에서 시작한다.
 """
 
@@ -199,10 +200,14 @@ def main() -> int:
             crashlog.clean_exit()        # 업데이트로 끝나는 것도 정상 종료다
             _hard_exit(0)                # 바꾸는 배치가 기다린다 — 남지 않고 바로 끝난다
 
-    # ── 서비스 스위치 ──
-    if not config.SERVICE_ON:
+    # ── 서비스 스위치 — 판(SERVICE_ON) · 웹(kbsearch.vercel.app [관리]) ──
+    from . import switch
+    remote = switch.fetch_state() if config.SERVICE_ON else None
+    if not config.SERVICE_ON or switch.is_off(remote):
         if not tray_start:           # 부팅 때마다 안내가 뜨지 않게, 직접 켰을 때만 알린다
-            QMessageBox.information(None, config.APP_NAME, config.SERVICE_OFF_MESSAGE)
+            QMessageBox.information(None, config.APP_NAME,
+                                    switch.off_message(remote) if config.SERVICE_ON
+                                    else config.SERVICE_OFF_MESSAGE)
         crashlog.clean_exit()
         return 0
 

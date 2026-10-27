@@ -397,6 +397,31 @@ cur = w.view.lst.current_item_data() or {}
 ok("검색 화면도 회사 자료로", cur.get("source") == kb.SRC_SHARED and "2. 등본" in cur.get("body", ""))
 ok("아래 줄 건수도 사라짐", "이 PC 에서만 고친" not in w.lbl_account.text())
 
+print("[13] 웹 스위치 — 켜 둔 채로 있어도 관리자가 끄면 멈춘다")
+from kbsearch import switch as _switch  # noqa: E402
+_real_fetch = _switch.fetch_state
+quit_called.clear()
+_switch.fetch_state = lambda timeout=6.0: {"on": True, "message": ""}
+w.check_switch()
+pump(0.3)
+ok("켜짐이면 그대로", not quit_called)
+_switch.fetch_state = lambda timeout=6.0: None
+w.check_switch()
+pump(0.3)
+ok("못 읽으면 그대로(fail-open)", not quit_called)
+_switch.fetch_state = lambda timeout=6.0: {"on": False, "message": "오늘은 쉽니다"}
+QApplication.activeModalWidget = staticmethod(lambda: w)
+w.check_switch()
+pump(0.3)
+ok("편집 창 등이 떠 있으면 미룬다", not quit_called)
+QApplication.activeModalWidget = _am
+n0 = len(NOTICES)
+w.check_switch()
+pump(0.3)
+ok("꺼짐이면 안내하고 끝낸다", quit_called and any("오늘은 쉽니다" in x for x in NOTICES[n0:]), NOTICES[n0:])
+ok("5분마다 다시 본다", w._switch_timer.interval() == config.SWITCH_CHECK_MINUTES * 60 * 1000)
+_switch.fetch_state = _real_fetch
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

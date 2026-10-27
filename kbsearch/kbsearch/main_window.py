@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
-from . import config, hotkey, kb, kb_files, sheets_kb, sync, theme, updater
+from . import config, hotkey, kb, kb_files, sheets_kb, switch, sync, theme, updater
 from .google_auth import GoogleAuth, LoginCancelled
 from .icon import make_icon
 from .kb_view import KbEditDialog, KbView, QuickSearch
@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
     sig_sync = Signal(object, str)           # (sync.Result | None, 오류)
     sig_update = Signal(object, str, bool)   # (새 판 정보 | None, 오류, 직접 눌렀나)
     sig_public = Signal(object, str)         # (공개로 받은 공통 자료 | None, 오류)
+    sig_switch = Signal(object)              # 웹 스위치 상태(switch.fetch_state) | None
 
     STALE_SEC = 5 * 60          # 창·빠른검색을 열 때 이보다 오래됐으면 공통 자료를 다시 받는다
 
@@ -83,6 +84,7 @@ class MainWindow(QMainWindow):
         self.sig_sync.connect(self._on_sync)
         self.sig_update.connect(self._on_update)
         self.sig_public.connect(self._on_public)
+        self.sig_switch.connect(self._on_switch)
 
         # 전역 단축키 (윈도) — 업무자료 빠른검색
         self.hotkeys = hotkey.HotkeyManager(QApplication.instance(), int(self.winId()))
@@ -103,6 +105,12 @@ class MainWindow(QMainWindow):
         self._auto_timer.timeout.connect(self.auto_pull)
         self._auto_timer.start(int(config.KB_AUTO_MINUTES * 60 * 1000))
         QTimer.singleShot(1500, self._pull_if_stale)     # 창을 띄우며 이미 받았으면 건너뛴다
+        # 웹 스위치 — 켜 둔 채로 지내도 관리자가 끄면 몇 분 안에 멈춘다
+        self._switch_checking = False
+        if config.SWITCH_URL:
+            self._switch_timer = QTimer(self)
+            self._switch_timer.timeout.connect(self.check_switch)
+            self._switch_timer.start(int(config.SWITCH_CHECK_MINUTES * 60 * 1000))
 
         self.apply_theme()
         self.refresh_account()
@@ -287,6 +295,28 @@ class MainWindow(QMainWindow):
                 self._quick.view.reload()     # 떠 있는 빠른검색 창도 새 자료로
             self._set_msg(f"회사 공통 자료를 새로 받았습니다 ({got['count']}건)", "ok")
         self.refresh_account()
+
+    # ------------------------------------------------------------ 웹 스위치(서버 on/off)
+    def check_switch(self) -> None:
+        if self._switch_checking:
+            return
+        self._switch_checking = True
+        threading.Thread(target=lambda: self.sig_switch.emit(switch.fetch_state()),
+                         daemon=True).start()
+
+    def _on_switch(self, state) -> None:
+        self._switch_checking = False
+        if not switch.is_off(state):
+            return
+        # 편집 창처럼 다른 창이 떠 있으면 고치던 것을 잃지 않게 잠시 미룬다(업데이트와 같다)
+        if QApplication.activeModalWidget() is not None or self._busy:
+            QTimer.singleShot(60 * 1000, self.check_switch)
+            return
+        msg = switch.off_message(state)
+        self._toast(msg)
+        if self.isVisible():
+            QMessageBox.information(self, config.APP_NAME, msg)
+        self.quit_app()
 
     # ------------------------------------------------------------ 트레이
     def _build_tray(self) -> None:

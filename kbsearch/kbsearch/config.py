@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "업무자료검색"
 APP_ID = "KbSearch"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # 서비스 스위치 — **자동 업데이트로 끄고 켠다.**
@@ -28,6 +28,12 @@ SERVICE_OFF_MESSAGE = (
     "업무자료검색 서비스가 종료되었습니다.\n"
     "그동안 이용해 주셔서 감사합니다.")
 SYNC_ON = True
+
+# 웹 스위치 — kbsearch.vercel.app 의 [관리] 에서 관리자 비밀번호로 켜고 끈다(kbsearch/web).
+# 새 판을 내지 않아도 된다: 켤 때와 켜 둔 동안 SWITCH_CHECK_MINUTES 마다 본다.
+# 확실히 '꺼짐' 일 때만 끈다 — 못 읽으면 켜짐(switch.py). "" 이면 보지 않는다.
+SWITCH_URL = "https://kbsearch.vercel.app/api/status"
+SWITCH_CHECK_MINUTES = 5
 
 # ---------------------------------------------------------------------------
 # 자동 업데이트 — 일정관리기와 같은 저장소의 릴리스를 쓰되, 태그 머리말로 가른다.

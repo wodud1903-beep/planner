@@ -66,6 +66,20 @@ update_state.json   업데이트 되풀이 막기 · update_log.txt 교체 기�
 crash_log.txt       갑자기 꺼짐·멈춤 기록(다음에 켤 때 알리고 [기록 복사])
 ```
 
+## 🌐 웹페이지 · 서버 켜고 끄기 (관리자)
+
+**https://kbsearch.vercel.app** — 로그인 없이 회사 공통 자료를 검색합니다(읽기 전용, 폰에서도).
+코드는 `kbsearch/web/`, Vercel 프로젝트 `kbsearch`(Root Directory `kbsearch/web`).
+
+- 오른쪽 위 **[관리]** → 관리자 비밀번호 → **[서버 끄기] / [서버 켜기]**. 끌 때 직원에게 보일 안내를 적습니다.
+- 끄면 웹페이지는 안내만 보이고, PC 프로그램은 켤 때와 켜 둔 동안 5분마다 확인해 안내를 띄우고 끝납니다
+  (편집 창이 떠 있으면 1분씩 미룹니다). PC 시작 때(/tray)는 조용히 끝납니다.
+- **확실히 꺼짐일 때만** 멈춥니다. 인터넷이 안 되거나 웹이 없어져도(404) 켜짐으로 봅니다.
+- 비밀번호는 Vercel → kbsearch → Settings → Environment Variables 의 `KB_ADMIN_PASSWORD`
+  (바꾼 뒤 Redeploy). 스위치 상태는 Vercel Blob 저장소에 둡니다(연결 안 됐으면 켜고 끌 수 없고, 켜짐).
+- 새 판으로 끄는 길(`config.SERVICE_ON = False`)도 그대로 있습니다. 둘 중 하나라도 꺼지면 꺼집니다.
+- 검사: `cd kbsearch/web && npm install && node verify/verify_web.mjs`
+
 ## 🔄 자동 업데이트 (관리자)
 
 - 일정관리기와 **같은 저장소의 릴리스**를 쓰고, 태그 머리말로 가릅니다 — 일정관리기 `v1.21.2`, 업무자료검색 `kb-v1.0.1`.

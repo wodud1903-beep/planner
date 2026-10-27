@@ -280,6 +280,58 @@ ok("지금 APP_VERSION 을 읽는다", rp.app_version() == config.APP_VERSION)
 import release_notes as rn  # noqa: E402
 ok("지금 판의 변경 이력 절이 있다(없으면 릴리스가 멈춘다)", bool(rn.extract("kb-v" + config.APP_VERSION)))
 
+print("[11] 웹 스위치(kbsearch.vercel.app [관리]) — 확실히 꺼짐일 때만 끈다")
+from kbsearch import switch  # noqa: E402
+
+
+class _R:
+    def __init__(self, code, body):
+        self.status_code, self._b = code, body
+
+    def json(self):
+        if isinstance(self._b, Exception):
+            raise self._b
+        return self._b
+
+
+class _S:
+    def __init__(self, resp):
+        self.resp = resp
+        self.urls = []
+
+    def get(self, url, **k):
+        self.urls.append(url)
+        if isinstance(self.resp, Exception):
+            raise self.resp
+        return self.resp
+
+
+_real_http = switch._http
+for label, resp, want_off in (
+        ("꺼짐", _R(200, {"on": False, "message": "점검 중"}), True),
+        ("켜짐", _R(200, {"on": True, "message": ""}), False),
+        ("인터넷 안 됨", OSError("down"), False),
+        ("주소 없음(404)", _R(404, {}), False),
+        ("JSON 아님", _R(200, ValueError("html")), False),
+        ("on 이 글자 'false'", _R(200, {"on": "false"}), False),
+        ("on 이 없음", _R(200, {"message": "x"}), False)):
+    s_ = _S(resp)
+    switch._http = lambda s_=s_: s_
+    st = switch.fetch_state()
+    ok(f"{label} → {'끔' if want_off else '켜 둠'}", switch.is_off(st) is want_off, st)
+ok("꺼짐 안내는 웹에서 적은 말", switch.off_message({"on": False, "message": "점검 중"}) == "점검 중")
+ok("안내가 비면 기본 안내", switch.off_message({"on": False, "message": ""}) == config.SERVICE_OFF_MESSAGE)
+ok("주소는 웹 스위치", s_.urls[-1] == "https://kbsearch.vercel.app/api/status")
+_url = config.SWITCH_URL
+config.SWITCH_URL = ""
+ok("주소를 비우면 보지 않는다", switch.fetch_state() is None)
+config.SWITCH_URL = _url
+switch._http = _real_http
+import inspect as _insp  # noqa: E402
+from kbsearch import app as _kapp  # noqa: E402
+_src = _insp.getsource(_kapp.main)
+ok("켤 때 — 업데이트를 먼저 보고 그다음 스위치", _src.index("_check_with_splash") < _src.index("switch.fetch_state"))
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)
