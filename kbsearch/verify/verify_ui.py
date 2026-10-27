@@ -79,13 +79,20 @@ QMessageBox.warning = staticmethod(lambda *a, **k: NOTICES.append(a[2]) or QMess
 # 처음엔 시트 탭이 없는 것으로 — 받아도 바뀌는 게 없다.
 g0 = FakeGoogle().install()
 g0.tab = False
+# 부팅 직후를 흉내 낸다 — 윈도의 monotonic 은 PC 를 켠 뒤부터 세서 처음엔 작다
+import kbsearch.main_window as _mw  # noqa: E402
+_real_mono = _mw.time.monotonic
+_mw.time.monotonic = lambda: 30.0
 
 w = MainWindow(Settings.load())
 w.show_window()
 pump(2.0)
 
+_mw.time.monotonic = _real_mono
+
 print("[1] 처음 — 로그인 없이")
-ok("켜자마자 공통 자료를 받으러 간다(로그인 없이)", g0.public_reads >= 1, g0.public_reads)
+ok("켜자마자 공통 자료를 받으러 간다(로그인 없이 · 부팅 직후에도)", g0.public_reads == 1,
+   g0.public_reads)
 ok("시트가 비었으면 기본 자료 그대로", len(w.view.items) == len(kb.SAMPLE))
 ok("로그인 안 함 안내", "로그인 안 함" in w.lbl_account.text())
 ok("[동기화] 단추", w.btn_sync.isVisible() and w.btn_sync.text() == "동기화")
@@ -270,7 +277,7 @@ ok("이 PC 에서 고친 공통 자료가 있으면 덮어쓰지 않는다",
 ok("멈춘 까닭을 보여 준다", "자동 받기 멈춤" in w.lbl_account.text())
 kb.update_meta(shared_dirty=False)
 n = g.public_reads
-w._pulled_at = 0
+w._pulled_at = None
 w.show_window()
 for _ in range(60):
     pump(0.05)
@@ -283,7 +290,7 @@ w.show_window()
 pump(0.2)
 ok("방금 받았으면 또 받지 않는다", g.public_reads == n)
 g.public_csv = "html"
-w._pulled_at = 0
+w._pulled_at = None
 kb.update_meta(shared_at="")
 w.auto_pull()
 for _ in range(60):

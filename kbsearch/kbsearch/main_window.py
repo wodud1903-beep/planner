@@ -64,7 +64,10 @@ class MainWindow(QMainWindow):
         self._quick = None
         self._icon = make_icon()
         self._pulling = False               # 공통 자료를 저절로 받는 중
-        self._pulled_at = 0.0               # 마지막으로 받으러 간 때(time.monotonic)
+        # 마지막으로 받으러 간 때(time.monotonic). None = 아직 한 번도 안 감.
+        # ⚠️ 0 으로 두면 안 된다 — 윈도의 monotonic 은 PC 를 켠 뒤부터 센다. 부팅 직후
+        #    (자동 실행)에는 값이 5분도 안 돼 '방금 받았다' 로 보여 첫 받기를 건너뛰었다.
+        self._pulled_at = None
         self._public_err = ""
 
         self.setWindowTitle(f"{config.APP_NAME}  v{config.APP_VERSION}")
@@ -253,7 +256,7 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _pull_if_stale(self) -> None:
-        if time.monotonic() - self._pulled_at > self.STALE_SEC:
+        if self._pulled_at is None or time.monotonic() - self._pulled_at > self.STALE_SEC:
             self.auto_pull()
 
     def _on_public(self, items, err: str) -> None:
