@@ -12,7 +12,7 @@ hangul._tail_ranges 가 맡는다("저" → 정).
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import QLineEdit
 
 
@@ -27,6 +27,12 @@ class LiveLineEdit(QLineEdit):
         self._preedit = ""
         self._last = None
         self._in_ime = False
+        # 입력기 이벤트 안에서는 알리지 않고 이 타이머로 미룬다(바로 다음 차례에 한 번).
+        # 내 자식 타이머라 칸이 없어지면 같이 없어진다 — 없어진 칸을 부르지 않는다.
+        self._later = QTimer(self)
+        self._later.setSingleShot(True)
+        self._later.setInterval(0)
+        self._later.timeout.connect(self._flush)
         self.textChanged.connect(self._on_text)
 
     def live_text(self) -> str:
@@ -51,15 +57,19 @@ class LiveLineEdit(QLineEdit):
         finally:
             self._in_ime = False
         self._preedit = ev.preeditString() or ""
-        if self._emit() and self._preedit:
-            self.composing.emit(self.live_text())
+        # ⚠️ 여기서 바로 알리지 않는다. 알림을 받은 쪽이 목록을 다시 그리고 그림을
+        #    푸는 무거운 일을 하는데, 그걸 **입력기 처리 도중에** 하면 윈도에서 입력이
+        #    밀리고 화면이 멈췄다. 이벤트가 끝난 바로 다음에 한 번만 알린다.
+        self._later.start()
 
     def setText(self, text):        # noqa: N802 — Qt 이름 그대로
         self._preedit = ""          # 코드가 바꾼 글에는 조합 중 글자가 없다
+        self._last = None           # 신호를 막고 바꿔도 다음 글자에서 다시 찾게
         super().setText(text)
 
     def clear(self):
         self._preedit = ""
+        self._last = None
         super().clear()
 
     def focusOutEvent(self, ev):
@@ -72,6 +82,10 @@ class LiveLineEdit(QLineEdit):
     def _on_text(self, _t):
         if not self._in_ime:
             self._emit()
+
+    def _flush(self):
+        if self._emit() and self._preedit:
+            self.composing.emit(self.live_text())
 
     def _emit(self) -> bool:
         s = self.live_text()

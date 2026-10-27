@@ -11,8 +11,13 @@ clipfiles.file_mime 을 쓴다.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QItemSelectionModel, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QDrag, QFont, QIcon, QKeySequence, QPainter, QPixmap
+import os
+from collections import OrderedDict
+
+from PySide6.QtCore import QBuffer, QByteArray, QItemSelectionModel, QRect, QSize, Qt
+from PySide6.QtGui import (
+    QColor, QDrag, QFont, QIcon, QImageReader, QKeySequence, QPainter, QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QListView, QListWidget,
     QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
@@ -51,26 +56,80 @@ def _badge_icon(text: str, fg: str, fill: str) -> QIcon:
     return QIcon(pm)
 
 
+# 작은 그림 캐시 — (경로, 크기, 수정시각) → QIcon. 같은 파일은 다시 풀지 않는다.
+_THUMBS: OrderedDict = OrderedDict()
+_THUMB_MAX = 300
+decode_count = 0                # 실제로 그림을 푼 횟수(검사가 본다)
+
+
+def _decode_small(data: bytes | None = None, path: str = ""):
+    """그림을 **작게 풀어** QImage 로. 원본 크기로는 풀지 않는다.
+
+    ⚠️ 예전엔 QPixmap.load 로 원본을 통째로 푼 뒤 줄였다. 폰 사진·스캔 한 장이
+       수십~백MB 라, 검색칸에 한 글자 칠 때마다 첨부 전부를 그렇게 풀어 화면이
+       멈추고, 끝내 메모리가 바닥나 프로그램이 꺼졌다. 읽개에게 처음부터 작은
+       크기로 풀라고 하면(setScaledSize) JPEG 는 몇 분의 일 시간·메모리로 끝난다.
+    ⚠️ 읽개가 버퍼를 가리키므로 **읽개 먼저, 버퍼 나중** 에 없앤다
+       (file_preview._read_img 의 segfault 기록 그대로).
+    """
+    global decode_count
+    decode_count += 1
+    buf = None
+    if data is not None:
+        buf = QBuffer()
+        buf.setData(QByteArray(bytes(data)))
+        buf.open(QBuffer.ReadOnly)
+        r = QImageReader(buf)
+    else:
+        r = QImageReader(path)
+    r.setAutoTransform(True)            # 폰 사진의 회전 정보(EXIF)를 따른다
+    sz = r.size()
+    if sz.isValid() and (sz.width() > THUMB or sz.height() > THUMB):
+        r.setScaledSize(sz.scaled(THUMB, THUMB, Qt.KeepAspectRatio))
+    img = r.read()
+    del r                               # 읽개 먼저
+    del buf                             # 버퍼 나중
+    return None if img.isNull() else img
+
+
 def _thumb_from(path_or_data) -> QIcon | None:
     """그림 → 작은 그림. **늘 THUMB×THUMB 정사각형**에 가운데 맞춰 그린다.
 
     ⚠️ 크기를 그림마다 다르게 두면 줄이 첫 항목 크기로 칸을 잡아서(uniformItemSizes)
        키 큰 항목(PDF 표시)의 이름이 잘려 안 보였다.
     """
-    pm = QPixmap()
     if isinstance(path_or_data, (bytes, bytearray)):
-        pm.loadFromData(bytes(path_or_data))
+        key = ("data", len(path_or_data), hash(bytes(path_or_data[:4096])),
+               hash(bytes(path_or_data[-4096:])))
+        src = {"data": bytes(path_or_data)}
     else:
-        pm.load(str(path_or_data))
-    if pm.isNull():
+        path = str(path_or_data)
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        key = (os.path.normcase(path), st.st_size, st.st_mtime_ns)
+        src = {"path": path}
+    ic = _THUMBS.get(key)
+    if ic is not None:
+        _THUMBS.move_to_end(key)
+        return ic
+    img = _decode_small(**src)
+    if img is None:
         return None
-    sm = pm.scaled(THUMB, THUMB, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    sm = QPixmap.fromImage(img)
+    if sm.width() > THUMB or sm.height() > THUMB:     # 크기를 못 읽는 형식 대비
+        sm = sm.scaled(THUMB, THUMB, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     out = QPixmap(THUMB, THUMB)
     out.fill(Qt.transparent)
     p = QPainter(out)
     p.drawPixmap((THUMB - sm.width()) // 2, (THUMB - sm.height()) // 2, sm)
     p.end()
-    return QIcon(out)
+    ic = QIcon(out)
+    _THUMBS[key] = ic
+    while len(_THUMBS) > _THUMB_MAX:
+        _THUMBS.popitem(last=False)
+    return ic
 
 
 def icon_for(att: dict) -> QIcon:
@@ -258,6 +317,8 @@ class AttachList(QListWidget):
         m = self.menu_for(self.itemAt(ev.pos()))
         if m is not None and m.actions():
             m.exec(ev.globalPos())
+        if m is not None:
+            m.deleteLater()              # 누를 때마다 메뉴가 쌓이지 않게
 
     # ---- 편집 창: 끌어다 놓기 ----
     def _wants(self, md) -> bool:
@@ -300,6 +361,9 @@ class AttachViewer(QDialog):
         from .file_preview import FilePreview
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
                             | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        # ⚠️ 닫으면 **없앤다.** 예전엔 닫아도 창이 원본 그림·PDF 를 든 채 남아,
+        #    열 때마다 메모리가 쌓여 끝내 프로그램이 꺼졌다.
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowTitle(att.get("name", "첨부"))
         self.resize(920, 760)
         v = QVBoxLayout(self)
@@ -322,6 +386,14 @@ class AttachViewer(QDialog):
         b.clicked.connect(self.accept)
         row.addWidget(b)
         v.addLayout(row)
+
+    def done(self, r):              # 닫기·Esc·[닫기] 모두 여기를 지난다
+        try:
+            self.preview._drop_doc()     # PDF 문서를 먼저 닫고(버퍼를 놓게 한 뒤)
+            self.preview._drop_img()     # 그림도 놓는다
+        except Exception:
+            pass
+        super().done(r)
 
     def toggle_full(self) -> None:
         if self.isFullScreen():

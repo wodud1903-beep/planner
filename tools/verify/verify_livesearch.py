@@ -89,6 +89,27 @@ ok("조합이 끝나도 같은 글이면 다시 찾지 않는다", len(got) == n
 le.setText("")
 ok("코드가 비우면 조합 글자도 없다", le.live_text() == "")
 
+print("\n[2-2] 입력기 이벤트 **안에서는** 알리지 않는다(윈도에서 멈추던 원인) — 끝나면 한 번")
+got.clear()
+QApplication.sendEvent(le, QInputMethodEvent("가", []))       # pump 없이
+ok("이벤트 안에서는 아직 안 알렸다", got == [], got)
+pump()
+ok("이벤트가 끝나자마자 한 번 알린다", got == ["가"], got)
+for ch in ("나", "다", "라"):                                  # 빠르게 여러 번
+    QApplication.sendEvent(le, QInputMethodEvent(ch, []))
+pump()
+ok("몰려 와도 마지막 것 한 번만", got[-1] == "라" and len(got) == 2, got)
+# 신호를 막고 비운 뒤(고객정보 탭이 그렇게 한다) 같은 글을 다시 쳐도 찾는다
+le.setText("abc")
+pump()
+got.clear()
+le.blockSignals(True)
+le.clear()
+le.blockSignals(False)
+le.setText("abc")
+pump()
+ok("지운 뒤 같은 글을 다시 쳐도 다시 찾는다", got == ["abc"], got)
+
 print("\n[3] 자료검색 — 마지막 글자를 치는 중에도 결과가 맞다")
 from planner.kb_tab import KbView  # noqa: E402
 
@@ -100,18 +121,33 @@ kb.save_shared([
 view = KbView()
 view.show()
 pump()
+def settle():
+    """타자가 멎은 뒤(검색 대기 120ms) 결과가 나온다."""
+    time.sleep(view.SEARCH_DELAY_MS / 1000 + 0.05)
+    pump()
+
+
 type_korean(view.ed_find, "전자약정")
+settle()
 titles = [view.lst.item(i).text() for i in range(view.lst.count())]
 ok("키를 더 안 눌러도 '신한 전자약정' 만", titles == ["신한 전자약정"], titles)
 view.ed_find.setText("")
 pump()
 type_korean(view.ed_find, "전자약")
+settle()
 titles = [view.lst.item(i).text() for i in range(view.lst.count())]
 ok("'전자약' 까지는 둘 다", len(titles) == 2, titles)
 view.ed_find.setText("")
 ime(view.ed_find, preedit="시")      # "신" 을 치는 도중
+settle()
 titles = [view.lst.item(i).text() for i in range(view.lst.count())]
 ok("'신' 을 치는 도중('시')에도 0건으로 깜빡이지 않는다", "신한 전자약정" in titles, titles)
+view.ed_find.setText("")
+pump()
+type_korean(view.ed_find, "개인")
+view.flush_search()                 # Enter 를 바로 누르면(빠른검색) 기다리지 않고 찾는다
+titles = [view.lst.item(i).text() for i in range(view.lst.count())]
+ok("기다리는 검색을 바로 끝낼 수 있다(빠른검색 Enter)", titles == ["개인 심사서류"], titles)
 
 print("\n[4] 고객정보·고객 검색칸도 같은 입력칸")
 import inspect  # noqa: E402
