@@ -91,11 +91,17 @@ v._refilter = lambda *a, _r=_ref: (searches.append(1), _r(*a))[1]
 v._find_timer.timeout.disconnect()
 v._find_timer.timeout.connect(v._refilter)
 n0 = kb_attach.decode_count
+# ⚠️ 검사에서는 기다림을 1초로 늘린다. 120ms 그대로 두면 느린 검사 PC(윈도 CI)에서 글자 사이가
+#    120ms 를 넘을 때가 있어 검색이 두 번 돈다 — 앱은 맞게 한 것인데 검사가 빨개졌다.
+#    여기서 보려는 것은 '칠 때마다 다시 기다린다' 는 동작이고, 실제 값(120ms)은 아래에서 따로 본다.
+ok("실제 기다림은 120ms", KbView.SEARCH_DELAY_MS == 120 and v._find_timer.interval() == 120)
+v._find_timer.setInterval(1000)
 for ch in "사진 많은 자료 사진 많은 자":
     v.ed_find.setText(v.ed_find.text() + ch)
     pump(3)
-time.sleep(v.SEARCH_DELAY_MS / 1000 + 0.05)
+time.sleep(1.1)
 pump(10)
+v._find_timer.setInterval(KbView.SEARCH_DELAY_MS)
 ok("같은 자료면 첨부 줄을 다시 만들지 않는다", rebuilt == [], rebuilt)
 ok("검색은 타자가 멎은 뒤 한 번", len(searches) == 1, len(searches))
 ok("찾은 것", [v.lst.item(i).text() for i in range(v.lst.count())] == ["사진 많은 자료"])
