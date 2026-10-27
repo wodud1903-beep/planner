@@ -29,7 +29,8 @@ def pump(n=20):
 
 print("\n[A] 파일과 절")
 secs = changelog.sections()
-tags = [t.lstrip("v") for t in sh("git", "tag").splitlines()]
+# 이 프로그램 태그(vX.Y.Z)만 — 같은 저장소의 업무자료검색은 kb-vX.Y.Z 를 쓴다
+tags = [t.lstrip("v") for t in sh("git", "tag", "-l", "v[0-9]*").splitlines()]
 ok("CHANGELOG.md 를 찾는다", bool(changelog.text()))
 ok("모든 태그에 절이 있다", set(tags) <= {s["version"] for s in secs},
    sorted(set(tags) - {s["version"] for s in secs}) or "빠진 것 없음")

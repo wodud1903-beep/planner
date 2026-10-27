@@ -106,87 +106,98 @@ _avail = _QGA.primaryScreen().availableGeometry()
 _avail_w, _avail_h = _avail.width(), _avail.height()
 w = MainWindow(); w.show(); app.processEvents()
 h_norm = w._normal_h
-ok("보통 세로가 정해져 있다", w.minimumHeight() == h_norm, w.minimumHeight())
+import time as _t
+
+
+def pumpw(n=6):
+    for _ in range(n):
+        app.processEvents()
+        _t.sleep(0.01)
+
+
+# v1.22.2: 세로도 끌어서 바꾼다(예전엔 '보통' 세로를 못 박고 되돌렸다).
+# 지키는 것은 하나 — 제목표시줄이 화면 밖으로 나가지 않게.
+ok("세로 하한은 있다(왼쪽 메뉴가 겹치지 않게)",
+   w.minimumHeight() == min(MainWindow.MIN_HEIGHT, _avail_h - 60), w.minimumHeight())
 ok("가로는 조절 가능", w.minimumWidth() < w.maximumWidth())
-h0 = w.height()
-w.resize(w.minimumWidth() + 150, h0 + 300); app.processEvents()
-ok("세로는 안 변한다", w.height() == h0)
-
-# 창 크기는 '보통' 과 '최대화' 둘뿐.
-#
-# ⚠️ 이 검사 환경에는 창관리자가 없어서 showMaximized() 를 불러도 창이 실제로
-#    커지지 않는다(제약 없는 맨 QWidget 도 안 커진다). 그래서 '최대화된 크기'
-#    자체는 여기서 확인할 수 없다. 대신 윈도에서 최대화를 좌우하는 값 —
-#    창관리자에게 알려 주는 크기 제약 — 을 확인한다.
-#
-#    예전에 최대화가 안 먹은 이유가 바로 이 제약이었다. setFixedHeight 로
-#    세로를 못 박아 두면(min==max) 창관리자가 최대화할 때도 그 값을 지켜서,
-#    최대화를 눌러도 크기는 그대로고 isMaximized() 만 True 가 됐다.
-ok("최대화 단추가 있다",
-   bool(w.windowFlags() & Qt.WindowMaximizeButtonHint))
-ok("세로가 못 박혀 있지 않다(그래야 최대화가 먹는다)",
-   w.minimumHeight() != w.maximumHeight(),
-   (w.minimumHeight(), w.maximumHeight()))
-ok("세로 상한이 화면보다 크다", w.maximumHeight() >= _avail_h,
+ok("최대화 단추가 있다", bool(w.windowFlags() & Qt.WindowMaximizeButtonHint))
+ok("세로 상한을 걸지 않는다(걸면 최대화가 죽는다)", w.maximumHeight() >= _avail_h,
    (w.maximumHeight(), _avail_h))
-ok("보통 세로는 아래로도 안 줄어든다", w.minimumHeight() == h0, w.minimumHeight())
+h0 = w.height()
+w.resize(w.width(), h0 - 150); pumpw()
+ok("세로를 줄일 수 있다", w.height() == h0 - 150, w.height())
+w.resize(w.width(), min(h0 + 60, _avail_h - 40)); pumpw()
+ok("세로를 늘릴 수 있다", w.height() == min(h0 + 60, _avail_h - 40), w.height())
+w.resize(w.width(), _avail_h + 400); pumpw()
+ok("화면보다 크게는 안 된다(제목표시줄이 밖으로 안 나가게)",
+   w.frameGeometry().height() <= _avail_h, (w.frameGeometry().height(), _avail_h))
+w.resize(w.width(), h0); pumpw()
+w.move(w.x(), _avail.top() - 500); pumpw()
+ok("제목표시줄이 화면 위로 나가면 되돌린다", w.frameGeometry().top() >= _avail.top(),
+   w.frameGeometry().top())
+w.move(w.x(), _avail.bottom() + 80); pumpw()
+ok("화면 아래로 사라지면 끌어올린다",
+   w.frameGeometry().top() <= _avail.bottom() - MainWindow.TITLE_KEEP, w.frameGeometry().top())
+w.move(_avail.right() + 300, _avail.top() + 50); pumpw()
+ok("오른쪽 밖으로 나가도 제목줄 일부는 화면에", w.frameGeometry().left() <= _avail.right() - 200,
+   w.frameGeometry().left())
+w.move(_avail.left() + 10, _avail.top() + 10); pumpw()
+ok("화면 안에서는 옮긴 자리 그대로", (w.frameGeometry().left(), w.frameGeometry().top())
+   == (_avail.left() + 10, _avail.top() + 10), (w.frameGeometry().left(), w.frameGeometry().top()))
+# 크기를 기억한다(가로·세로)
+w.resize(w.width(), h0 - 100); pumpw()
+w._remember_width()
+_wj = json.loads((config.base_dir() / MainWindow.WIN_FILE).read_text(encoding="utf-8"))
+ok("세로도 적어 둔다", _wj.get("height") == h0 - 100, _wj)
+w6 = MainWindow()
+ok("다시 켜면 그 세로로", w6._normal_h == h0 - 100 and w6.height() == h0 - 100,
+   (w6._normal_h, w6.height()))
+w6.deleteLater()
+(config.base_dir() / MainWindow.WIN_FILE).write_text(
+    json.dumps({"width": 1600, "height": _avail_h + 900, "maximized": False, "layout": 2}),
+    encoding="utf-8")
+w7 = MainWindow()
+ok("큰 모니터에서 맞춘 세로라도 이 화면 안으로", w7._normal_h <= _avail_h - 40, w7._normal_h)
+w7.deleteLater()
+(config.base_dir() / MainWindow.WIN_FILE).write_text(
+    json.dumps({"width": 1600, "maximized": False, "layout": 2}), encoding="utf-8")
+w8 = MainWindow()
+ok("세로를 못 바꾸던 시절 파일이면 기본 세로", w8._normal_h == min(920, _avail_h - 60), w8._normal_h)
+w8.deleteLater()
+w.resize(w.width(), h0); pumpw()
+h_norm = w.height()
 
-# 보통일 때 세로를 억지로 바꿔도 '보통' 으로 되돌아온다 — 크기는 두 가지뿐.
-_w0 = w.width()
-w.resize(_w0 + 150, h0 + 300); app.processEvents()
-ok("세로를 늘려도 되돌아온다", w.height() == h0, w.height())
-ok("가로는 늘어난다", w.width() > _w0, (w.width(), _w0))
-w.resize(w.width(), h0 - 200); app.processEvents()
-ok("세로를 줄여도 되돌아온다", w.height() == h0, w.height())
-ok("되돌리느라 폭주하지 않는다", True)
-ok("되돌리기는 한 박자 미뤄서 판단한다",
-   "_snap_height_if_normal" in inspect.getsource(MainWindow.resizeEvent))
-
-# 최대화 중에는 세로를 되돌리지 않는다(되돌리면 최대화가 풀려 버린다).
+# 최대화 중에는 크기를 건드리지 않는다(되돌리면 최대화가 풀려 버린다).
 # setWindowState 로 진짜 최대화를 시키면 이 환경(창관리자 없음)이 멈추므로,
 # '최대화 상태' 만 흉내 내어 우리 쪽 판단이 맞게 도는지 본다.
 _real_is_max = MainWindow._is_max
 MainWindow._is_max = lambda self: True
 w.resizeEvent(__import__("PySide6.QtGui", fromlist=["QResizeEvent"])
               .QResizeEvent(w.size(), w.size()))
-# 가로 상한은 아예 걸지 않는다. 창관리자는 '이 창이 얼마나 커질 수 있는가' 를
-# 이 값으로 보는데, 화면폭보다 작은 상한이 걸려 있으면 최대화가 반쪽이 되거나
-# 최대화 단추 자체가 죽는다(실제 창관리자에서 900 으로 막히는 걸 확인했다).
-ok("가로 상한이 걸려 있지 않다", w.maximumWidth() > _avail_w,
-   w.maximumWidth())
+ok("가로 상한이 걸려 있지 않다", w.maximumWidth() > _avail_w, w.maximumWidth())
 _tall = h_norm + 200
-w.resize(w.width(), _tall); app.processEvents()
+w.resize(w.width(), _tall); pumpw()
 ok("최대화 중에는 세로를 안 건드린다", w.height() == _tall, w.height())
-
+ok("최대화 중 크기는 '보통' 으로 치지 않는다", w._normal_h == h_norm, w._normal_h)
+w._remember_width()
+_wj = json.loads((config.base_dir() / MainWindow.WIN_FILE).read_text(encoding="utf-8"))
+ok("최대화 중에는 '보통' 크기를 적어 둔다", _wj.get("height") == h_norm and _wj.get("maximized"),
+   _wj)
 MainWindow._is_max = _real_is_max
-w.resizeEvent(__import__("PySide6.QtGui", fromlist=["QResizeEvent"])
-              .QResizeEvent(w.size(), w.size()))
-app.processEvents()
-ok("되돌리면 보통 세로로 돌아온다", w.height() == h_norm, w.height())
-ok("되돌려도 가로 상한은 안 건다", w.maximumWidth() > _avail_w,
-   w.maximumWidth())
-ok("가로 하한은 남아 있다", w.minimumWidth() >= min(MainWindow.MIN_WIDTH,
-                                                   _avail_w - 20),
+w.resize(w.width(), h_norm)            # 최대화를 풀면 창관리자가 원래 크기로 되돌린다
+pumpw()
+ok("풀면 다시 보통으로 친다", not w._is_max() and w.height() == h_norm, w.height())
+ok("되돌려도 가로 상한은 안 건다", w.maximumWidth() > _avail_w, w.maximumWidth())
+ok("가로 하한은 남아 있다", w.minimumWidth() >= min(MainWindow.MIN_WIDTH, _avail_w - 20),
    w.minimumWidth())
-# ⚠️ 윈도에서 실제로 났던 문제 — 크기 알림이 상태 알림보다 먼저 온다.
-#    최대화를 누르면 '커졌다'(resize)가 '최대화됨'(state)보다 먼저 도착하는데,
-#    그 순간 우리가 바로 되돌려 버리면 가로만 커지고 세로는 제자리로 돌아갔다.
-#    그래서 상태 비트만 믿지 않고 '화면을 거의 채웠는가' 도 함께 본다.
-#    아래는 창관리자가 창을 화면 크기로 키운 순간(상태 비트는 아직 안 켜짐)이다.
-MainWindow._is_max = _real_is_max          # 상태 비트는 아직 '보통'
-w._snap_from = None
-_mw, _mh = _avail_w, _avail_h - 19         # 창틀만큼 조금 작은, 최대화된 크기
-w.resize(_mw, _mh)
-app.processEvents()
+# 화면을 거의 채운 크기면 상태 비트가 없어도 최대화로 본다(윈도는 '커졌다' 가 먼저 온다)
+_mw, _mh = _avail_w, _avail_h - 19
+w.resize(_mw, _mh); pumpw()
 ok("화면을 채웠으면 상태 비트가 없어도 최대화로 본다", w._is_max(),
    (w.width(), w.height(), _avail_w, _avail_h))
-ok("그래서 최대화 세로를 안 되돌린다", w.height() == _mh, (w.height(), _mh))
-# 가로만 화면만큼 넓힌 것은 최대화가 아니다 — 세로는 되돌려야 한다
-w._snap_from = None
-w.resize(_mw, h_norm + 260)
-app.processEvents()
-ok("가로만 넓힌 건 최대화가 아니다", w.height() == h_norm, w.height())
-w.resize(min(MainWindow.DEFAULT_W, _avail_w - 20), h_norm); app.processEvents()
+w.resize(_mw, h_norm - 100); pumpw()
+ok("가로만 넓힌 건 최대화가 아니다", not w._is_max() and w.height() == h_norm - 100, w.height())
+w.resize(min(MainWindow.DEFAULT_W, _avail_w - 20), h_norm); pumpw()
 
 ok("창 상태 알림이 없어도 스스로 맞춘다(resizeEvent 에서도 부른다)",
    "self._apply_size_mode()" in inspect.getsource(MainWindow.resizeEvent))
@@ -208,7 +219,7 @@ ok("창 세로를 못 박지 않는다",
 ok("탭 7개", w.tabs.count() == 7, [w.tabs.tabText(i) for i in range(w.tabs.count())])
 ok("탭 차례 그대로",
    [w.tabs.tabText(i) for i in range(7)] ==
-   ["일정 / 할일", "고객관리", "고객정보", "멘트복사", "자료검색",
+   ["대시보드", "고객관리", "고객정보", "멘트복사", "자료검색",
     "수당계산기", "PC 알람"],
    [w.tabs.tabText(i) for i in range(w.tabs.count())])
 ok("고객정보는 고객관리 바로 옆",

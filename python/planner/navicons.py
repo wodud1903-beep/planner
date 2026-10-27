@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
 # 탭 이름 → 아이콘
 TAB_ICONS = {
-    "일정 / 할일": "tasks",
+    "대시보드": "grid",
     "고객관리": "people",
     "고객정보": "folder",
     "멘트복사": "chat",
@@ -171,6 +171,11 @@ def _expand(p: QPainter):
         p.drawPath(path)
 
 
+def _grid(p: QPainter):
+    for x, y in ((4, 4), (13, 4), (4, 13), (13, 13)):
+        p.drawRoundedRect(QRectF(x, y, 7, 7), 2, 2)
+
+
 def _dot(p: QPainter):
     p.drawEllipse(QPointF(12, 12), 4, 4)
 
@@ -179,7 +184,7 @@ _DRAW = {
     "tasks": _tasks, "calendar": _calendar, "people": _people, "folder": _folder,
     "chat": _chat, "search": _search, "calc": _calc, "bell": _bell, "gear": _gear,
     "plus": _plus, "history": _history, "collapse": _collapse, "expand": _expand,
-    "dot": _dot,
+    "grid": _grid, "dot": _dot,
 }
 
 NAMES = tuple(_DRAW)
@@ -201,6 +206,31 @@ def pixmap(name: str, color: str, size: int = 20, dpr: float = 2.0,
     _DRAW.get(name, _dot)(p)
     p.end()
     return pix
+
+
+def tile_icon(name: str, bg: str, fg: str, size: int = 44) -> QIcon:
+    """바로가기 칸 — 둥근 네모 바탕에 흰 선 아이콘(대시보드)."""
+    ic = QIcon()
+    for dpr in (1.0, 2.0):
+        px = int(round(size * dpr))
+        pix = QPixmap(px, px)
+        pix.fill(Qt.transparent)
+        pix.setDevicePixelRatio(dpr)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(bg))
+        p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.28, size * 0.28)
+        inner = size * 0.56
+        off = (size - inner) / 2
+        p.translate(off, off)
+        p.scale(inner / 24.0, inner / 24.0)
+        p.setPen(QPen(QColor(fg), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        _DRAW.get(name, _dot)(p)
+        p.end()
+        ic.addPixmap(pix)
+    return ic
 
 
 def icon(name: str, color: str, selected: str = "", size: int = 20) -> QIcon:

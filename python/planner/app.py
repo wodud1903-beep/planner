@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import QEvent, QObject
@@ -11,27 +12,52 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QComboBox, QLineEdit,
 )
 
-from . import config, crashlog, theme
+from . import config, crashlog, theme, updater
 from .main_window import MainWindow
 
 # 중복 실행 방지용 로컬 소켓 이름 (한 사용자당 하나만 실행)
 _SINGLE_KEY = "Planner_SingleInstance_v1"
 
 
-def _activate_existing() -> bool:
-    """이미 실행 중인 인스턴스가 있으면 그 창을 띄우도록 신호를 보내고 True."""
+def _activate_existing():
+    """이미 실행 중인 인스턴스가 있으면 그 창을 띄우도록 신호를 보낸다.
+
+    반환: None(없음) / ""(있지만 대답이 없음 — v1.23.0 이전 판이거나 멈춘 것) /
+    판 번호(v1.23.1 부터는 'ok 판번호' 로 대답한다).
+    """
     sock = QLocalSocket()
     sock.connectToServer(_SINGLE_KEY)
-    if sock.waitForConnected(400):
-        try:
-            sock.write(b"show")
-            sock.flush()
-            sock.waitForBytesWritten(500)
-            sock.disconnectFromServer()
-        except Exception:
-            pass
-        return True
-    return False
+    if not sock.waitForConnected(400):
+        return None
+    reply = ""
+    try:
+        sock.write(b"show")
+        sock.flush()
+        sock.waitForBytesWritten(500)
+        if sock.waitForReadyRead(1200):
+            got = bytes(sock.readAll()).decode("ascii", "ignore").split()
+            if len(got) >= 2 and got[0] == "ok":
+                reply = got[1]
+        sock.disconnectFromServer()
+    except Exception:
+        pass
+    return reply
+
+
+def _take_over_after_update(reply) -> bool:
+    """방금 업데이트로 깔린 새 판인데 옛 판이 아직 남아 있으면 그것을 끝내고 이어서 뜬다.
+
+    ⚠️ v1.22.1 → v1.23.0 에서 겪은 일: 옛 판이 끝나지 않고 남아 있어, 새 판이 떠도
+       '이미 실행 중' 으로 보고 옛 창만 불러온 뒤 스스로 꺼졌다 → 업데이트를 눌러도
+       계속 옛 판. 방금 깔린 것(업데이트 기록이 막 'replaced ok')이고, 남은 쪽이
+       대답이 없거나(옛 판) 더 낮은 판이면 새 판이 이긴다. 그 밖(보통 두 번 실행)은
+       예전처럼 있는 창만 띄우고 끝낸다.
+    """
+    if not updater.is_frozen() or not updater.just_installed():
+        return False
+    if reply and updater._parse_ver(reply) >= updater._parse_ver(config.APP_VERSION):
+        return False
+    return updater.kill_other_instances() > 0
 
 # 화면 색은 theme.py 한 곳에서만 만든다(theme.apply_to_app).
 # 예전에는 여기에도 스타일시트가 한 벌 있었는데, 쓰이지 않으면서 옛 색만
@@ -69,13 +95,19 @@ def main() -> int:
 
     # ── 중복 실행 방지 ──
     # 이미 실행 중이면 기존 창만 띄우고 이 프로세스는 즉시 종료한다.
-    if _activate_existing():
-        return 0
+    # (단, 방금 업데이트로 깔렸는데 옛 판이 남아 있으면 그것을 끝내고 이어서 뜬다)
+    reply = _activate_existing()
+    if reply is not None:
+        if not _take_over_after_update(reply):
+            return 0
+        import time as _time
+        _time.sleep(1.5)                # 끝낸 옛 판이 소켓·파일을 놓을 때까지
     # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py). 두 번째 실행은 위에서 이미 빠졌으므로
     # 여기는 '실제로 도는 하나' 만 지난다.
     prev_crash = crashlog.start()
     crashlog.install_qt_handler()       # Qt 의 오류 문구도 같은 기록에(창 프로그램이라 안 보인다)
     app.aboutToQuit.connect(crashlog.clean_exit)
+    app.aboutToQuit.connect(crashlog.remove_qt_handler)   # 정리 중 문구가 파이썬을 안 부르게
     # 윈도를 끌 때(앱을 켜 둔 채)도 정상 종료다 — 다음에 '비정상' 이라고 묻지 않게
     app.commitDataRequest.connect(crashlog.clean_exit)
 
@@ -114,9 +146,16 @@ def main() -> int:
         QTimer.singleShot(2500, lambda: crashlog.show_notice(win, prev_crash))
 
     # 두 번째 실행이 신호를 보내오면 기존 창을 앞으로 띄운다.
+    # 'ok 판번호' 로 대답한다 — 업데이트로 막 깔린 새 판이 '남은 옛 판인가' 를 가린다.
     def _on_second_instance():
         conn = _server.nextPendingConnection()
         if conn is not None:
+            try:
+                conn.write(f"ok {config.APP_VERSION}\n".encode("ascii"))
+                conn.flush()
+                conn.waitForBytesWritten(300)
+            except Exception:
+                pass
             conn.disconnectFromServer()
         win.show_window()
 
@@ -128,7 +167,17 @@ def main() -> int:
     else:
         win.show()
 
-    return app.exec()
+    rc = app.exec()
+    # ⚠️ 파이썬의 마무리 정리(위젯·Qt 객체를 하나씩 지우기)를 건너뛰고 바로 끝낸다.
+    #    그 정리 중에 멈추거나 꺼지면 프로그램이 남아 업데이트·다음 실행을 막았다.
+    #    저장할 것은 이미 다 저장했다(_shutdown · 바뀔 때마다 저장).
+    crashlog.shutdown()
+    try:
+        sys.stdout and sys.stdout.flush()
+        sys.stderr and sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(rc)
 
 
 if __name__ == "__main__":
