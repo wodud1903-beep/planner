@@ -292,6 +292,8 @@ class AppSettings:
     files_drive_folder: str = drive_path.CUSTOMER_DIR
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
+    # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
+    side_collapsed: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -331,6 +333,7 @@ class AppSettings:
             "driveApiOn": self.drive_api_on,
             "filesDriveFolder": self.files_drive_folder,
             "tabOrder": list(self.tab_order or []),
+            "sideCollapsed": bool(self.side_collapsed),
         }
 
     @classmethod
@@ -398,6 +401,7 @@ class AppSettings:
         s.files_drive_folder = (o.get("filesDriveFolder", "") or ""
                                 or drive_path.CUSTOMER_DIR)
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
+        s.side_collapsed = bool(o.get("sideCollapsed", False))
         return s
 
     def save(self, path: Path) -> None:

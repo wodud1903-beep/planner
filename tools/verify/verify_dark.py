@@ -223,7 +223,7 @@ for _t in theme.THEME_ORDER:
        and ratio(_p["day_sun"], _p["panel_bg"]) >= ratio(theme.strong("red"), _p["panel_bg"]))
 theme.set_theme("dark")
 
-print("\n[8] 기본(밝은 청회색) — 밝게 올렸어도 면이 녹지 않는가")
+print("\n[8] 기본(밝은 연보라) — 밝고 연하게 했어도 면이 녹지 않는가")
 # v1.16.2 에서 한 단계 밝게 올렸다. 밝게만 하면 패널·바탕·테두리가 서로
 # 붙어 버려 표와 달력의 칸 선이 사라진다 — 그 선을 여기서 지킨다.
 L = theme.LIGHT

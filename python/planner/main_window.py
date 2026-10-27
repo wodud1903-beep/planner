@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 from . import (
     alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
     deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, searchcombo, sheets, sync, theme, updater,
+    google_client, hotkey, kb, navicons, searchcombo, sheets, sync, theme, updater,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -46,6 +46,7 @@ from .models import (
     AppSettings, PcAlarm, TaskAlarm, TaskAlarmStore, TodoItem, load_list, save_list,
 )
 from .settings_dialog import SettingsDialog
+from .sidebar import Sidebar
 
 # ---------------------------------------------------------------------------
 # 낙관적 UI (즉시 반영)
@@ -157,7 +158,14 @@ class MainWindow(QMainWindow):
     # 창을 이보다 좁히지는 못하게 한다. 고객관리 표의 열 폭 합(약 996)보다는
     # 좁아도 되지만(가로 스크롤이 생길 뿐), 여기서 더 줄이면 어느 탭이든
     # 버튼 줄이 서로 겹쳐 못 쓰게 된다.
-    MIN_WIDTH = 960
+    MIN_WIDTH = 1040                # 왼쪽 메뉴(216) 몫만큼 넓혔다 — 좁으면 메뉴를 접는다
+    # 기본 폭. 1570 은 쓰시는 분이 정해 주신 값(상단바 시절) — 고객명 236 · 내용 255
+    # 를 넣고도 남는 폭이다. v1.22 에 왼쪽 메뉴와 카드 여백이 생기며 표 자리가
+    # LAYOUT_EXTRA 만큼 줄었으므로 그만큼 더한다(표가 들어가는 폭은 그대로).
+    BASE_W = 1570
+    LAYOUT_EXTRA = 276              # 메뉴 216 + 카드 바깥·안쪽 여백 − 예전 여백
+    DEFAULT_W = BASE_W + LAYOUT_EXTRA
+    LAYOUT_VER = 2                  # window.json 에 적는 배치 판(1 = 상단바 시절)
     # 창 폭 기억 — 이 PC 에만 둔다. plan_cfg.json 은 다른 PC 로 동기화되는데,
     # 모니터가 작은 PC 가 화면에 맞춰 줄인 폭이 큰 모니터 PC 로 넘어가면
     # 켤 때마다 서로 창을 좁히게 된다.
@@ -175,11 +183,10 @@ class MainWindow(QMainWindow):
         # 고정한다(_on_window_state). 그래서 어중간한 세로 크기는 나올 수 없다.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         _avail = self._screen_avail()
-        # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭.
-        # 1570 은 쓰시는 분이 정해 주신 값 — 고객명 236 · 내용 255 를 넣고도
-        # 남는 폭이다. 화면이 좁으면 어차피 아래 min 이 화면 폭으로 깎으므로
-        # 작은 노트북에서도 안전하다.
-        _w = min(1570, _avail.width() - 20)
+        # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭(DEFAULT_W).
+        # 화면이 좁으면 어차피 아래 min 이 화면 폭으로 깎으므로 작은 노트북에서도
+        # 안전하다(그때는 왼쪽 메뉴를 접으면 표 자리가 넓어진다).
+        _w = min(self.DEFAULT_W, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
         self._normal_h = _h          # 보통 크기의 세로. 최대화를 풀면 이리 돌아온다
         self._normal_w = _w          # 마지막으로 쓰던 보통 가로(아래에서 덮어씀)
@@ -406,15 +413,8 @@ class MainWindow(QMainWindow):
             pass
 
     # ------------------------------------------------------------ 테마
-    def _apply_topbar_theme(self):
-        self._topbar.setStyleSheet(
-            f"background:{theme.c('topbar')};border-bottom:1px solid {theme.c('border')};")
-        self._title_lbl.setStyleSheet(
-            f"color:{theme.c('topbar_text')};font-size:19px;font-weight:bold;background:transparent;")
-        self.lbl_account.setStyleSheet(
-            f"color:{theme.c('subtext')};background:transparent;")
-        self.chk_startup.setStyleSheet(
-            f"color:{theme.c('topbar_text')};background:transparent;")
+    def _apply_side_theme(self):
+        self.sidebar.apply_theme()      # 메뉴 아이콘을 새 테마 색으로 다시 그린다
 
     def apply_theme(self):
         theme.set_theme(getattr(self.settings, "theme", "")
@@ -422,7 +422,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             theme.apply_to_app(app)   # 스타일시트 + 팔레트 함께
-        self._apply_topbar_theme()
+        self._apply_side_theme()
         if hasattr(self, "btn_google"):
             self.btn_google.apply_theme()   # 구글 단추는 제 배색을 따로 쓴다
         self.refresh_calendar()
@@ -466,13 +466,13 @@ class MainWindow(QMainWindow):
             # 계정을 확인하지 못하면 어느 폴더가 이 사람 데이터인지 알 수 없다.
             # 이때 동기화를 강행하면 공용 폴더(대개 비어 있음)를 번들로 올려
             # 다른 PC 의 데이터까지 지워버린다. 그래서 아예 건너뛴다.
-            self.lbl_account.setText("· 계정 확인 실패 — 동기화를 건너뜁니다")
+            self.lbl_account.setText("계정 확인 실패 — 동기화를 건너뜁니다")
             self._backup(manual=False)
             self.fetch_all_async()
             return
         self.account_email = email
         config.set_account(email)
-        self.lbl_account.setText(f"· {email}")
+        self.lbl_account.setText(email)
         sync.migrate_legacy()
         self.reload_data()   # 계정 폴더 기준으로 다시 로드
         # 이제야 이 계정의 시트 설정을 알 수 있다 → 바로 불러오기 시도
@@ -739,41 +739,59 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("central")
         self.setCentralWidget(central)
-        outer = QVBoxLayout(central)
+        outer = QHBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # 상단 바
-        self._topbar = QWidget()
-        self._topbar.setFixedHeight(52)
-        tl = QHBoxLayout(self._topbar)
-        tl.setContentsMargins(16, 0, 16, 0)
-        self._title_lbl = QLabel(config.APP_NAME)
-        tl.addWidget(self._title_lbl)
-        self.lbl_account = QLabel("")
-        tl.addWidget(self.lbl_account)
-        tl.addStretch()
+        # 왼쪽 메뉴 — 플로우처럼 모든 메뉴를 한 줄에(v1.22). 예전 상단바의 계정·버전·
+        # 'PC 시작 시 실행' 과 [설정]·[캘린더 열기] 도 이리로 옮겼다(이름은 그대로).
+        self.sidebar = Sidebar(config.APP_NAME)
+        outer.addWidget(self.sidebar)
+        self.lbl_account = self.sidebar.lbl_account
         # 버전을 눌러 변경 이력을 연다 — 업데이트하고 '뭐가 바뀌었나' 를 바로 보게
-        self.btn_ver = QPushButton(f"v{config.APP_VERSION}")
+        self.btn_ver = self.sidebar.btn_ver
+        self.btn_ver.setText(f"v{config.APP_VERSION}")
         self.btn_ver.setToolTip("이 버전과 지난 버전에서 무엇이 바뀌었는지 봅니다")
-        self.btn_ver.setFlat(True)
         self.btn_ver.clicked.connect(self.open_changelog)
-        tl.addWidget(self.btn_ver)
-        self.chk_startup = QCheckBox("PC 시작 시 실행")
+        self.chk_startup = self.sidebar.chk_startup
         self.chk_startup.toggled.connect(lambda on: _set_startup(on))
-        tl.addWidget(self.chk_startup)
-        outer.addWidget(self._topbar)
-        self._apply_topbar_theme()
+        self.btn_settings = self.sidebar.btn_settings
+        self.btn_settings.clicked.connect(self.on_settings_click)
+        self.btn_calendar = self.sidebar.btn_calendar
+        self.btn_calendar.clicked.connect(self.open_calendar)
+        self.sidebar.btn_primary.clicked.connect(self.quick_add_todo)
 
-        # 탭 — 끌어서 순서를 바꿀 수 있다.
-        # 사람마다 자주 쓰는 탭이 다르니 자리를 직접 정하게 하고, 그 순서를 기억한다.
+        # 오른쪽 — 쪽 제목줄 + 흰 카드(탭 내용)
+        area = QWidget()
+        area.setObjectName("pagearea")
+        rv = QVBoxLayout(area)
+        rv.setContentsMargins(22, 14, 20, 18)
+        rv.setSpacing(10)
+        head = QHBoxLayout()
+        head.setContentsMargins(2, 0, 2, 0)
+        self.lbl_page = QLabel("")
+        self.lbl_page.setObjectName("pagetitle")
+        head.addWidget(self.lbl_page)
+        head.addStretch(1)
+        self.lbl_today = QLabel("")
+        self.lbl_today.setObjectName("pagedate")
+        head.addWidget(self.lbl_today)
+        rv.addLayout(head)
+
+        # 화면 보관함 — QTabWidget 그대로 두고 **탭 막대만 숨긴다**. 고르는 일은 왼쪽
+        # 메뉴가 한다. 탭으로 찾아가는 코드(캘린더 → '해당 일정으로 이동' 등)는
+        # 그대로 돌고, 메뉴는 탭 순서를 따라 그린다(_sync_nav).
+        # 사람마다 자주 쓰는 메뉴가 달라 끌어서 순서를 바꾸게 하고, 그 순서를 기억한다.
         # (설정에 담아 두므로 사무실 PC 와 집 PC 가 같은 배치가 된다)
         self.tabs = QTabWidget()
-        self.tabs.setMovable(True)
-        self.tabs.tabBar().setToolTip("탭을 끌어서 순서를 바꿀 수 있습니다")
-        outer.addWidget(self.tabs)
-        self.tabs.addTab(self._build_main_tab(), "일정 / 할일")
-        # 탭 순서를 사람이 바꿀 수 있으므로(setMovable) 번호로 찾으면 안 된다.
+        self.tabs.setObjectName("pages")
+        self.tabs.tabBar().hide()
+        rv.addWidget(self.tabs, 1)
+        outer.addWidget(area, 1)
+
+        self.tab_main = self._build_main_tab()
+        self.tabs.addTab(self.tab_main, "일정 / 할일")
+        # 탭 순서를 사람이 바꿀 수 있으므로 번호로 찾으면 안 된다.
         # 캘린더에서 '해당 일정으로 이동' 할 때 이 위젯으로 찾는다.
         self.tab_cust = self._build_customer_tab()
         self.tabs.addTab(self.tab_cust, "고객관리")
@@ -794,25 +812,82 @@ class MainWindow(QMainWindow):
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
+        # 쪽 제목줄이 이름을 크게 보여 주므로 화면 안의 작은 제목('💬 멘트 복사' 등)은
+        # 숨긴다 — 같은 이름이 두 번 나와 어수선했다. 설명·[편집] 단추는 그대로.
+        for t in (self.tab_greet, self.tab_kb):
+            t.lbl_title.hide()
+        self._pad_pages()
         # 지난번에 맞춰 둔 순서로 되돌린 뒤부터 바뀜을 기록한다
         # (되돌리는 동안 나는 tabMoved 까지 저장하면 순서가 뒤엉킨다)
         self._restore_tab_order()
         self.tabs.tabBar().tabMoved.connect(self._remember_tab_order)
+        self.tabs.tabBar().tabMoved.connect(lambda *_a: self._sync_nav())
+        self.tabs.currentChanged.connect(self._on_page_changed)
+        self.sidebar.navigate.connect(self.tabs.setCurrentIndex)
+        self.sidebar.nav.orderChanged.connect(self._on_nav_reordered)
+        self.sidebar.set_collapsed(bool(getattr(self.settings, "side_collapsed", False)))
+        self.sidebar.collapsedChanged.connect(self._on_side_collapsed)
+        self._sync_nav()
+        self._on_page_changed(self.tabs.currentIndex())
+
+    def _pad_pages(self):
+        """카드 안쪽 여백을 고르게 — 화면마다 기본값이 달라 들쭉날쭉했다."""
+        for i in range(self.tabs.count()):
+            lay = self.tabs.widget(i).layout()
+            if lay is not None:
+                lay.setContentsMargins(18, 16, 18, 16)
+
+    # ------------------------------------------------------------ 왼쪽 메뉴
+    def _sync_nav(self):
+        """메뉴를 지금 탭 순서대로 다시 그린다."""
+        pages = [(self.tabs.tabText(i), navicons.for_tab(self.tabs.tabText(i)))
+                 for i in range(self.tabs.count())]
+        self.sidebar.set_pages(pages, self.tabs.currentIndex())
+
+    def _on_page_changed(self, idx: int):
+        self.sidebar.select(idx)
+        self.lbl_page.setText(self.tabs.tabText(idx) if idx >= 0 else "")
+        self._paint_today()
+
+    def _paint_today(self):
+        d = date.today()
+        self.lbl_today.setText(f"{d.month}월 {d.day}일 ({'월화수목금토일'[d.weekday()]})")
+
+    def _on_nav_reordered(self, names: list):
+        """메뉴를 끌어 옮겼다 → 탭도 같은 순서로, 그리고 기억한다."""
+        self._move_tabs(names)
+        self._remember_tab_order()
+        self._sync_nav()
+
+    def _on_side_collapsed(self, on: bool):
+        try:
+            self.settings.side_collapsed = bool(on)
+            self._save_settings()
+        except Exception:
+            pass
+
+    def quick_add_todo(self):
+        """[＋ 할일 추가] — 어느 화면에서든 '일정 / 할일' 로 가서 바로 적는다."""
+        self.tabs.setCurrentWidget(self.tab_main)
+        self.on_todo_add()
 
     # ------------------------------------------------------------ 탭 순서
     def _tab_names(self) -> list:
         return [self.tabs.tabText(i) for i in range(self.tabs.count())]
 
     def _restore_tab_order(self):
-        """설정에 적힌 순서대로 탭을 옮긴다.
+        """설정에 적힌 순서대로 탭을 옮긴다."""
+        want = [str(x) for x in (getattr(self.settings, "tab_order", None) or [])]
+        if want:
+            self._move_tabs(want)
 
-        판을 바꾼 뒤 탭이 늘거나 줄 수 있으므로 **이름으로** 맞춘다. 설정에 없는
+    def _move_tabs(self, want: list):
+        """이름 순서대로 탭을 옮긴다(저장은 하지 않는다).
+
+        판을 바꾼 뒤 탭이 늘거나 줄 수 있으므로 **이름으로** 맞춘다. 목록에 없는
         탭(새로 생긴 것)은 건드리지 않고 제자리에 둔다 — 새 기능이 눈에 안 띄는
         맨 끝으로 밀리지 않게.
         """
-        want = [str(x) for x in (getattr(self.settings, "tab_order", None) or [])]
-        if not want:
-            return
         self._tab_moving = True
         try:
             at = 0
@@ -857,13 +932,8 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
 
         # 상단 조작줄
+        # [설정]·[캘린더 열기] 는 왼쪽 메뉴로 옮겼다(어느 화면에서든 쓰는 것이라)
         row = QHBoxLayout()
-        self.btn_settings = QPushButton("설정")
-        self.btn_settings.clicked.connect(self.on_settings_click)
-        row.addWidget(self.btn_settings)
-        self.btn_calendar = QPushButton("캘린더 열기")
-        self.btn_calendar.clicked.connect(self.open_calendar)
-        row.addWidget(self.btn_calendar)
         self.btn_fetch = QPushButton("새로고침")
         self.btn_fetch.clicked.connect(self.fetch_all_async)
         row.addWidget(self.btn_fetch)
@@ -3126,6 +3196,9 @@ class MainWindow(QMainWindow):
     def _on_tick(self):
         self.check_alarms()
         today = date.today()
+        if getattr(self, "_today_shown", None) != today:     # 자정이 지나면 제목줄 날짜도
+            self._today_shown = today
+            self._paint_today()
         if self.last_backup != today and self._tick_backup_ok():
             self._backup(manual=False)
         if self.chk_autofetch.isChecked() and self.gauth.is_connected():
@@ -3529,8 +3602,12 @@ class MainWindow(QMainWindow):
         try:
             p = self._win_path()
             if p.exists():
-                got = int((json.loads(p.read_text(encoding="utf-8")) or {})
-                          .get("width", 0))
+                saved = json.loads(p.read_text(encoding="utf-8")) or {}
+                got = int(saved.get("width", 0))
+                # 상단바 시절에 맞춰 둔 폭이면 왼쪽 메뉴 몫을 한 번 더해 준다 —
+                # 안 그러면 업데이트하자마자 고객관리 표에 가로 스크롤이 생긴다.
+                if got > 0 and int(saved.get("layout", 1)) < self.LAYOUT_VER:
+                    got += self.LAYOUT_EXTRA
                 if got > 0:
                     want = got
         except Exception:
@@ -3631,7 +3708,8 @@ class MainWindow(QMainWindow):
             mx = self._is_max()
             w = self._normal_w if mx else self.width()
             config.atomic_write(self._win_path(),
-                                json.dumps({"width": w, "maximized": mx}))
+                                json.dumps({"width": w, "maximized": mx,
+                                            "layout": self.LAYOUT_VER}))
         except Exception:
             pass
 

@@ -17,7 +17,8 @@ def ok(name, cond, extra=""):
     if not cond: FAIL.append(name)
 
 tmp = tempfile.mkdtemp(); os.environ["APPDATA"] = tmp
-os.environ["QT_QPA_PLATFORM"] = os.environ.get("PLAT", "vnc:size=1600x1000")
+# 쓰시는 PC 의 모니터(FHD) 크기 — v1.22 부터 왼쪽 메뉴 몫만큼 창이 넓다
+os.environ["QT_QPA_PLATFORM"] = os.environ.get("PLAT", "vnc:size=1920x1080")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
@@ -185,7 +186,7 @@ w._snap_from = None
 w.resize(_mw, h_norm + 260)
 app.processEvents()
 ok("가로만 넓힌 건 최대화가 아니다", w.height() == h_norm, w.height())
-w.resize(min(1570, _avail_w - 20), h_norm); app.processEvents()
+w.resize(min(MainWindow.DEFAULT_W, _avail_w - 20), h_norm); app.processEvents()
 
 ok("창 상태 알림이 없어도 스스로 맞춘다(resizeEvent 에서도 부른다)",
    "self._apply_size_mode()" in inspect.getsource(MainWindow.resizeEvent))
@@ -260,7 +261,7 @@ sheets.read_rows = lambda *a, **k: (1, [_long], [])
 w2 = MainWindow(); w2.sheet_rows = [_long]; w2.show(); app.processEvents()
 # 앞 [E] 에서 폭을 바꿔 본 값이 저장돼 넘어온다. 열 폭 검사는 '평소 폭' 기준이므로
 # 여기서 그 폭으로 맞춰 놓고 잰다(딴 검사가 남긴 값에 휘둘리지 않게).
-w2.resize(min(1570, _avail_w - 20), w2.height()); app.processEvents()
+w2.resize(min(MainWindow.DEFAULT_W, _avail_w - 20), w2.height()); app.processEvents()
 w2.tabs.setCurrentIndex(1); w2.refresh_customers()
 for _ in range(3):
     app.processEvents()
@@ -295,6 +296,24 @@ _b.setText("✓ 복사"); _b.adjustSize()
 ok("'✓ 복사' 가 안내멘트 칸에 들어간다",
    _b.sizeHint().width() <= t2.columnWidth(heads.index("안내멘트")),
    (_b.sizeHint().width(), t2.columnWidth(heads.index("안내멘트"))))
+
+print("\n[F-2c] v1.22 왼쪽 메뉴 — 표 자리는 그대로, 예전 폭은 메뉴 몫만큼 넓혀 연다")
+ok("기본 폭 = 정해 주신 1570 + 메뉴 몫", MainWindow.DEFAULT_W == 1570 + MainWindow.LAYOUT_EXTRA
+   and MainWindow.BASE_W == 1570)
+_wp = config.base_dir() / MainWindow.WIN_FILE
+_wp.write_text(json.dumps({"width": 1500, "maximized": False}), encoding="utf-8")
+w4 = MainWindow()
+ok("상단바 시절 폭(1500)은 메뉴 몫을 더해 연다",
+   w4._normal_w == min(1500 + MainWindow.LAYOUT_EXTRA, _avail_w - 20), w4._normal_w)
+w4._remember_width()
+ok("새로 적을 때는 배치 판을 같이 적는다",
+   json.loads(_wp.read_text(encoding="utf-8")).get("layout") == MainWindow.LAYOUT_VER)
+_wp.write_text(json.dumps({"width": 1500, "maximized": False, "layout": 2}), encoding="utf-8")
+w5 = MainWindow()
+ok("새 배치에서 맞춘 폭은 그대로(두 번 더하지 않는다)", w5._normal_w == 1500, w5._normal_w)
+for _x in (w4, w5):
+    _x.hide(); _x.deleteLater()
+app.processEvents()
 
 print("\n[F-2b] 고객관리 → 고객정보 건너뛰기")
 # 고객관리에서 우클릭 → '이 고객 서류 보기' 로 넘어오면, 고객정보 탭으로

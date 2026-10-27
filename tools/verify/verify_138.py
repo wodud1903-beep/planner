@@ -211,7 +211,18 @@ def S(**kw):
 class Tr:
     def __init__(self): self.done = set(); self.last_scan = None
 
-base = date.today()
+# ⚠️ '오늘' 을 달 가운데로 고정한다. 달 끝에 돌리면 거꾸로 셈(출고일 = 목표+3일의
+#    한 달 전)이 안 맞아 하루~사흘 어긋난다 — 10/31 의 한 달 전은 9/30 이고, 다시 한
+#    달 뒤는 10/30 이다. 실제 동작은 맞는데 검사만 날짜 따라 깨졌다(10/27 에 겪음).
+class _MidMonth(date):
+    @classmethod
+    def today(cls):
+        return date(2026, 6, 10)
+
+
+_real_date = followup.date
+followup.date = _MidMonth
+base = _MidMonth.today()
 def ev_for(uid, name, target_offset):
     """target(= 출고+1개월-3일)이 오늘+offset 이 되도록 출고일을 잡는다."""
     want = base + timedelta(days=target_offset)
@@ -272,6 +283,7 @@ todos5, tr5 = [], Tr()
 old = followup.check_followups(S(), [ev_for("d1", "김가나", -30)], todos5, tr5)
 ok("한 달 지난 건은 안 만든다", old == [])
 ok("오래된 건은 done 으로", "d1" in tr5.done)
+followup.date = _real_date
 
 print("\n[1] 시작 화면 — 한 창에 둘 다")
 import inspect, pathlib

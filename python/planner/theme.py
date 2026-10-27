@@ -1,45 +1,48 @@
 """라이트/다크 테마 팔레트 + 전역 스타일시트 생성.
 
-라이트: 델파이 스킨 'Tablet Light' 톤(밝은 청회색)
-다크  : 같은 톤의 어두운 버전
+기본 : 밝고 연한 라벤더 워크스페이스(v1.22 — 플로우 같은 왼쪽 메뉴와 함께)
+따뜻한: 크림톤
+다크  : 중성 회색
 """
 
 from __future__ import annotations
 
-# 라이트: 밝은 청회색. v1.16.2 에서 한 단계 **밝게** 올렸다 — 바탕과 패널이
-# 무거워 보인다는 이야기가 있었고, 실제로 패널이 #F3F6FA 라 화면 전체가
-# 살짝 회색 필터를 씌운 것처럼 보였다. 이제 패널은 거의 흰색(#FBFCFE),
-# 입력칸은 순백이다.
-# ⚠️ 밝게 올릴 때 **테두리·격자는 같이 올리지 않는다.** 같이 올리면 면이
-#    녹아 붙어 표와 달력의 칸이 안 보인다. 테두리는 패널 대비 1.45 를 지킨다.
+# 기본(밝은 연보라) — v1.22.0. "플로우처럼 밝고 연하게, 깔끔한 나만의 워크스페이스".
+# 바탕은 아주 연한 라벤더 회색, 그 위에 거의 흰 카드가 뜨고, 포인트만 연보라다.
+# ⚠️ 밝게 만들 때 **테두리·격자는 같이 올리지 않는다.** 같이 올리면 면이
+#    녹아 붙어 표와 달력의 칸이 안 보인다. 테두리는 패널 대비 1.30 을 지킨다.
 #    (달력 칸 색 chip1~4·오늘·내일은 그대로 둔다 — 지금 색이 마음에 든다고 하셨다)
+# topbar / topbar_text 는 이제 **왼쪽 메뉴(사이드바)** 의 바탕·글자다(상단바는 없앴다).
 LIGHT = {
-    "topbar": "#E2EAF4",
-    "topbar_text": "#2C3E50",
-    "window_bg": "#EDF1F6",     # 전체 배경
-    "panel_bg": "#FBFCFE",      # 패널 — 거의 흰색, 아주 옅은 청기만
-    "text": "#2C3E50",
-    "subtext": "#4A5B6C",
-    "accent": "#5B8FBF",
-    "border": "#C8D5E2",
-    "header_bg": "#E6EEF7",
-    "select_bg": "#D5E6F8",
-    "select_text": "#1A2A38",
-    "btn_bg": "#EEF4FA",
-    "btn_hover": "#E0EBF7",
-    "btn_pressed": "#CFE0F1",
+    "topbar": "#FBFBFE",        # 왼쪽 메뉴 바탕 — 카드와 같은 흰 결
+    "topbar_text": "#252839",
+    "window_bg": "#F3F4F9",     # 전체 배경 — 아주 연한 라벤더 회색
+    "panel_bg": "#FDFDFF",      # 카드·패널 — 거의 흰색
+    "text": "#252839",
+    "subtext": "#575D76",
+    "accent": "#6A5AE0",        # 연보라 포인트
+    "border": "#D3D6E4",
+    "header_bg": "#F5F5FA",
+    "select_bg": "#ECE9FD",
+    "select_text": "#221A5C",
+    "nav_sel_text": "#4434B8",  # 고른 메뉴의 글자·아이콘
+    "primary": "#5B4BD6",       # 채운 주 단추(＋ 할일 추가) — 흰 글자
+    "primary_hover": "#4C3CC4",
+    "btn_bg": "#FCFCFF",
+    "btn_hover": "#F0EFFB",
+    "btn_pressed": "#E3E0F8",
     "input_bg": "#FFFFFF",      # 입력창 — 순백이라 칠 곳이 또렷하다
-    "grid": "#DCE4EE",
-    "tab_bg": "#E2EAF4",
+    "grid": "#E0E2ED",
+    "tab_bg": "#EEEFF7",
     "today": "#FFC98A",
     "tomorrow": "#FFF2A8",
     "row_text": "#1A2430",     # 강조행 글자색
-    "brief_bg": "#EFF4FA",
-    "brief_text": "#2C3E50",
+    "brief_bg": "#F6F5FD",
+    "brief_text": "#252839",
     "status_ok": "#2E7D32",
     "status_bad": "#C0392B",
-    "scroll": "#BFCEDD",
-    "scroll_hover": "#A6B9CC",
+    "scroll": "#CDD0DF",
+    "scroll_hover": "#B3B7CB",
     "day_sat": "#1257C7",   # 달력 토요일 숫자 — 또렷한 파랑
     "day_sun": "#D01B1B",   # 달력 일요일·공휴일 숫자 — 또렷한 빨강
     "chip_text": "#1B2B3A",
@@ -68,6 +71,9 @@ DARK = {
     "header_bg": "#1F1F1F",
     "select_bg": "#1E3A5F",     # 선택만 파란 기가 돌게
     "select_text": "#DCEBFF",
+    "nav_sel_text": "#DCEBFF",
+    "primary": "#2563EB",
+    "primary_hover": "#1D4ED8",
     "btn_bg": "#1F1F1F",
     "btn_hover": "#2A2A2A",
     "btn_pressed": "#353535",
@@ -94,17 +100,20 @@ DARK = {
 
 # 따뜻한 크림톤 — 가계부 앱 같은 부드러운 느낌 (오래 봐도 눈이 편하다)
 WARM = {
-    "topbar": "#F3E3D3",
-    "topbar_text": "#5B4636",
+    "topbar": "#FDF6EE",        # 왼쪽 메뉴 바탕
+    "topbar_text": "#4A3B2F",
     "window_bg": "#FBF3EA",
     "panel_bg": "#FFFBF6",
     "text": "#4A3B2F",
-    "subtext": "#8A7663",
+    "subtext": "#7A6653",       # 흐린 글자도 4.5:1 (왼쪽 메뉴의 작은 글씨가 읽히게)
     "accent": "#E08A5C",
     "border": "#E6D5C3",
     "header_bg": "#F6E8DA",
     "select_bg": "#F8DFC8",
     "select_text": "#4A3B2F",
+    "nav_sel_text": "#8E4419",
+    "primary": "#A9502A",
+    "primary_hover": "#934522",
     "btn_bg": "#F6E9DC",
     "btn_hover": "#F0DECB",
     "btn_pressed": "#E8D2B9",
@@ -139,7 +148,7 @@ WARM = {
 # 세 가지만 둔다. 여러 벌을 늘려 봐야 고르는 데 시간만 들고, 화면마다 대비를
 # 다시 재야 해서 손이 많이 간다.
 THEMES = {
-    "light": ("기본 (밝은 청회색)", LIGHT, False),
+    "light": ("기본 (밝은 연보라)", LIGHT, False),
     "warm": ("따뜻한 크림", WARM, False),
     "dark": ("다크", DARK, True),
 }
@@ -324,7 +333,7 @@ QMainWindow, QWidget#central {{ background: {p['window_bg']}; }}
 QPushButton {{
     background: {p['btn_bg']};
     border: 1px solid {p['border']};
-    border-radius: 7px;
+    border-radius: 8px;
     padding: 5px 14px;
     color: {p['text']};
 }}
@@ -383,6 +392,42 @@ QTabBar::tab:selected {{
     background: {p['panel_bg']}; color: {p['text']};
     border-bottom-color: {p['panel_bg']};
     border-top: 2px solid {p['accent']}; padding-top: 6px;
+}}
+/* ---- 왼쪽 메뉴(사이드바) + 오른쪽 카드 — v1.22 플로우 같은 배치 ---- */
+QFrame#sidebar {{ background: {p['topbar']}; border: none; border-right: 1px solid {p['border']}; }}
+QLabel#sidetitle {{ color: {p['topbar_text']}; font-size: 17px; font-weight: bold; }}
+QLabel#sideaccount {{ color: {p['subtext']}; font-size: 12px; }}
+QLabel#sidecaption {{ color: {p['subtext']}; font-size: 11px; padding: 0 10px; }}
+QFrame#sideline {{ background: {p['border']}; border: none; min-height: 1px; max-height: 1px; }}
+QListWidget#navlist {{ background: transparent; border: none; outline: none; }}
+QListWidget#navlist::item {{
+    color: {p['topbar_text']}; padding: 0 10px; margin: 1px 0; border-radius: 10px;
+}}
+QListWidget#navlist::item:hover {{ background: {p['btn_hover']}; }}
+QListWidget#navlist::item:selected {{ background: {p['select_bg']}; color: {p['nav_sel_text']}; }}
+QPushButton#sidebtn {{
+    background: transparent; border: none; border-radius: 10px;
+    text-align: left; padding: 9px 10px 9px 13px; color: {p['topbar_text']};
+}}
+QPushButton#sidebtn:hover {{ background: {p['btn_hover']}; }}
+QPushButton#sidebtn:pressed {{ background: {p['btn_pressed']}; }}
+QPushButton#sideprimary {{
+    background: {p['primary']}; color: {fill_text()}; border: none;
+    border-radius: 10px; padding: 9px 12px;
+}}
+QPushButton#sideprimary:hover {{ background: {p['primary_hover']}; }}
+QPushButton#sidesmall {{
+    background: transparent; border: none; border-radius: 7px;
+    padding: 4px 6px; color: {p['subtext']};
+}}
+QPushButton#sidesmall:hover {{ background: {p['btn_hover']}; color: {p['text']}; }}
+QCheckBox#sidecheck {{ color: {p['subtext']}; font-size: 12px; }}
+QWidget#pagearea {{ background: {p['window_bg']}; }}
+QLabel#pagetitle {{ color: {p['text']}; font-size: 21px; font-weight: bold; }}
+QLabel#pagedate {{ color: {p['subtext']}; }}
+QTabWidget#pages::pane {{
+    border: 1px solid {p['border']}; border-radius: 14px; top: 0px;
+    background: {p['panel_bg']};
 }}
 QTableWidget {{
     border: 1px solid {p['border']};
