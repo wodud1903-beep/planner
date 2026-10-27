@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, QByteArray, QEvent, QSize, Qt
+import math
+
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import (QColor, QImage, QImageReader, QPainter, QPixmap,
                            QTransform)
 from PySide6.QtWidgets import (
@@ -51,6 +53,14 @@ class FilePreview(QWidget):
         self._zoom = 0.0      # 0 이면 '칸에 맞춤', 그 외는 배율
         self._pan_from = None   # 끌기 시작한 자리(화면 기준)
         self._pan_at = (0, 0)   # 끌기 시작할 때의 스크롤 위치
+        self.redraws = 0        # 실제로 다시 그린 횟수(검사가 센다)
+        # 휠은 모아서 한 번에 그린다 — 빠르게 굴리면 칸마다 큰 그림을 다시 그리느라
+        # 화면이 멈췄다. 굴리는 동안은 목표 배율만 바꾸고, 멎으면 한 번 그린다.
+        self._wheel_target = None
+        self._wheel_timer = QTimer(self)
+        self._wheel_timer.setSingleShot(True)
+        self._wheel_timer.setInterval(self.WHEEL_MS)
+        self._wheel_timer.timeout.connect(self._apply_wheel)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
@@ -167,6 +177,7 @@ class FilePreview(QWidget):
 
     def _drop_img(self):
         """보던 그림을 놓아 준다."""
+        self._cancel_wheel()
         self._src = None
         self._img_data = None
         self._img_pages = 0
@@ -190,6 +201,16 @@ class FilePreview(QWidget):
         count = count if count and count > 0 else 1
         img = None
         if page <= 0 or r.jumpToImage(page):
+            # 아주 큰 스캔(예: 9000×8000)은 화면 예산 안 크기로 **작게 풀어** 읽는다.
+            # 통째로 들고 있으면 수백 MB 를 먹고, Qt 기본 한도(256MB)에 걸려 아예 못
+            # 읽었다. PNG 처럼 작게 풀기를 못 하는 형식은 잠깐 다 푼 뒤 줄이므로, 이
+            # 읽개 하나만 한도를 넉넉히 연다(줄인 결과만 남는다).
+            size = r.size()
+            if size.isValid() and size.width() * size.height() > FilePreview.MAX_PIXELS:
+                k = math.sqrt(FilePreview.MAX_PIXELS / (size.width() * size.height()))
+                r.setScaledSize(QSize(max(1, int(size.width() * k)),
+                                      max(1, int(size.height() * k))))
+                r.setAllocationLimit(1024)      # MB
             got = r.read()
             if not got.isNull():
                 img = got
@@ -306,9 +327,35 @@ class FilePreview(QWidget):
 
     # ------------------------------------------------------------ 확대
     MIN_ZOOM, MAX_ZOOM = 0.1, 8.0
+    # ⚠️ 그린 그림 한 장의 **크기 예산**. 배율만 막아서는 부족했다 — 휴대폰 사진
+    #    (4000×3000)을 휠로 8배까지 키우면 32000×24000 그림을 만들어 메모리를 9GB 쓰고
+    #    멈췄다가 꺼졌다(v1.21.2 기록). 이제 그린 그림이 이 넓이·한 변을 넘지 않는다.
+    #    4000×3000 사진은 약 141%, A4 PDF 는 약 5배, 작은 그림은 지금처럼 8배까지.
+    MAX_PIXELS = 24_000_000             # 약 96MB
+    MAX_SIDE = 16000
+    WHEEL_MS = 30
+
+    def _zoom_cap(self) -> float:
+        """이 파일을 키울 수 있는 끝 배율 — 그린 그림이 예산을 넘지 않는 데까지."""
+        nat = self._natural()
+        w, h = nat.width(), nat.height()
+        if w <= 0 or h <= 0:
+            return self.MAX_ZOOM
+        return min(self.MAX_ZOOM, math.sqrt(self.MAX_PIXELS / (w * h)),
+                   self.MAX_SIDE / max(w, h))
+
+    def _clamp_zoom(self, scale: float) -> float:
+        # 예산이 늘 이긴다(아주 큰 PDF 쪽은 MIN_ZOOM 보다 작아질 수도 있다)
+        return min(max(self.MIN_ZOOM, scale), self._zoom_cap())
+
+    def _cancel_wheel(self):
+        """굴리던 휠은 잊는다(새 파일·맞춤·창 닫기) — 엉뚱한 파일에 늦게 먹지 않게."""
+        self._wheel_target = None
+        self._wheel_timer.stop()
 
     def zoom_fit(self):
         """칸에 맞춰 보기(기본)."""
+        self._cancel_wheel()
         self._zoom = 0.0
         self.scroll.setWidgetResizable(True)
         # 맞춰 보는 동안에는 스크롤막대가 필요 없다. 켜 두면 막대가 생겼다
@@ -325,8 +372,25 @@ class FilePreview(QWidget):
         cur = self._zoom or self._fit_scale()
         self.set_zoom(cur * factor)
 
+    def wheel_zoom(self, up: bool):
+        """휠 한 칸 — 목표 배율만 바꿔 두고, 굴리기가 멎으면 한 번 그린다."""
+        if self._src is None and self._doc is None:
+            return
+        cur = self._wheel_target if self._wheel_target is not None else self.zoom
+        self._wheel_target = self._clamp_zoom(cur * (1.25 if up else 1 / 1.25))
+        self.lbl_zoom.setText(f"{self._wheel_target * 100:.0f}%")
+        self._wheel_timer.start()
+
+    def _apply_wheel(self):
+        t, self._wheel_target = self._wheel_target, None
+        if t is not None and (self._src is not None or self._doc is not None):
+            self.set_zoom(t)
+
     def set_zoom(self, scale: float):
-        scale = max(self.MIN_ZOOM, min(self.MAX_ZOOM, scale))
+        scale = self._clamp_zoom(scale)
+        if not self.fitted and abs(scale - self._zoom) < 1e-9:
+            self._update_bar()          # 이미 그 배율(끝까지 키운 채 더 굴림) — 다시 안 그린다
+            return
         # 확대하기 전에 지금 화면 한가운데가 그림의 어디쯤인지 기억해 둔다.
         # 그걸 안 하면 확대할 때마다 왼쪽 위 구석으로 튀어, 보고 있던 자리가
         # 화면 밖으로 사라진다.
@@ -360,7 +424,9 @@ class FilePreview(QWidget):
 
     @property
     def zoom(self) -> float:
-        """지금 배율. '맞춤' 이어도 실제 배율을 돌려준다."""
+        """지금 배율. '맞춤' 이어도 실제 배율을 돌려준다(휠로 굴리는 중이면 그 목표)."""
+        if self._wheel_target is not None:
+            return self._wheel_target
         return self._zoom or self._fit_scale()
 
     @property
@@ -439,7 +505,7 @@ class FilePreview(QWidget):
             # 확대한 뒤 자리를 옮기는 것은 **끌기**로 한다(이미 그렇게 동작한다).
             if t == QEvent.Wheel:
                 if self._src is not None or self._doc is not None:
-                    self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
+                    self.wheel_zoom(ev.angleDelta().y() > 0)
                     ev.accept()
                     return True
         if obj is self.view:
@@ -482,7 +548,7 @@ class FilePreview(QWidget):
         휠 알림은 여기까지 올라오지 않기 때문이다.
         """
         if self._src is not None or self._doc is not None:
-            self.zoom_by(1.25 if ev.angleDelta().y() > 0 else 1 / 1.25)
+            self.wheel_zoom(ev.angleDelta().y() > 0)
             ev.accept()
             return
         super().wheelEvent(ev)
@@ -505,9 +571,10 @@ class FilePreview(QWidget):
         if self._src is None and self._doc is None:
             return
         scale = self._fit_scale() if self.fitted else self._zoom
-        pix = self._render(max(self.MIN_ZOOM, min(scale, self.MAX_ZOOM)))
+        pix = self._render(self._clamp_zoom(scale))
         if pix is None or pix.isNull():
             return
+        self.redraws += 1
         self.view.setText("")
         self.view.setPixmap(pix)
         if self.fitted:
