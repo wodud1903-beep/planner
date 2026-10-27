@@ -162,6 +162,63 @@ le.setText("abc")
 pump()
 ok("지운 뒤 같은 글을 다시 쳐도 다시 찾는다", got == ["abc"], got)
 
+print("[5] 크게 보기 — 휠로 끝까지 키워도 메모리가 안 터진다 (일정관리기 v1.22.1)")
+# 휴대폰 사진(4000×3000)을 휠로 15번 굴리면 32000×24000 그림을 만들어 9GB 를 쓰고 꺼졌다.
+from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QWheelEvent  # noqa: E402
+from kbsearch.file_preview import FilePreview  # noqa: E402
+
+
+def wheel(wdg, delta=120):
+    ev = QWheelEvent(QPointF(wdg.rect().center()), QPointF(wdg.mapToGlobal(wdg.rect().center())),
+                     QPoint(0, 0), QPoint(0, delta), Qt.NoButton, Qt.NoModifier,
+                     Qt.NoScrollPhase, False)
+    QApplication.sendEvent(wdg, ev)
+
+
+def settle(pv_):
+    time.sleep(pv_.WHEEL_MS / 1000 + 0.03)
+    app.processEvents()
+
+
+photo = QImage(4000, 3000, QImage.Format_RGB32)
+photo.fill(QColor("#88AA44"))
+_b = QBuffer()
+_b.open(QBuffer.WriteOnly)
+photo.save(_b, "JPG")
+PHOTO = bytes(_b.data())
+del photo
+pv9 = FilePreview()
+pv9.resize(900, 700)
+pv9.show()
+app.processEvents()
+pv9.show_image(PHOTO, "photo", "사진.jpg")
+app.processEvents()
+r0 = pv9.redraws
+for _ in range(30):
+    wheel(pv9.view)                 # 빠르게 30칸
+settle(pv9)
+pm = pv9.view.pixmap()
+ok("그린 그림이 예산 안(넓이·한 변)", pm.width() * pm.height() <= pv9.MAX_PIXELS
+   and max(pm.width(), pm.height()) <= pv9.MAX_SIDE, (pm.width(), pm.height()))
+ok("빠르게 30칸 굴려도 한 번만 그린다", pv9.redraws - r0 == 1, pv9.redraws - r0)
+r1 = pv9.redraws
+for _ in range(5):
+    wheel(pv9.view)
+    settle(pv9)
+ok("끝에서 더 굴려도 다시 그리지 않는다", pv9.redraws == r1)
+scan = QImage(9000, 8000, QImage.Format_RGB32)
+scan.fill(QColor("#FFFFFF"))
+_b = QBuffer()
+_b.open(QBuffer.WriteOnly)
+scan.save(_b, "PNG")
+SCAN = bytes(_b.data())
+del scan
+ok("아주 큰 스캔(9000×8000)도 작게 풀어 열린다", pv9.show_image(SCAN, "scan", "스캔")
+   and pv9._src is not None and pv9._src.width() * pv9._src.height() <= pv9.MAX_PIXELS)
+ok("크게 보기를 열 때 참고 기록을 남긴다",
+   "crashlog.note(" in inspect.getsource(KbView.open_attachment))
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

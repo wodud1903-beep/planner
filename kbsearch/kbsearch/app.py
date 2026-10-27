@@ -107,6 +107,7 @@ def main() -> int:
         return 0
     # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py — 일정관리기와 같다). 두 번째 실행은 위에서 빠졌다.
     prev_crash = crashlog.start()
+    crashlog.install_qt_handler()       # Qt 의 오류 문구도 같은 기록에(창 프로그램이라 안 보인다)
     app.aboutToQuit.connect(crashlog.clean_exit)
     app.commitDataRequest.connect(crashlog.clean_exit)      # 윈도를 끌 때도 정상 종료
     QLocalServer.removeServer(_SINGLE_KEY)
