@@ -28,6 +28,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "CHANGELOG.md"
+# 이 프로그램의 태그만 본다. 같은 저장소의 업무자료검색은 kb-vX.Y.Z 태그를 쓴다
+# (그쪽 변경 이력은 그쪽이 따로 둔다).
+APP_TAGS = "v[0-9]*"
 CONFIG = ROOT / "python" / "planner" / "config.py"
 
 HEAD_NOTE = """# 변경 이력
@@ -93,7 +96,7 @@ def tag_sections() -> list[tuple[str, str]]:
 
     태그가 가리키는 커밋의 메시지를 그대로 쓴다. 버전이 제목에 없으면 태그 이름을 쓴다.
     """
-    tags = sh("git", "tag", "--sort=v:refname").splitlines()
+    tags = sh("git", "tag", "-l", APP_TAGS, "--sort=v:refname").splitlines()
     out = []
     for tag in tags:
         ver = tag.lstrip("v")
@@ -188,7 +191,7 @@ def cmd_from_head() -> int:
 def cmd_check() -> int:
     bad = []
     have = set(read_versions())
-    for tag in sh("git", "tag").splitlines():
+    for tag in sh("git", "tag", "-l", APP_TAGS).splitlines():
         if tag.lstrip("v") not in have:
             bad.append(tag)
     if bad:

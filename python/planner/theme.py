@@ -425,10 +425,33 @@ QCheckBox#sidecheck {{ color: {p['subtext']}; font-size: 12px; }}
 QWidget#pagearea {{ background: {p['window_bg']}; }}
 QLabel#pagetitle {{ color: {p['text']}; font-size: 21px; font-weight: bold; }}
 QLabel#pagedate {{ color: {p['subtext']}; }}
-QTabWidget#pages::pane {{
-    border: 1px solid {p['border']}; border-radius: 14px; top: 0px;
-    background: {p['panel_bg']};
+QTabWidget#pages::pane {{ border: none; top: 0px; background: transparent; }}
+/* 화면 한 장 = 흰 카드 한 장. 대시보드는 카드 여러 장이라 바탕(window_bg) 위에 그대로 */
+QWidget#pagecard {{
+    background: {p['panel_bg']}; border: 1px solid {p['border']}; border-radius: 14px;
 }}
+QWidget#dashpage {{ background: transparent; }}
+QFrame#card {{
+    background: {p['panel_bg']}; border: 1px solid {p['border']}; border-radius: 14px;
+}}
+QLabel#cardtitle {{ color: {p['text']}; font-size: 15px; font-weight: bold; }}
+QLabel#cardcount {{ color: {p['nav_sel_text']}; font-size: 12px; padding-left: 4px; }}
+QTextBrowser#dashtext {{ border: none; background: transparent; padding: 0; }}
+QPushButton#dashprimary {{
+    background: {p['primary']}; color: {fill_text()}; border: none;
+    border-radius: 8px; padding: 5px 14px;
+}}
+QPushButton#dashprimary:hover {{ background: {p['primary_hover']}; }}
+QPushButton#cardbtn {{
+    background: transparent; border: 1px solid {p['border']}; border-radius: 7px;
+    padding: 2px 10px; color: {p['subtext']};
+}}
+QPushButton#cardbtn:hover {{ background: {p['btn_hover']}; color: {p['text']}; }}
+QToolButton#dashtile {{
+    background: transparent; border: none; border-radius: 12px;
+    color: {p['text']}; font-size: 12px; padding: 4px;
+}}
+QToolButton#dashtile:hover {{ background: {p['btn_hover']}; }}
 QTableWidget {{
     border: 1px solid {p['border']};
     border-radius: 9px;

@@ -139,7 +139,7 @@ side.btn_primary.click()
 pump()
 ok("할일 추가를 불렀다", len(called) == 1)
 ok("부를 때 이미 일정 화면", called and called[0] is w.tab_main)
-ok("메뉴도 일정 / 할일", nav.item(nav.currentRow()).data(Qt.UserRole) == "일정 / 할일")
+ok("메뉴도 대시보드", nav.item(nav.currentRow()).data(Qt.UserRole) == "대시보드")
 
 print("\n[6] 접기 — 아이콘만 남기고, 다시 켜도 기억한다")
 wide = side.width()

@@ -14,8 +14,9 @@ import threading
 from html import escape as _esc
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextBrowser,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -199,8 +200,8 @@ class KbView(QWidget):
         self.lbl_att_cap = QLabel("첨부")
         rv.addWidget(self.lbl_att_cap)
         self.lst_att = AttachList(self)
-        self.lst_att.setMinimumHeight(176)
-        rv.addWidget(self.lst_att, 2)
+        self.lst_att.one_row()          # 한 줄 높이로 — 남는 자리는 본문 칸이 쓴다
+        rv.addWidget(self.lst_att)
         brow = QHBoxLayout()
         self.btn_copy_body = QPushButton("본문 복사")
         self.btn_copy_body.clicked.connect(self._copy_body)
@@ -427,11 +428,17 @@ class KbView(QWidget):
             self.lbl_status.setText("첨부를 열지 못했습니다: " + str(e))
             return
         crashlog.note(f"크게 보기 {att.get('name', '')} ({kb_files.size_text(len(data))})")
-        # 창은 닫히면 스스로 없어진다(WA_DeleteOnClose) — 원본을 든 채 남지 않는다
         dlg = AttachViewer(att, data, on_send=lambda a=att: self.copy_attachments([a]),
                            parent=self)
         del data
-        dlg.exec()
+        # ⚠️ exec() 로 띄운 창에 WA_DeleteOnClose 를 두면 Qt 가 exec() **안에서** 창을 바로
+        #    지운다(파이썬이 아직 그 창을 쥐고 있는 채로). 대신 닫은 뒤 deleteLater —
+        #    이벤트가 다 끝난 다음에 없앤다. 닫을 때 그림·PDF 는 done() 이 먼저 놓는다.
+        dlg.setAttribute(Qt.WA_DeleteOnClose, False)
+        try:
+            dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def save_attachment_as(self, att: dict) -> None:
         """오른쪽 단추 [다른 이름으로 저장] — 바탕화면 등에 파일로 꺼내 둔다."""
@@ -554,7 +561,9 @@ class KbTab(QWidget):
         admin = config.is_rates_admin(self.account)
         auth = self.view.auth
         before = _file_ids(kb.load_mine()) | (_file_ids(kb.load_shared()) if admin else set())
-        got = KbEditDialog.run(self.account, self, auth=auth)
+        # 보고 있던 자료가 바로 열리게(예전엔 늘 맨 위 자료부터 나왔다)
+        got = KbEditDialog.run(self.account, self, auth=auth,
+                               select=self.view.lst.current_item_data())
         if got is None:
             return
         shared, mine = got
@@ -679,10 +688,18 @@ class _BodyEdit(QTextEdit):
 class KbEditDialog(QDialog):
     """자료 편집 — 공통(관리자만) / 내 메모."""
 
-    def __init__(self, account: str = "", parent=None, auth=None):
+    def __init__(self, account: str = "", parent=None, auth=None, select=None):
         super().__init__(parent)
         self.setWindowTitle("업무자료 편집")
-        self.resize(900, 720)
+        # 세로를 넉넉히 — 화면 높이의 90%(720~1040). 예전 720 은 본문 칸이 좁았다.
+        try:
+            scr = (parent.screen() if parent is not None else None) \
+                or QGuiApplication.primaryScreen()
+            av = scr.availableGeometry()
+            self.resize(min(1000, av.width() - 40),
+                        max(min(720, av.height() - 40), min(1040, int(av.height() * 0.9))))
+        except Exception:
+            self.resize(1000, 860)
         self.auth = auth
         self.admin = config.is_rates_admin(account)
         self.shared = [dict(x) for x in kb.load_shared()]
@@ -757,7 +774,7 @@ class KbEditDialog(QDialog):
 
         right.addWidget(QLabel("본문"))
         self.txt_body = _BodyEdit(self.drop_attachments)
-        right.addWidget(self.txt_body, 3)
+        right.addWidget(self.txt_body, 5)       # 키운 세로는 대부분 본문이 받는다
 
         # 첨부(그림·PDF) — 본문 칸이나 여기서 Ctrl+V, 탐색기에서 끌어다 놓기
         self.lbl_att = QLabel("첨부 (그림·PDF) — 본문 칸에서 Ctrl+V 해도 여기로 들어옵니다")
@@ -773,7 +790,8 @@ class KbEditDialog(QDialog):
         self.btn_att_add.clicked.connect(self._add_files)
         self.btn_att_ren = QPushButton("이름 바꾸기")
         self.btn_att_ren.setToolTip("고른 첨부의 이름을 바꿉니다 (두 번 누르기 · F2 도 됩니다)")
-        self.btn_att_ren.clicked.connect(self.rename_attachment)
+        # 람다로 감싼다 — 단추가 넘기는 눌림 여부(False)를 새 이름으로 받으면 묻지도 않았다
+        self.btn_att_ren.clicked.connect(lambda: self.rename_attachment())
         self.btn_att_del = QPushButton("빼기")
         self.btn_att_del.clicked.connect(self.remove_attachments)
         for b in (self.btn_att_paste, self.btn_att_add, self.btn_att_ren, self.btn_att_del):
@@ -813,6 +831,32 @@ class KbEditDialog(QDialog):
 
         self._fill()
         self._sync_seed_btn()
+        self.select_item(select)
+
+    def select_item(self, item) -> bool:
+        """그 자료를 골라 둔다(자료검색에서 보던 것). 못 찾으면 그대로(맨 위)."""
+        if not item:
+            return False
+        src = item.get("source")
+        i = self.cmb_src.findData(src)
+        if i < 0:
+            return False                # 공통 자료인데 관리자가 아니면 고칠 수 없다
+        if i != self.cmb_src.currentIndex():
+            self.cmb_src.setCurrentIndex(i)
+
+        def key(x):
+            return tuple((x.get(k) or "").strip() for k in ("title", "category", "finance"))
+
+        want = key(item)
+        lst = self._cur_list()
+        row = next((k for k, x in enumerate(lst) if key(x) == want), -1)
+        if row < 0:                     # 분류·금융사를 고친 직후 등 — 제목만으로
+            row = next((k for k, x in enumerate(lst) if key(x)[0] == want[0]), -1)
+        if row < 0:
+            return False
+        self.lst.setCurrentRow(row)
+        self.lst.scrollToItem(self.lst.item(row), QAbstractItemView.PositionAtCenter)
+        return True
 
     # ---- 묶음 ----
     def _cur_list(self) -> list:
@@ -1047,7 +1091,7 @@ class KbEditDialog(QDialog):
         atts = self.lst_att.atts()
         att = dict(atts[rows[0]])
         old = att.get("name", "")
-        if new_name is None:
+        if not isinstance(new_name, str):
             import os
             from PySide6.QtWidgets import QInputDialog
             stem, ext = os.path.splitext(old)
@@ -1154,12 +1198,13 @@ class KbEditDialog(QDialog):
         self.accept()
 
     @classmethod
-    def run(cls, account: str = "", parent=None, auth=None):
+    def run(cls, account: str = "", parent=None, auth=None, select=None):
         """반환: (공통 목록, 내 메모 목록) 또는 None(취소).
 
+        select: 처음에 골라 둘 자료(자료검색에서 보던 것).
         이름을 바꾼 첨부는 KbTab 이 드라이브 이름도 바꿀 수 있게 `last_renamed` 에 남긴다.
         """
-        d = cls(account, parent, auth=auth)
+        d = cls(account, parent, auth=auth, select=select)
         if d.exec() != QDialog.Accepted:
             return None
         cls.last_renamed = d.renamed()

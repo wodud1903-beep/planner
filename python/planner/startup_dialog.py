@@ -130,7 +130,9 @@ class StartupDialog(QDialog):
             self.lbl_week.setText("")
             return
         base = self._base()
-        self.txt_weekly.setHtml(weekly.to_html(self._rows, base))
+        # 다음 주로 넘기면 제목도 '다음 주 출고' — 예전엔 어느 주든 '이번 주 출고' 로 나왔다
+        self.txt_weekly.setHtml(weekly.to_html(self._rows, base,
+                                               word=weekly.week_word(base, self._today)))
         mon, sun = weekly.week_range(base)
         tag = {0: " (이번 주)", -1: " (지난 주)", 1: " (다음 주)"}.get(self._offset, "")
         self.lbl_week.setText(f"{mon:%Y-%m-%d} ~ {sun:%m-%d}{tag}")
@@ -139,7 +141,8 @@ class StartupDialog(QDialog):
 
     # ---- 내보내기 ----
     def _weekly_text(self) -> str:
-        return weekly.to_text(self._rows, self._base())
+        base = self._base()
+        return weekly.to_text(self._rows, base, word=weekly.week_word(base, self._today))
 
     def _copy_brief(self):
         QGuiApplication.clipboard().setText(self._brief_text)

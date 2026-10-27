@@ -24,7 +24,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
-    QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QSplitter, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import config, customer_files, file_ops, theme
 from .clipfiles import file_mime as _clip_file_mime
@@ -171,23 +171,36 @@ class _FileTable(QTableWidget):
         """창 밖으로 끌어냈다 — 카카오톡·탐색기가 받을 수 있게 진짜 끌기로."""
         if not paths:
             return
+        pm = self._drag_pixmap()            # ⚠️ 끌기를 만들기 **전에** — 아래 설명
         drag = QDrag(self)
         drag.setMimeData(file_mime(paths))
-        icon = self.style().standardIcon(self.style().SP_FileIcon)
-        pm = icon.pixmap(32, 32)
         if not pm.isNull():
             drag.setPixmap(pm)
         drag.exec(Qt.CopyAction)
+
+    def _drag_pixmap(self):
+        """끌고 다니는 동안 보이는 파일 그림.
+
+        ⚠️ 예전엔 `self.style().SP_FileIcon` 으로 불렀는데, 지금 Qt(PySide6 6.8)는
+           스타일 **객체**에서 그 이름을 찾지 못해 오류가 났다 → 고객정보에서 카카오톡으로
+           끌어내기가 통째로 안 됐다. 이름은 QStyle 에서 찾는다. 그리고 끌기 객체를 만든
+           뒤에 오류가 나면 반쯤 만든 끌기가 남으므로, 그림은 먼저 만든다.
+        """
+        try:
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+            return icon.pixmap(32, 32)
+        except Exception:
+            from PySide6.QtGui import QPixmap
+            return QPixmap()
 
     def startDrag(self, actions):
         paths = self._on_drag_paths()
         if not paths:
             return
+        # 끌고 다니는 동안 무엇을 쥐고 있는지 보이게 한다(그림은 끌기보다 먼저 만든다)
+        pm = self._drag_pixmap()
         drag = QDrag(self)
         drag.setMimeData(file_mime(paths))
-        # 끌고 다니는 동안 무엇을 쥐고 있는지 보이게 한다
-        icon = self.style().standardIcon(self.style().SP_FileIcon)
-        pm = icon.pixmap(32, 32)
         if not pm.isNull():
             drag.setPixmap(pm)
 

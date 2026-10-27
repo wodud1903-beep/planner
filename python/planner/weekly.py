@@ -62,12 +62,16 @@ def _in(d, lo: date, hi: date) -> bool:
 
 
 def sections(rows: list, today: date,
-             expiry_months: int = EXPIRY_MONTHS) -> list[dict]:
+             expiry_months: int = EXPIRY_MONTHS, word: str = "이번 주",
+             week_only: bool = False) -> list[dict]:
     """주간 요약의 내용. 브리핑 섹션과 같은 모양이라 그리는 코드를 나눠 쓴다.
 
     `expiry_months` 는 브리핑의 만기 알림 설정과 **따로 둔다**. 브리핑은 코앞의
     건만 짚어 주면 되지만(기본 3개월), 주간 요약은 미리 연락해 둘 명단이라
     더 멀리 본다(기본 6개월).
+    `word` — 제목에 쓰는 그 주의 이름('이번 주' / '다음 주' / '지난 주' / '그 주').
+    `week_only` — 그 주의 출고·계약만(진행 중·만기는 주와 상관없어, 대시보드의
+    다음 주 카드에 넣으면 이번 주 카드와 겹친다).
     """
     mon, sun = week_range(today)
     rows = [r for r in (rows or []) if _live(r)]
@@ -83,13 +87,14 @@ def sections(rows: list, today: date,
     out.sort(key=lambda x: x[0])
     fee_sum = sum(_fee(cr) for _d, cr in out)
     secs.append({
-        "icon": "🚗", "title": "이번 주 출고", "color": "green",
+        "icon": "🚗", "title": f"{word} 출고" + (" 예정" if word == "다음 주" else ""),
+        "color": "green",
         "items": [{"lead": _label(d), "text": cr.get("customer"),
                    "sub": " · ".join(x for x in (cr.get("finance"),
                                                  cr.get("model")) if x)}
                   for d, cr in out],
         "note": f"수수료 합계 {_money(fee_sum)}" if out else "",
-        "empty": "이번 주 출고가 없습니다",
+        "empty": f"{word} 출고가 없습니다",
     })
 
     # ---- 이번 주 계약(발주) ----
@@ -100,13 +105,15 @@ def sections(rows: list, today: date,
             made.append((d, cr))
     made.sort(key=lambda x: x[0])
     secs.append({
-        "icon": "📝", "title": "이번 주 계약", "color": "blue",
+        "icon": "📝", "title": f"{word} 계약", "color": "blue",
         "items": [{"lead": _label(d), "text": cr.get("customer"),
                    "sub": " · ".join(x for x in (cr.get("finance"),
                                                  cr.get("model")) if x)}
                   for d, cr in made],
-        "empty": "이번 주 신규 계약이 없습니다",
+        "empty": f"{word} 신규 계약이 없습니다",
     })
+    if week_only:
+        return secs
 
     # ---- 진행 중 (발주했는데 아직 출고 안 됨) ----
     open_rows = []
@@ -165,11 +172,20 @@ def title_line(today: date) -> str:
     return f"{mon:%Y년 %m월 %d일} ~ {sun:%m월 %d일} 주간 요약"
 
 
+def week_word(base: date, today: date) -> str:
+    """base 가 든 주를 오늘에서 본 이름."""
+    d = (week_range(base)[0] - week_range(today)[0]).days // 7
+    return {0: "이번 주", 1: "다음 주", -1: "지난 주"}.get(d, "그 주")
+
+
 def to_text(rows: list, today: date,
-            expiry_months: int = EXPIRY_MONTHS) -> str:
+            expiry_months: int = EXPIRY_MONTHS, word: str = "이번 주") -> str:
     """복사·파일 저장용 평문."""
-    secs = sections(rows, today, expiry_months)
-    lines = [title_line(today), ""]
+    return render_text(title_line(today), sections(rows, today, expiry_months, word))
+
+
+def render_text(title: str, secs: list) -> str:
+    lines = [title, ""] if title else []
     for s in secs:
         n = s.get("count", len(s["items"]))
         lines.append(f"[{s['title']}]  {n}건" if n else f"[{s['title']}]")
@@ -191,21 +207,29 @@ def to_text(rows: list, today: date,
 
 
 def to_html(rows: list, today: date,
-            expiry_months: int = EXPIRY_MONTHS) -> str:
-    """화면용 — 브리핑과 같은 색·크기 규칙."""
-    secs = sections(rows, today, expiry_months)
+            expiry_months: int = EXPIRY_MONTHS, word: str = "이번 주",
+            head: bool = True) -> str:
+    """화면용 — 브리핑과 같은 색·크기 규칙. head=False 면 맨 위 기간 줄을 뺀다(카드)."""
+    return render_html(title_line(today) if head else "",
+                       sections(rows, today, expiry_months, word))
+
+
+def render_html(title: str, secs: list) -> str:
+    """섹션 목록 → 화면용 HTML(주간 요약·대시보드 다음 주 카드가 같이 쓴다)."""
     txt, sub_c, line_c = theme.c("text"), theme.c("subtext"), theme.c("border")
 
-    out = [f"<div style='font-family:Malgun Gothic;color:{txt};'>",
-           f"<p style='margin:0 0 10px 0;font-size:19px;font-weight:bold;color:{txt};'>"
-           f"{_esc(title_line(today))}</p>"]
-    for s in secs:
+    out = [f"<div style='font-family:Malgun Gothic;color:{txt};'>"]
+    if title:
+        out.append(f"<p style='margin:0 0 10px 0;font-size:19px;font-weight:bold;"
+                   f"color:{txt};'>{_esc(title)}</p>")
+    for k, s in enumerate(secs):
         col, bg = theme.strong(s["color"]), theme.strong_bg(s["color"])
         n = s.get("count", len(s["items"]))
         badge = (f"<span style='background-color:{bg};color:{col};font-size:12px;"
                  f"font-weight:bold;'>&nbsp;{n}건&nbsp;</span>" if n else
                  f"<span style='color:{sub_c};font-size:12px;'>&nbsp;0건&nbsp;</span>")
-        out.append(f"<hr style='border:1px solid {line_c};'>")
+        if title or k:
+            out.append(f"<hr style='border:1px solid {line_c};'>")
         out.append(f"<p style='margin:8px 0 4px 0;font-size:16px;font-weight:bold;"
                    f"color:{col};'>{s['icon']} {_esc(s['title'])} &nbsp;{badge}</p>")
         if s.get("note"):

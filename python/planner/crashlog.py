@@ -263,37 +263,64 @@ def beat() -> None:
     _beat = time.monotonic()
 
 
+_win_mem = None                 # (구조체, 함수, 프로세스) — 처음 한 번만 만든다
+_mem_last = 0                   # 화면 스레드가 마지막으로 잰 값(윈도)
+MEM_SAMPLE_BEATS = 30           # 1초 박동 30번(30초)에 한 번 잰다
+
+
 def _mem_bytes() -> int:
-    """이 프로그램이 쓰는 메모리(윈도: 커밋된 개인 메모리). 모르면 0."""
+    """이 프로그램이 쓰는 메모리(윈도: 커밋된 개인 메모리). 모르면 0.
+
+    ⚠️ v1.22.1 에서는 감시 스레드가 5초마다 이 안에서 ctypes 구조체를 **새로 만들고**,
+       모두가 같이 쓰는 kernel32 함수의 설정을 바꿨다. 그 판에 '힙 손상(0xc0000374)' 으로
+       꺼졌고, 그때 감시 스레드가 바로 여기에 있었다. 이제 구조체·함수는 이 모듈만의
+       것으로 **한 번만** 만들고, 윈도에서는 **화면 스레드에서만** 잰다(sample_memory).
+    """
+    global _win_mem
     try:
         if sys.platform == "win32":
             import ctypes
             from ctypes import wintypes
-
-            class _PMC(ctypes.Structure):
-                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                            ("PeakWorkingSetSize", ctypes.c_size_t),
-                            ("WorkingSetSize", ctypes.c_size_t),
-                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                            ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                            ("PagefileUsage", ctypes.c_size_t),
-                            ("PeakPagefileUsage", ctypes.c_size_t)]
-            k32 = ctypes.windll.kernel32
-            k32.GetCurrentProcess.restype = wintypes.HANDLE
-            fn = k32.K32GetProcessMemoryInfo
-            fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PMC), wintypes.DWORD]
-            fn.restype = wintypes.BOOL
-            pmc = _PMC()
-            pmc.cb = ctypes.sizeof(_PMC)
-            if fn(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+            if _win_mem is None:
+                class _PMC(ctypes.Structure):
+                    _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                                ("PeakWorkingSetSize", ctypes.c_size_t),
+                                ("WorkingSetSize", ctypes.c_size_t),
+                                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                                ("PagefileUsage", ctypes.c_size_t),
+                                ("PeakPagefileUsage", ctypes.c_size_t)]
+                k32 = ctypes.WinDLL("kernel32")      # 이 모듈만의 것 — 남의 설정을 안 건드린다
+                fn = k32.K32GetProcessMemoryInfo
+                fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PMC), wintypes.DWORD]
+                fn.restype = wintypes.BOOL
+                gcp = k32.GetCurrentProcess
+                gcp.argtypes = []
+                gcp.restype = wintypes.HANDLE
+                _win_mem = (_PMC, fn, gcp())
+            pmc_cls, fn, proc = _win_mem
+            pmc = pmc_cls()
+            pmc.cb = ctypes.sizeof(pmc_cls)
+            if fn(proc, ctypes.byref(pmc), pmc.cb):
                 return int(max(pmc.PagefileUsage, pmc.WorkingSetSize))
             return 0
         with open("/proc/self/statm") as f:
             return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
     except Exception:
         return 0
+
+
+def sample_memory() -> None:
+    """화면 스레드에서 메모리를 잰다(윈도). 감시 스레드는 이 값을 읽기만 한다."""
+    global _mem_last
+    _mem_last = _mem_bytes()
+
+
+def _mem_now() -> int:
+    # 윈도는 화면 스레드가 잰 값, 그 밖(검사 환경)은 /proc 을 읽는다 — ctypes 가 아니다
+    return _mem_last if sys.platform == "win32" else _mem_bytes()
 
 
 def _dump_all(kind: str) -> None:
@@ -315,7 +342,7 @@ def _watch_loop(freeze_sec: float, every: float, mem_step: int = MEM_STEP) -> No
         # 메모리 — 1GB·2GB… 처음 넘을 때 한 번씩. 메모리가 바닥나 꺼지면 faulthandler 도
         # 못 적으므로, 그 전에 '어디서 늘고 있었나' 를 남겨 둔다.
         if mem_step > 0:
-            used = _mem_bytes()
+            used = _mem_now()
             level = used // mem_step
             if level > mem_level:
                 mem_level = level
@@ -344,7 +371,14 @@ def start_watchdog(app=None, freeze_sec: float = FREEZE_SEC, every: float = WATC
     if app is not None:
         from PySide6.QtCore import QTimer
         timer = QTimer(app)
-        timer.timeout.connect(beat)
+        n = [0]
+
+        def _tick():                    # 화면 스레드 — 박동 + 30초마다 메모리
+            beat()
+            n[0] += 1
+            if n[0] % MEM_SAMPLE_BEATS == 1:
+                sample_memory()
+        timer.timeout.connect(_tick)
         timer.start(1000)
     beat()
     th = threading.Thread(target=_watch_loop, args=(freeze_sec, every, mem_step),

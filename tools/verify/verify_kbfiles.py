@@ -378,7 +378,7 @@ tab.set_account("admin@x")
 tab.set_auth(A)
 trashed = []
 kb_files.trash = lambda auth, ids: trashed.extend(ids)
-KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None: (
+KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None, select=None: (
     [{"title": "신한 전자약정", "files": [att]}],           # P1·Z9 를 뺐다
     [{"title": "내 자료", "files": []}]))                   # att2 를 뺐다
 tab._edit()
@@ -438,7 +438,7 @@ ok("저장되는 첨부에 옛 이름 표시는 남지 않는다",
 renamed_remote = []
 real_rr = kb_files.rename_remote
 kb_files.rename_remote = lambda auth, fid, name: renamed_remote.append((fid, name)) or True
-KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None: (
+KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None, select=None: (
     setattr(cls, "last_renamed", [(up["id"], "신분증 사본.png")]) or
     ([], [{"title": "이름 시험", "files": [dict(up, name="신분증 사본.png")]}])))
 tab2 = KbTab()
@@ -574,6 +574,143 @@ for _ in range(10):
 ok("오른쪽 단추 메뉴도 쓰고 나면 없앤다", dead == [1])
 import inspect as _insp  # noqa: E402
 ok("메뉴를 띄운 뒤 deleteLater 한다", "m.deleteLater()" in _insp.getsource(kb_attach.AttachList.contextMenuEvent))
+
+print("\n[15] 첨부 칸은 한 줄 높이 — 남는 자리는 본문이 (첨부는 많아야 3장)")
+from PySide6.QtCore import Qt  # noqa: E402
+three = []
+for i, nm in enumerate(("근보증서 예시.png", "신분증 앞.png", "약정서.pdf")):
+    a = {"id": f"ROW{i}", "name": nm, "size": 1000,
+         "mime": "application/pdf" if nm.endswith(".pdf") else "image/png"}
+    cp = kb_files.cache_path(a)
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_bytes(png_bytes("#2563EB", 300, 420) if nm.endswith(".png") else b"%PDF-1.4\n")
+    three.append(a)
+kb.save_shared([{"category": "캐피탈", "title": "MG캐피탈", "body": "본문\n" * 30, "files": three},
+                {"category": "기타", "title": "첨부 없는 자료", "body": "x"}])
+v5 = KbView()
+v5.set_auth(A)
+v5.resize(1200, 800)
+v5.show()
+pump(20)
+v5.lst.setCurrentRow([v5.lst.item(i).text() for i in range(v5.lst.count())].index("MG캐피탈"))
+pump(20)
+la = v5.lst_att
+ok("첨부 3개", la.count() == 3, la.count())
+ok("높이 = 한 줄", la.height() == la.row_height(), (la.height(), la.row_height()))
+ok("칸 하나 높이 정도(예전 최소 176 보다 낮다)", la.height() <= la.gridSize().height() + 12
+   and la.height() < 176, la.height())
+ok("세로 스크롤은 없다", la.verticalScrollBarPolicy() == Qt.ScrollBarAlwaysOff)
+vp = la.viewport().rect()
+rects = [la.visualItemRect(la.item(i)) for i in range(3)]
+ok("세 개가 모두 칸 안에 보인다(이름 줄까지)", all(vp.contains(r) for r in rects),
+   (vp, [(r.x(), r.y(), r.width(), r.height()) for r in rects]))
+ok("한 줄로 늘어선다", len({r.top() for r in rects}) == 1, [r.top() for r in rects])
+h_att, h_body = la.height(), v5.txt_body.height()
+v5.resize(1200, 1100)
+pump(20)
+ok("창을 키워도 첨부 칸은 그대로", la.height() == h_att, (h_att, la.height()))
+ok("늘어난 자리는 본문이 쓴다", v5.txt_body.height() >= h_body + 250, (h_body, v5.txt_body.height()))
+v5.resize(420, 800)
+pump(20)
+rects = [la.visualItemRect(la.item(i)) for i in range(3)]
+ok("좁으면 가로로 넘긴다(여전히 한 줄)", len({r.top() for r in rects}) == 1)
+ok("그때만 높이가 막대만큼 는다", la.height() == la.row_height(with_scrollbar=True),
+   (la.height(), la.row_height(True)))
+ok("이름 줄이 막대에 안 가린다", rects[0].bottom() <= la.viewport().rect().bottom(),
+   (rects[0].bottom(), la.viewport().rect().bottom()))
+v5.resize(1200, 800)
+pump(20)
+ok("넓히면 다시 한 줄 높이", la.height() == la.row_height())
+v5.lst.setCurrentRow([v5.lst.item(i).text() for i in range(v5.lst.count())].index("첨부 없는 자료"))
+pump(10)
+ok("첨부 없는 자료는 칸을 숨긴다", not la.isVisible())
+ok("편집 창의 첨부 칸은 그대로(옆에 단추가 있어 한 줄 고정 184)",
+   "self.lst_att.setFixedHeight(184)" in _insp.getsource(KbEditDialog))
+v5.hide()
+
+print("\n[16] 끌어다 놓기 — 탐색기에서 첨부 칸으로 (진짜 끌기 알림으로)")
+from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent  # noqa: E402
+_dd = os.path.join(tempfile.mkdtemp(), "끌어온 사진.png")
+with open(_dd, "wb") as f:
+    f.write(png_bytes("#B45309"))
+kb.save_shared([{"category": "캐피탈", "title": "메리츠캐피탈", "body": "가"},
+                {"category": "캐피탈", "title": "가 먼저", "body": "나"}])
+kb.save_mine([{"category": "심사서류", "title": "개인 심사서류", "body": "다"},
+              {"category": "기타", "title": "내 메모 둘", "body": "라"}])
+config.is_rates_admin = lambda a: a == "admin@x"
+d6 = KbEditDialog("admin@x", None, auth=A)
+d6.show()
+pump(10)
+d6.lst.setCurrentRow(0)
+pump(5)
+
+
+def drag_into(target, path):
+    vp = target.viewport()
+    m = QMimeData()
+    m.setUrls([QUrl.fromLocalFile(path)])
+    pos = vp.rect().center()
+    acts = Qt.CopyAction | Qt.MoveAction | Qt.LinkAction
+    e1 = QDragEnterEvent(pos, acts, m, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(vp, e1)
+    e2 = QDragMoveEvent(pos, acts, m, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(vp, e2)
+    e3 = QDropEvent(QPointF(pos), acts, m, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(vp, e3)
+    pump(5)
+    return e1.isAccepted(), e3.isAccepted()
+
+
+from PySide6.QtCore import QPointF  # noqa: E402
+n0 = d6.lst_att.count()
+acc = drag_into(d6.lst_att, _dd)
+ok("첨부 칸이 끌어 온 파일을 받는다", acc == (True, True), acc)
+ok("첨부가 하나 늘었다", d6.lst_att.count() == n0 + 1, (n0, d6.lst_att.count()))
+ok("이름 그대로", d6.lst_att.atts()[-1].get("name") == "끌어온 사진.png")
+acc = drag_into(d6.txt_body, _dd)
+ok("본문 칸에 놓아도 첨부로(같은 것은 한 번만)", acc[1] and d6.lst_att.count() == n0 + 1,
+   d6.lst_att.count())
+d6.reject()
+
+print("\n[17] [자료 편집] 은 보던 자료부터 · 편집 창은 넉넉한 세로")
+d7 = KbEditDialog("admin@x", None, auth=A,
+                  select={"source": kb.SRC_SHARED, "title": "메리츠캐피탈", "category": "캐피탈"})
+ok("공통 자료 — 그 자료가 골라져 있다", d7.ed_title.text() == "메리츠캐피탈"
+   and d7.cmb_src.currentData() == kb.SRC_SHARED, d7.ed_title.text())
+d7.reject()
+d8 = KbEditDialog("admin@x", None, auth=A,
+                  select={"source": kb.SRC_MINE, "title": "내 메모 둘", "category": "기타"})
+ok("내 메모 — 묶음도 바꿔서 그 자료", d8.ed_title.text() == "내 메모 둘"
+   and d8.cmb_src.currentData() == kb.SRC_MINE, (d8.ed_title.text(), d8.cmb_src.currentData()))
+d8.reject()
+d9 = KbEditDialog("staff@x", None, auth=A,
+                  select={"source": kb.SRC_SHARED, "title": "메리츠캐피탈"})
+ok("관리자가 아니면 공통 자료는 못 고치니 내 메모 맨 위", d9.ed_title.text() == "개인 심사서류",
+   d9.ed_title.text())
+d9.reject()
+d10 = KbEditDialog("admin@x", None, auth=A, select={"source": kb.SRC_SHARED, "title": "없는 자료"})
+ok("못 찾으면 맨 위", d10.lst.currentRow() == 0)
+_av = QGuiApplication.primaryScreen().availableGeometry()
+ok("편집 창 세로가 넉넉하다(화면의 80% 이상 또는 1040)",
+   d10.height() >= min(1040, int(_av.height() * 0.8)) or d10.height() >= _av.height() - 40,
+   (d10.height(), _av.height()))
+d10.reject()
+seen_sel = []
+KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None, select=None:
+                               seen_sel.append(select))
+kb.save_shared([{"category": "캐피탈", "title": "가 먼저", "body": "나"},
+                {"category": "캐피탈", "title": "메리츠캐피탈", "body": "가"}])
+tab3 = KbTab()
+tab3.set_account("admin@x")
+tab3.view.reload()
+pump(10)
+_titles = [tab3.view.lst.item(i).text() for i in range(tab3.view.lst.count())]
+tab3.view.lst.setCurrentRow(_titles.index("메리츠캐피탈"))
+pump(5)
+tab3._edit()
+ok("탭이 보던 자료를 넘긴다", seen_sel and (seen_sel[-1] or {}).get("title") == "메리츠캐피탈",
+   seen_sel)
 
 print()
 if FAIL:

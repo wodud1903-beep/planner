@@ -17,18 +17,19 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from html import escape as html_escape
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout,
-    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QSystemTrayIcon,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView,
+    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSystemTrayIcon,
     QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import (
     alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
-    deliver_cal, drive_path, followup,
+    dashboard, deliver_cal, drive_path, followup,
     google_client, hotkey, kb, navicons, searchcombo, sheets, sync, theme, updater,
+    weekly,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -159,6 +160,8 @@ class MainWindow(QMainWindow):
     # 좁아도 되지만(가로 스크롤이 생길 뿐), 여기서 더 줄이면 어느 탭이든
     # 버튼 줄이 서로 겹쳐 못 쓰게 된다.
     MIN_WIDTH = 1040                # 왼쪽 메뉴(216) 몫만큼 넓혔다 — 좁으면 메뉴를 접는다
+    MIN_HEIGHT = 660                # 세로는 끌어서 바꾸되, 왼쪽 메뉴가 겹치지 않을 만큼은
+    TITLE_KEEP = 60                 # 제목표시줄이 화면 아래쪽에 적어도 이만큼은 남게
     # 기본 폭. 1570 은 쓰시는 분이 정해 주신 값(상단바 시절) — 고객명 236 · 내용 255
     # 를 넣고도 남는 폭이다. v1.22 에 왼쪽 메뉴와 카드 여백이 생기며 표 자리가
     # LAYOUT_EXTRA 만큼 줄었으므로 그만큼 더한다(표가 들어가는 폭은 그대로).
@@ -174,13 +177,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(config.APP_NAME)
-        # 창 크기는 딱 두 가지 — '보통' 과 '최대화'.
-        #
-        # 보통일 때는 세로를 고정하고 가로만 끌어서 늘린다. 세로를 풀면 위아래로
-        # 늘렸을 때 '이번주 일정' 과 '내 할일' 사이 비율이 틀어지고 브리핑 칸이
-        # 허옇게 남는다. 반면 가로는 고객관리 표가 넓을수록 좋다.
-        # 최대화는 그 세로 고정을 잠시 풀어 화면을 꽉 채우고, 되돌리면 다시
-        # 고정한다(_on_window_state). 그래서 어중간한 세로 크기는 나올 수 없다.
+        # 창 크기 — 가로·세로 모두 끌어서 맞춘다(v1.22.2 부터 세로도. 예전엔 세로를
+        # 못 바꾸게 막았는데 "세로도 키우고 싶다" 고 하셨다). 늘어난 세로는 '내 할일'
+        # 표가 받는다('이번주 일정' 은 최대 300 이라 허옇게 남지 않는다).
+        # ⚠️ 단 하나 지키는 것 — **제목표시줄이 화면 밖으로 나가지 않게.** 제목표시줄이
+        #    밖에 있으면 창을 끌어 옮길 수도, 닫을 수도 없다(_keep_on_screen).
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         _avail = self._screen_avail()
         # 고객관리 표(차량가격·내용까지)가 가로 스크롤 없이 들어가는 폭(DEFAULT_W).
@@ -188,18 +189,22 @@ class MainWindow(QMainWindow):
         # 안전하다(그때는 왼쪽 메뉴를 접으면 표 자리가 넓어진다).
         _w = min(self.DEFAULT_W, _avail.width() - 20)
         _h = min(920, _avail.height() - 60)
-        self._normal_h = _h          # 보통 크기의 세로. 최대화를 풀면 이리 돌아온다
+        # 보통 크기의 세로 — 지난번에 맞춰 둔 값(없으면 920). 최대화를 풀면 이리 돌아온다
+        self._normal_h = self._saved_height(_h, _avail)
         self._normal_w = _w          # 마지막으로 쓰던 보통 가로(아래에서 덮어씀)
         self._maximized = False
         self._snapping = False
-        self._snap_from = None
-        # ⚠️ 세로를 setFixedHeight 로 못 박으면 최대화가 아예 안 된다.
-        #    창관리자는 최대화할 때도 '최대 세로' 를 지킨다. min==max 이면
-        #    최대화를 눌러도 크기는 그대로고 isMaximized() 만 True 가 된다.
-        #    최대화한 '뒤에' 고정을 푸는 방식도 소용없다 — 크기는 이미 그때
-        #    정해진다. 그래서 위쪽은 열어 두고, 최대화가 아닐 때 세로가 달라지면
-        #    도로 되돌리는 식으로 '두 가지 크기' 를 지킨다(resizeEvent).
-        self.setMinimumHeight(_h)
+        self._keeping = False
+        # 옮기거나 키운 뒤 '제목표시줄이 화면 안인가' 를 한 번만 본다(끄는 동안 계속 안 부르게)
+        self._keep_timer = QTimer(self)
+        self._keep_timer.setSingleShot(True)
+        self._keep_timer.setInterval(0)
+        self._keep_timer.timeout.connect(self._keep_on_screen)
+        # ⚠️ 세로 상한은 걸지 않는다(setMaximumHeight 로 화면 높이를 걸면 최대화가
+        #    반쪽이 되거나 죽는다 — 창관리자는 최대화할 때도 상한을 지킨다).
+        #    화면보다 커지는 것은 _keep_on_screen 이 줄인다. 하한은 왼쪽 메뉴가
+        #    겹치지 않을 만큼만.
+        self.setMinimumHeight(min(self.MIN_HEIGHT, _avail.height() - 60))
         self.setMaximumHeight(Q_SIZE_MAX)
         # 가로 상한은 걸지 않는다. 창관리자는 '이 창이 얼마나 커질 수 있는가' 를
         # 이 값으로 판단하는데, 화면폭보다 작은 상한이 걸려 있으면 최대화가
@@ -215,7 +220,7 @@ class MainWindow(QMainWindow):
         self._width_timer.timeout.connect(self._remember_width)
         # 지난번에 맞춰 둔 폭이 있으면 그대로 연다(매번 다시 끌지 않도록)
         self._normal_w = self._saved_width(_w, _avail)
-        self.resize(self._normal_w, _h)
+        self.resize(self._normal_w, self._normal_h)
         # 지난번에 최대화로 쓰던 사람은 최대화로 열어 준다
         self._want_maximized = self._saved_maximized()
         self._center_on_screen()
@@ -415,6 +420,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 테마
     def _apply_side_theme(self):
         self.sidebar.apply_theme()      # 메뉴 아이콘을 새 테마 색으로 다시 그린다
+        for t in getattr(self, "dash_tiles", []):
+            t.apply_theme()
+        self.refresh_dashboard()        # 카드 글의 색도 테마를 따른다
 
     def apply_theme(self):
         theme.set_theme(getattr(self.settings, "theme", "")
@@ -651,7 +659,7 @@ class MainWindow(QMainWindow):
         self._cal_win.show()
         self._cal_win.raise_()
         self._cal_win.activateWindow()
-        if goto is not None:
+        if isinstance(goto, date):
             self._cal_win.goto_date(goto)
 
     # ⚠️ 캘린더 창은 CalendarWindow 쪽에서 **따로 뜨는 창**으로 만든다
@@ -758,7 +766,9 @@ class MainWindow(QMainWindow):
         self.btn_settings = self.sidebar.btn_settings
         self.btn_settings.clicked.connect(self.on_settings_click)
         self.btn_calendar = self.sidebar.btn_calendar
-        self.btn_calendar.clicked.connect(self.open_calendar)
+        # ⚠️ 람다로 감싼다 — 단추는 눌림 여부(False)를 넘겨, open_calendar 가 그걸 '갈 날짜' 로
+        #    받아 오류가 났다(v1.22.1 기록: 'bool' object has no attribute 'year').
+        self.btn_calendar.clicked.connect(lambda: self.open_calendar())
         self.sidebar.btn_primary.clicked.connect(self.quick_add_todo)
 
         # 오른쪽 — 쪽 제목줄 + 흰 카드(탭 내용)
@@ -790,7 +800,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(area, 1)
 
         self.tab_main = self._build_main_tab()
-        self.tabs.addTab(self.tab_main, "일정 / 할일")
+        self.tabs.addTab(self.tab_main, "대시보드")
         # 탭 순서를 사람이 바꿀 수 있으므로 번호로 찾으면 안 된다.
         # 캘린더에서 '해당 일정으로 이동' 할 때 이 위젯으로 찾는다.
         self.tab_cust = self._build_customer_tab()
@@ -831,9 +841,14 @@ class MainWindow(QMainWindow):
         self._on_page_changed(self.tabs.currentIndex())
 
     def _pad_pages(self):
-        """카드 안쪽 여백을 고르게 — 화면마다 기본값이 달라 들쭉날쭉했다."""
+        """화면마다 흰 카드 한 장 + 고른 안쪽 여백. 대시보드는 카드 여러 장이라 바탕 그대로."""
         for i in range(self.tabs.count()):
-            lay = self.tabs.widget(i).layout()
+            page = self.tabs.widget(i)
+            if page is self.tab_main:
+                continue
+            page.setObjectName("pagecard")
+            page.setAttribute(Qt.WA_StyledBackground, True)
+            lay = page.layout()
             if lay is not None:
                 lay.setContentsMargins(18, 16, 18, 16)
 
@@ -846,8 +861,18 @@ class MainWindow(QMainWindow):
 
     def _on_page_changed(self, idx: int):
         self.sidebar.select(idx)
-        self.lbl_page.setText(self.tabs.tabText(idx) if idx >= 0 else "")
+        self._paint_page_title()
         self._paint_today()
+
+    def _paint_page_title(self):
+        """쪽 제목 — 대시보드는 인사말(플로우처럼), 다른 화면은 메뉴 이름."""
+        idx = self.tabs.currentIndex()
+        if idx >= 0 and self.tabs.widget(idx) is self.tab_main:
+            text = dashboard.greeting()
+        else:
+            text = self.tabs.tabText(idx) if idx >= 0 else ""
+        if self.lbl_page.text() != text:
+            self.lbl_page.setText(text)
 
     def _paint_today(self):
         d = date.today()
@@ -867,7 +892,7 @@ class MainWindow(QMainWindow):
             pass
 
     def quick_add_todo(self):
-        """[＋ 할일 추가] — 어느 화면에서든 '일정 / 할일' 로 가서 바로 적는다."""
+        """[＋ 할일 추가] — 어느 화면에서든 대시보드로 가서 바로 적는다."""
         self.tabs.setCurrentWidget(self.tab_main)
         self.on_todo_add()
 
@@ -875,9 +900,13 @@ class MainWindow(QMainWindow):
     def _tab_names(self) -> list:
         return [self.tabs.tabText(i) for i in range(self.tabs.count())]
 
+    # 이름을 바꾼 메뉴 — 저장된 순서의 옛 이름을 새 이름으로 읽는다(안 그러면 맨 끝으로 밀린다)
+    _TAB_RENAMED = {"일정 / 할일": "대시보드"}
+
     def _restore_tab_order(self):
         """설정에 적힌 순서대로 탭을 옮긴다."""
-        want = [str(x) for x in (getattr(self.settings, "tab_order", None) or [])]
+        want = [self._TAB_RENAMED.get(str(x), str(x))
+                for x in (getattr(self.settings, "tab_order", None) or [])]
         if want:
             self._move_tabs(want)
 
@@ -928,10 +957,27 @@ class MainWindow(QMainWindow):
             self.tab_files.reload()
 
     def _build_main_tab(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
+        """대시보드 — 플로우 첫 화면처럼 흰 카드를 늘어놓는다(v1.23, dashboard.py).
 
-        # 상단 조작줄
+        예전 '일정 / 할일' 화면의 표·단추는 **그대로** 카드에 담았다(이름·연결 그대로).
+        [주간 요약] 을 눌러야 보이던 오늘 브리핑·이번 주 요약을 늘 펼쳐 두고, 다음 주
+        요약을 더했다. 내용은 refresh_dashboard() 가 모아서 그린다.
+        """
+        w = QWidget()
+        w.setObjectName("dashpage")
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+        v = QVBoxLayout(body)
+        v.setContentsMargins(2, 0, 8, 8)
+        v.setSpacing(12)
+
+        # 위 조작줄
         # [설정]·[캘린더 열기] 는 왼쪽 메뉴로 옮겼다(어느 화면에서든 쓰는 것이라)
         row = QHBoxLayout()
         self.btn_fetch = QPushButton("새로고침")
@@ -972,42 +1018,174 @@ class MainWindow(QMainWindow):
         row.addWidget(self.chk_autofetch)
         v.addLayout(row)
 
-        # 이번주 일정
-        self.lbl_week = QLabel("이번주 일정")
-        v.addWidget(self.lbl_week)
-        self.tbl_week = self._make_table(["날짜", "시각", "구분", "내용"], [130, 80, 80, 620])
-        self.tbl_week.setMaximumHeight(300)   # 행이 높아진 만큼 같이 늘린다
-        # 일정을 더블클릭하면 캘린더 창이 그 날짜로 열린다 (바로 수정·삭제 가능)
-        self.tbl_week.doubleClicked.connect(self._on_week_dblclick)
-        v.addWidget(self.tbl_week)
+        # 바로가기 — 플로우 첫 화면의 앱 아이콘 줄. 탭은 아직 안 만들었으므로 누를 때 찾는다.
+        tiles = QHBoxLayout()
+        tiles.setSpacing(4)
+        self.dash_tiles = []
+        for icon_name, text, go in (
+                ("calendar", "캘린더", lambda: self.open_calendar()),
+                ("people", "고객관리", lambda: self.tabs.setCurrentWidget(self.tab_cust)),
+                ("folder", "고객정보", lambda: self.tabs.setCurrentWidget(self.tab_files)),
+                ("search", "자료검색", lambda: self.tabs.setCurrentWidget(self.tab_kb)),
+                ("chat", "멘트복사", lambda: self.tabs.setCurrentWidget(self.tab_greet)),
+                ("calc", "수당계산기", lambda: self.tabs.setCurrentWidget(self.tab_comm))):
+            t = dashboard.ShortcutTile(icon_name, text)
+            t.clicked.connect(go)
+            tiles.addWidget(t)
+            self.dash_tiles.append(t)
+        tiles.addStretch()
+        v.addLayout(tiles)
 
-        # 내 할일 조작줄
-        trow = QHBoxLayout()
-        trow.addWidget(QLabel("내 할일"))
+        # ---- 내 할일 ----
+        self.card_todo = dashboard.Card("내 할일")
+        self.btn_todo_add = QPushButton("＋ 할일 추가")
+        self.btn_todo_add.setObjectName("dashprimary")
+        self.btn_todo_add.setCursor(Qt.PointingHandCursor)
+        self.btn_todo_add.clicked.connect(self.on_todo_add)
+        self.card_todo.add_action(self.btn_todo_add)
         for text, slot in [
-            ("추가", self.on_todo_add), ("수정", self.on_todo_edit),
-            ("삭제", self.on_todo_del), ("완료", self.on_todo_done),
-            ("메모 복사", self.on_todo_copy),
+            ("수정", self.on_todo_edit), ("삭제", self.on_todo_del),
+            ("완료", self.on_todo_done), ("메모 복사", self.on_todo_copy),
         ]:
             b = QPushButton(text)
             b.clicked.connect(slot)
-            trow.addWidget(b)
+            self.card_todo.add_action(b)
         # 전체 선택/해제
         self.btn_todo_all = QPushButton("전체선택")
         self.btn_todo_all.clicked.connect(self._toggle_all_todo_checks)
-        trow.addWidget(self.btn_todo_all)
-        trow.addStretch()
-        v.addLayout(trow)
-
+        self.card_todo.add_action(self.btn_todo_all)
         # 맨 왼쪽에 체크박스 열(선택) 추가 → 여러 건 일괄 완료
         self.tbl_todo = self._make_table(
-            ["선택", "날짜", "시각", "할일", "알람", "메모"], [46, 120, 80, 360, 60, 220])
+            ["선택", "날짜", "시각", "할일", "알람", "메모"], [46, 110, 70, 300, 56, 200],
+            stretch_last=False)
+        # 카드 폭에 맞춘다 — '할일' 칸이 남는 폭을 받는다(가로 스크롤이 생기지 않게)
+        self.tbl_todo.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.tbl_todo.doubleClicked.connect(self._on_todo_dblclick)
         # 우클릭 컨텍스트 메뉴 (버튼과 동일한 동작)
         self.tbl_todo.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl_todo.customContextMenuRequested.connect(self._todo_context_menu)
-        v.addWidget(self.tbl_todo)
+        self.card_todo.body.addWidget(self.tbl_todo)
+
+        # ---- 오늘 브리핑 · 이번 주 요약 · 다음 주 요약 ----
+        def text_card(title, what):
+            c = dashboard.Card(title)
+            btn = QPushButton("복사")
+            btn.setObjectName("cardbtn")
+            btn.setToolTip("이 카드의 내용을 글로 복사합니다(카톡에 붙여 넣기)")
+            btn.clicked.connect(lambda: self._copy_dash(what))
+            c.add_action(btn)
+            t = dashboard.text_view()
+            c.body.addWidget(t)
+            return c, t
+
+        self.card_brief, self.txt_dash_brief = text_card("오늘 브리핑", "brief")
+
+        # ---- 이번주 일정 ----
+        self.lbl_week = QLabel("이번주 일정")
+        self.card_sched = dashboard.Card(title_label=self.lbl_week)
+        self.tbl_week = self._make_table(["날짜", "시각", "구분", "내용"], [104, 70, 80, 160])
+        self.tbl_week.setColumnHidden(2, True)    # 늘 '일정' 이라 카드에서는 접어 둔다
+        # 일정을 더블클릭하면 캘린더 창이 그 날짜로 열린다 (바로 수정·삭제 가능)
+        self.tbl_week.doubleClicked.connect(self._on_week_dblclick)
+        self.card_sched.body.addWidget(self.tbl_week)
+
+        self.card_this, self.txt_dash_week = text_card("이번 주 요약", "week")
+        self.card_next, self.txt_dash_next = text_card("다음 주 요약", "next")
+
+        for c in (self.card_todo, self.card_brief):
+            c.setMinimumHeight(330)
+        for c in (self.card_sched, self.card_this, self.card_next):
+            c.setMinimumHeight(320)
+        self.dash_grid = dashboard.DashGrid([self.card_todo, self.card_brief],
+                                            [self.card_sched, self.card_this, self.card_next])
+        v.addWidget(self.dash_grid, 1)
+
+        # 일정·할일·시트가 한꺼번에 바뀌어도 한 번만 그린다
+        self._dash_timer = QTimer(self)
+        self._dash_timer.setSingleShot(True)
+        self._dash_timer.setInterval(120)
+        self._dash_timer.timeout.connect(self._paint_dashboard)
         return w
+
+    # ------------------------------------------------------------ 대시보드 내용
+    def refresh_dashboard(self):
+        t = getattr(self, "_dash_timer", None)
+        if t is not None:
+            t.start()
+
+    def _paint_dashboard(self):
+        today = date.today()
+        try:
+            self.txt_dash_brief.setHtml(self.build_briefing_html(with_head=False))
+            n_cal, n_todo = self._brief_today_counts
+            self.card_brief.set_count(f"오늘 일정 {n_cal} · 할일 {n_todo}")
+        except Exception as e:
+            self.txt_dash_brief.setPlainText(f"브리핑을 만들지 못했습니다: {e}")
+        mon, sun = weekly.week_range(today)
+        self.card_this.set_count(f"{mon:%m/%d} ~ {sun:%m/%d}")
+        if self.sheet_rows:
+            self.txt_dash_week.setHtml(weekly.to_html(self.sheet_rows, today, head=False))
+        else:
+            self.txt_dash_week.setHtml(self._dash_need_sheet())
+        nmon, nsun = weekly.week_range(today + timedelta(days=7))
+        self.card_next.set_count(f"{nmon:%m/%d} ~ {nsun:%m/%d}")
+        html = weekly.render_html("", self._next_week_sections())
+        if not self.sheet_rows:
+            html += self._dash_need_sheet("출고 예정·계약은 ")
+        self.txt_dash_next.setHtml(html)
+        self.card_todo.set_count(f"{self.tbl_todo.rowCount()}건")
+
+    def _dash_need_sheet(self, lead: str = "") -> str:
+        return (f"<p style='color:{theme.c('subtext')};'>{html_escape(lead)}"
+                "고객관리 시트를 읽은 뒤에 만들어집니다.<br>"
+                "[고객관리] 에서 [불러오기] 를 눌러 주세요.</p>")
+
+    def _next_week_sections(self) -> list:
+        """다음 주(월~일) — 구글 일정 · 할일 · (시트) 출고 예정 · 계약."""
+        today = date.today()
+        mon, sun = weekly.week_range(today + timedelta(days=7))
+        evs = sorted((ev for ev in self.cal_events if mon <= ev.start.date() <= sun),
+                     key=lambda e: e.start)
+        secs = [{
+            "icon": "📅", "title": "다음 주 일정", "color": "blue",
+            "items": [{"lead": self._d_label(ev.start.date()), "text": ev.summary,
+                       "sub": ev.time_text() if ev.has_time else ""} for ev in evs[:20]],
+            "count": len(evs), "more": max(0, len(evs) - 20),
+            "empty": "다음 주 일정이 없습니다",
+        }]
+        todo = []
+        for it in self.todos:
+            if it.done or it.repeats:
+                continue
+            if it.run_date and mon <= it.run_date <= sun:
+                todo.append((it.run_date, it.title))
+        for tk in self.visible_gtasks():
+            if tk.has_due and tk.due and mon <= tk.due <= sun:
+                todo.append((tk.due, tk.title))
+        todo.sort(key=lambda x: x[0])
+        secs.append({
+            "icon": "✅", "title": "다음 주 할일", "color": "green",
+            "items": [{"lead": self._d_label(d), "text": t} for d, t in todo[:20]],
+            "count": len(todo), "more": max(0, len(todo) - 20),
+            "empty": "다음 주가 마감인 할일이 없습니다",
+        })
+        if self.sheet_rows:
+            secs += weekly.sections(self.sheet_rows, mon, word="다음 주", week_only=True)
+        return secs
+
+    def _copy_dash(self, what: str):
+        today = date.today()
+        if what == "brief":
+            text = self.build_briefing()
+        elif what == "week":
+            text = (weekly.to_text(self.sheet_rows, today) if self.sheet_rows
+                    else "고객관리 시트를 읽은 뒤에 만들어집니다.")
+        else:
+            nmon, nsun = weekly.week_range(today + timedelta(days=7))
+            text = weekly.render_text(f"{nmon:%Y년 %m월 %d일} ~ {nsun:%m월 %d일} 다음 주 요약",
+                                      self._next_week_sections())
+        QGuiApplication.clipboard().setText(text)
+        self.lbl_status.setText("복사됨 ✓  카카오톡에 붙여 넣으세요")
 
     # ------------------------------------------------------ 고객관리(구글 시트)
     def _build_customer_tab(self) -> QWidget:
@@ -1030,7 +1208,7 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
-        # [주간 요약] 은 [일정 / 할일] 탭의 [새로고침] 옆으로 옮겼다.
+        # [주간 요약] 은 [대시보드] 의 [새로고침] 옆으로 옮겼다.
         # 브리핑과 한 화면이 되었으니 하루를 여는 자리에 있는 편이 맞다.
         row.addStretch()
         row.addWidget(QLabel("검색:"))
@@ -1537,6 +1715,7 @@ class MainWindow(QMainWindow):
         self._sheet_loaded = True
         self._show_summary(summary)
         self.refresh_customers()
+        self.refresh_dashboard()
 
     # 상단 현황 항목별 강조색. 색을 여기 박아 두면 테마를 못 따라가 밝은 화면에서
     # 2.5:1(발주·만기)까지 떨어졌다. 브리핑과 같은 색 이름을 쓴다.
@@ -2678,6 +2857,7 @@ class MainWindow(QMainWindow):
             self._colorize_row(self.tbl_week, r, d)
         label = {"week": "이번주", "next": "다음주", "all": "전체"}.get(self._range, "이번주")
         self.lbl_week.setText(f"{label} 일정  {self.tbl_week.rowCount()}건")
+        self.refresh_dashboard()
 
     def _colorize_row(self, table: QTableWidget, row: int, d: date | None):
         if d is None:
@@ -2793,6 +2973,7 @@ class MainWindow(QMainWindow):
                     cell = self.tbl_todo.item(r, c)
                     if cell is not None:
                         cell.setForeground(fg)
+        self.refresh_dashboard()
 
     def _warn_if_filtered(self, due, has_due: bool) -> None:
         """추가한 항목이 현재 [표시] 필터 밖이면 목록에 안 보이므로 알려준다."""
@@ -3199,6 +3380,8 @@ class MainWindow(QMainWindow):
         if getattr(self, "_today_shown", None) != today:     # 자정이 지나면 제목줄 날짜도
             self._today_shown = today
             self._paint_today()
+            self.refresh_dashboard()        # 오늘·이번 주·다음 주가 바뀐다
+        self._paint_page_title()            # 인사말은 시간대 따라(바뀔 때만 다시 쓴다)
         if self.last_backup != today and self._tick_backup_ok():
             self._backup(manual=False)
         if self.chk_autofetch.isChecked() and self.gauth.is_connected():
@@ -3427,7 +3610,8 @@ class MainWindow(QMainWindow):
         return "\n".join(lines)
 
     # ---- 색·크기·이모지를 입힌 화면용 ----
-    def build_briefing_html(self) -> str:
+    def build_briefing_html(self, with_head: bool = True) -> str:
+        """with_head=False 면 맨 위 날짜·건수 줄을 뺀다(대시보드 카드는 머리 줄에 쓴다)."""
         secs = self._briefing_sections()
         cnt_cal, cnt_todo = self._brief_today_counts
         d = date.today()
@@ -3436,21 +3620,23 @@ class MainWindow(QMainWindow):
 
         out = [f"<div style='font-family:Malgun Gothic;color:{txt};'>"]
         # 날짜 머리글
-        out.append(
-            f"<p style='margin:0 0 2px 0;font-size:20px;font-weight:bold;color:{txt};'>"
-            f"{d:%Y년 %m월 %d일} ({self._WEEKDAY_KO[d.weekday()]})</p>"
-            f"<p style='margin:0 0 10px 0;font-size:13px;color:{sub_c};'>"
-            f"오늘 일정 <b style='color:{theme.strong('blue')};'>{cnt_cal}</b>건"
-            f" &nbsp;·&nbsp; 할일 <b style='color:{theme.strong('green')};'>{cnt_todo}</b>건</p>")
+        if with_head:
+            out.append(
+                f"<p style='margin:0 0 2px 0;font-size:20px;font-weight:bold;color:{txt};'>"
+                f"{d:%Y년 %m월 %d일} ({self._WEEKDAY_KO[d.weekday()]})</p>"
+                f"<p style='margin:0 0 10px 0;font-size:13px;color:{sub_c};'>"
+                f"오늘 일정 <b style='color:{theme.strong('blue')};'>{cnt_cal}</b>건"
+                f" &nbsp;·&nbsp; 할일 <b style='color:{theme.strong('green')};'>{cnt_todo}</b>건</p>")
 
-        for s in secs:
+        for k, s in enumerate(secs):
             col = theme.strong(s["color"])
             bg = theme.strong_bg(s["color"])
             n = s.get("count", len(s["items"]))
             badge = (f"<span style='background-color:{bg};color:{col};font-size:12px;"
                      f"font-weight:bold;'>&nbsp;{n}건&nbsp;</span>" if n else
                      f"<span style='color:{sub_c};font-size:12px;'>&nbsp;0건&nbsp;</span>")
-            out.append(f"<hr style='border:1px solid {line_c};'>")
+            if with_head or k:
+                out.append(f"<hr style='border:1px solid {line_c};'>")
             out.append(
                 f"<p style='margin:8px 0 4px 0;font-size:16px;font-weight:bold;color:{col};'>"
                 f"{s['icon']} {esc(s['title'])} &nbsp;{badge}</p>")
@@ -3580,7 +3766,7 @@ class MainWindow(QMainWindow):
         scr = self.screen() or QGuiApplication.primaryScreen()
         return scr.availableGeometry()
 
-    # ---- 창 폭 기억 (세로는 고정이라 가로만 남긴다) ----
+    # ---- 창 크기 기억 (가로·세로) ----
     def _width_bounds(self, avail):
         """이 화면에서 허용되는 (최소, 최대) 폭."""
         lo = min(self.MIN_WIDTH, avail.width() - 20)
@@ -3614,6 +3800,21 @@ class MainWindow(QMainWindow):
             pass                        # 파일이 깨졌으면 조용히 기본값
         return max(lo, min(hi, want))
 
+    def _saved_height(self, default: int, avail) -> int:
+        """지난번에 맞춰 둔 세로. 없거나(세로를 못 바꾸던 시절) 이 화면에 안 맞으면 기본값."""
+        lo = min(self.MIN_HEIGHT, avail.height() - 60)
+        want = default
+        try:
+            p = self._win_path()
+            if p.exists():
+                got = int((json.loads(p.read_text(encoding="utf-8")) or {}).get("height", 0))
+                if got > 0:
+                    want = got
+        except Exception:
+            pass
+        # 제목표시줄까지 화면에 들어오게 — 큰 모니터에서 맞춘 세로를 노트북에서 열 때
+        return max(lo, min(avail.height() - 40, want))
+
     def _saved_maximized(self) -> bool:
         try:
             p = self._win_path()
@@ -3624,28 +3825,43 @@ class MainWindow(QMainWindow):
             pass
         return False
 
-    def _snap_height_if_normal(self):
-        """미뤄 둔 되돌리기 — 이제야 최대화인지 아닌지 확실히 알 수 있다."""
-        if self._snapping or self._is_max():
-            return                      # 최대화였다 → 건드리지 않는다
-        h = self.height()
-        if h == self._normal_h:
-            self._snap_from = None
+    def _later_keep(self):
+        timer = getattr(self, "_keep_timer", None)
+        if timer is not None and getattr(self, "_centered_once", False):
+            timer.start()
+
+    def _keep_on_screen(self):
+        """제목표시줄이 화면 밖으로 나가지 않게 — 세로를 마음대로 바꿀 수 있게 하면서 지킨다.
+
+        · 창이 화면보다 크면 화면 높이까지 줄인다(위아래가 다 안 보이면 제목줄도 밖이다)
+        · 제목표시줄 가운데가 어느 모니터에도 없으면, 이 창의 모니터 안으로 옮긴다
+          (모니터를 위아래로 붙여 쓰면 위 모니터에 걸친 것은 정상이다 — 그래서
+          '이 모니터 위쪽 밖' 이 아니라 '어느 모니터에도 없음' 을 본다)
+        최대화 중에는 건드리지 않는다.
+        """
+        if self._keeping or self._is_max() or not self.isVisible():
             return
-        # 같은 높이에서 두 번은 조르지 않는다. 창관리자가 우리 요청을 안 받아
-        # 주면 되돌리기 → resizeEvent → 되돌리기 로 끝없이 돌기 때문이다.
-        if self._snap_from == h:
-            return
-        self._snap_from = h
-        self._snapping = True
+        self._keeping = True
         try:
-            self.resize(self.width(), self._normal_h)
+            avail = self._screen_avail()
+            fg = self.frameGeometry()
+            if fg.height() > avail.height():
+                extra = fg.height() - avail.height()
+                self.resize(self.width(), max(self.minimumHeight(), self.height() - extra))
+                fg = self.frameGeometry()
+            title = QPoint(fg.left() + fg.width() // 2, fg.top() + 10)
+            if QGuiApplication.screenAt(title) is None or fg.top() > avail.bottom() - self.TITLE_KEEP:
+                top = min(max(fg.top(), avail.top()), avail.bottom() - self.TITLE_KEEP)
+                left = min(max(fg.left(), avail.left() - fg.width() + 240),
+                           avail.right() - 240)
+                self.move(left, top)
+        except Exception:
+            pass
         finally:
-            self._snapping = False
+            self._keeping = False
 
     # 창이 '거의 화면만큼' 커졌으면 최대화로 친다. 창틀·제목줄 때문에 화면보다
-    # 조금 작게 잡히므로 여유를 둔다. 보통 크기(_normal_h)와는 넉넉히 벌어져
-    # 있어서 헷갈리지 않는다 — 보통 세로는 min(920, 화면-60) 이다.
+    # 조금 작게 잡히므로 여유를 둔다.
     MAX_SLACK_W, MAX_SLACK_H = 20, 40
 
     def _is_max(self) -> bool:
@@ -3670,17 +3886,13 @@ class MainWindow(QMainWindow):
                 and abs(self.height() - av.height()) <= self.MAX_SLACK_H)
 
     def changeEvent(self, event):
-        """창 크기는 '보통' 과 '최대화' 둘뿐 — 그 사이 값은 없다.
-
-        보통일 때는 세로를 고정해 두는데, 그대로 두면 최대화가 세로로 커지지
-        못한다. 그래서 최대화하는 순간 고정을 풀고, 되돌릴 때 다시 건다.
-        """
+        """최대화 ↔ 보통이 바뀌면 '보통' 크기를 되살린다(_apply_size_mode)."""
         if event.type() == QEvent.WindowStateChange:
             self._apply_size_mode()
         super().changeEvent(event)
 
     def _apply_size_mode(self):
-        """최대화 ↔ 보통. 가로 상한만 여닫고, 세로는 resizeEvent 가 지킨다.
+        """최대화 ↔ 보통. 가로 하한만 다시 걸고, 제목줄은 _keep_on_screen 이 지킨다.
 
         창 상태 알림(changeEvent)만 믿지 않고 resizeEvent 에서도 부른다.
         몇 번을 불러도 상태가 그대로면 아무 일도 하지 않는다.
@@ -3692,23 +3904,22 @@ class MainWindow(QMainWindow):
         if now_max:
             return
         avail = self._screen_avail()
-        lo, hi = self._width_bounds(avail)
+        lo, _hi = self._width_bounds(avail)
         self.setMinimumWidth(lo)
-        # 쓰던 '보통' 크기로 되돌린다 (여기서 난 resize 는 되돌리기 대상이 아니다)
-        self._snapping = True
-        try:
-            self.resize(max(lo, min(hi, self._normal_w)), self._normal_h)
-        finally:
-            self._snapping = False
+        # ⚠️ 여기서 크기를 되돌리지 않는다. 최대화를 풀면 윈도가 원래 크기로 되돌려
+        #    준다. 세로를 못 바꾸던 시절엔 여기서 '보통' 크기로 조였는데, 이제는 화면을
+        #    거의 채우게 끌었다가 다시 줄이는 손을 거꾸로 잡아채게 된다.
+        self._later_keep()
 
     def _remember_width(self) -> None:
         try:
-            # 최대화 중이면 그때의 폭이 아니라 '보통' 폭을 적어 둔다.
-            # 안 그러면 최대화를 풀었을 때 화면 가득한 폭이 그대로 굳는다.
+            # 최대화 중이면 그때의 크기가 아니라 '보통' 크기를 적어 둔다.
+            # 안 그러면 최대화를 풀었을 때 화면 가득한 크기가 그대로 굳는다.
             mx = self._is_max()
             w = self._normal_w if mx else self.width()
+            h = self._normal_h if mx else self.height()
             config.atomic_write(self._win_path(),
-                                json.dumps({"width": w, "maximized": mx,
+                                json.dumps({"width": w, "height": h, "maximized": mx,
                                             "layout": self.LAYOUT_VER}))
         except Exception:
             pass
@@ -3718,28 +3929,18 @@ class MainWindow(QMainWindow):
         if not self._snapping:
             # 창 상태 알림을 못 받은 경우에도 제약이 어긋난 채로 남지 않게 한다
             self._apply_size_mode()
-        # 최대화가 아닌데 세로가 달라졌으면 되돌린다 — 크기는 '보통' 과 '최대화'
-        # 둘뿐이어야 한다. 세로를 아예 못 박아 두면 최대화가 안 되므로(위 __init__
-        # 설명), 이렇게 되돌리는 쪽으로 지킨다.
-        h = self.height()
-        if (getattr(self, "_centered_once", False)
-                and not self._snapping and h != self._normal_h):
-            # ⚠️ 여기서 바로 되돌리면 안 된다.
-            #
-            # 최대화를 누르면 창이 커지는 알림(resize)이 '최대화됨' 이라는 상태
-            # 알림보다 **먼저** 오는 경우가 있다(윈도가 그렇다). 그 순간에는
-            # 아직 최대화가 아닌 것으로 보이므로, 여기서 되돌려 버리면 가로만
-            # 커지고 세로는 도로 제자리로 돌아간다 — 실제로 그렇게 됐다.
-            # 그래서 판단을 잠시 미룬다. 그 사이에 상태 알림이 처리된다.
-            QTimer.singleShot(0, self._snap_height_if_normal)
-        elif h == self._normal_h:
-            self._snap_from = None      # 제자리로 왔으니 다음 시도를 허용
         # 뜨기 전(_saved_width 로 맞추는 중)에는 저장하지 않는다 — 그러면 화면에
         # 맞춰 줄인 값이 그대로 굳어 다음에 켤 때 더는 못 넓힌다.
         if getattr(self, "_centered_once", False):
             if not self._is_max():
-                self._normal_w = self.width()   # 최대화가 아닐 때만 '보통' 폭
+                self._normal_w = self.width()   # 최대화가 아닐 때만 '보통' 크기
+                self._normal_h = self.height()
             self._width_timer.start(600)     # 끄는 중에는 계속 불린다 → 멈추면 저장
+            self._later_keep()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._later_keep()
 
     def showEvent(self, event):
         # 창틀 크기는 화면에 뜬 뒤에야 정확히 알 수 있다 → 첫 표시 때 한 번 더 맞춘다.
@@ -3748,6 +3949,12 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_centered_once", False):
             self._centered_once = True
             self._center_on_screen()
+            self._keep_on_screen()
+            # 다른 모니터로 옮기거나(해상도·배율이 다르다) 모니터를 뺐을 때도 다시 본다
+            try:
+                self.windowHandle().screenChanged.connect(lambda *_a: self._later_keep())
+            except Exception:
+                pass
             # 지난번에 최대화로 쓰던 사람은 최대화로 열어 준다.
             # 자리를 잡은 뒤에 해야 최대화를 풀었을 때 제자리로 돌아온다.
             if getattr(self, "_want_maximized", False):
