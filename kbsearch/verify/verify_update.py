@@ -86,6 +86,8 @@ def with_get(fn, func):
 
 
 print("[4] 확인")
+REAL_VERSION = config.APP_VERSION
+config.APP_VERSION = "1.0.0"          # 아래 가짜 릴리스(kb-v1.0.1)보다 낮은 판이라고 치고
 pages = {1: [rel(f"v1.{i}.0") for i in range(100)], 2: [rel("kb-v1.0.1")] + [rel("v0.1.0")] * 3}
 seen = []
 
@@ -188,6 +190,25 @@ ok("받는 중에는 Esc 무시", closed == [])
 d._busy = False
 d.reject()
 ok("받는 중이 아니면 Esc = 종료", closed and d.outcome == update_ui.QUIT)
+
+config.APP_VERSION = REAL_VERSION
+
+print("[9] push 때 저절로 릴리스할지 (release_plan)")
+_sys.path.insert(0, str(_HERE.parent))
+import release_plan as rp  # noqa: E402
+ls = ("a1\trefs/tags/v1.21.2\n"
+      "b2\trefs/tags/kb-v1.0.1\n"
+      "b3\trefs/tags/kb-v1.0.1^{}\n")
+ok("ls-remote 줄 → 태그", rp.tags_from_ls_remote(ls) == ["v1.21.2", "kb-v1.0.1"])
+ok("처음 판은 낸다", rp.plan("1.0.1", []) == "kb-v1.0.1")
+ok("새 판 번호면 낸다", rp.plan("1.0.2", ["kb-v1.0.1", "v1.21.2"]) == "kb-v1.0.2")
+ok("이미 나간 판이면 빌드만", rp.plan("1.0.1", ["kb-v1.0.1"]) == "")
+ok("더 낮은 판(옛 갈래)은 안 낸다", rp.plan("1.0.0", ["kb-v1.0.1"]) == "")
+ok("일정관리기 태그는 상관없다", rp.plan("1.0.1", ["v1.30.0"]) == "kb-v1.0.1")
+ok("판 번호 모양이 이상하면 안 낸다", rp.plan("1.0", []) == "")
+ok("지금 APP_VERSION 을 읽는다", rp.app_version() == config.APP_VERSION)
+import release_notes as rn  # noqa: E402
+ok("지금 판의 변경 이력 절이 있다(없으면 릴리스가 멈춘다)", bool(rn.extract("kb-v" + config.APP_VERSION)))
 
 print()
 print("실패:", FAIL if FAIL else "없음")

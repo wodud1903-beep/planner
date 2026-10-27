@@ -60,18 +60,23 @@ crash_log.txt       갑자기 꺼짐·멈춤 기록(다음에 켤 때 알리고 
 
 ## 🔄 자동 업데이트 (관리자)
 
-- 일정관리기와 **같은 저장소의 릴리스**를 쓰고, 태그 머리말로 가릅니다 — 일정관리기 `v1.21.1`, 업무자료검색 `kb-v1.0.0`.
+- 일정관리기와 **같은 저장소의 릴리스**를 쓰고, 태그 머리말로 가릅니다 — 일정관리기 `v1.21.2`, 업무자료검색 `kb-v1.0.1`.
 - 켤 때와 켜 둔 동안 3시간마다 확인합니다. 새 판이 있으면 **받아서 바꾸고 다시 켭니다. 건너뛰기 단추는 없습니다**
   ([다시 시도] · [종료] 만). 인터넷이 안 돼 확인 자체를 못 하면 그냥 켜집니다(자료가 이 PC 에 있으므로).
-- 새 판 내는 법
-  1. `kbsearch/kbsearch/config.py` 의 `APP_VERSION` 을 올립니다(예: `1.0.1`).
-  2. `kbsearch/CHANGELOG.md` 에 `## v1.0.1 — 제목 (날짜)` 절을 적습니다.
-  3. 커밋 후 `git tag kb-v1.0.1 && git push origin kb-v1.0.1`
-     → Actions(**Build 업무자료검색 EXE**)가 검사·빌드 후 릴리스에 exe 를 붙입니다.
-  - 태그와 `APP_VERSION` 이 다르면 빌드가 멈춥니다(다르게 나가면 업데이트가 끝없이 되풀이됩니다).
+- **새 판은 저절로 나갑니다** — 판 번호를 올려 push 하면 끝입니다(태그를 따로 밀지 않습니다).
+  1. `kbsearch/kbsearch/config.py` 의 `APP_VERSION` 을 올립니다(예: `1.0.2`).
+  2. `kbsearch/CHANGELOG.md` 맨 위에 `## v1.0.2 — 제목 (날짜)` 절을 적습니다(업데이트 창에 그대로 보입니다).
+  3. 커밋해서 push → Actions(**Build 업무자료검색 EXE**)가 검사·빌드 후 `kb-v1.0.2` 릴리스를 만들고 exe 를
+     붙입니다 → 모든 PC 가 켤 때(또는 3시간 안에) 그 판으로 바뀝니다.
+  - 판 번호를 그대로 두면 빌드만 하고(아티팩트) 아무 PC 에도 가지 않습니다. 이미 나간 판이나 더 낮은 판도
+    내지 않습니다(`release_plan.py`).
+  - 판을 올렸는데 CHANGELOG 절이 없거나 검사가 실패하면 릴리스하지 않고 빌드가 빨갛게 멈춥니다.
   - 릴리스는 `make_latest: false` 로 나갑니다 — 일정관리기의 '최신 릴리스' 를 가리지 않게.
-  - ⚠️ 릴리스는 GitHub 웹에서 손으로 만들지 말고 **태그를 밀어** 만드세요. 손으로 만들면 일정관리기
-    빌드(`build-exe.yml` 의 `release: created`)가 함께 돌고, '최신 릴리스' 표시도 이쪽으로 넘어갈 수 있습니다.
+  - 릴리스 페이지에는 파일이 `업무자료검색.exe` 로 보이지만, 받으면 이름이 `default.exe` 일 수 있습니다
+    (깃허브가 한글 파일 이름을 바꿉니다 — 일정관리기도 같습니다). 받은 뒤 이름을 바꿔 쓰세요.
+  - ⚠️ 릴리스를 GitHub 웹에서 손으로 만들지 마세요. 손으로 만들면 일정관리기 빌드(`build-exe.yml` 의
+    `release: created`)가 함께 돌고, '최신 릴리스' 표시도 이쪽으로 넘어갈 수 있습니다.
+  - 이 저장소에서 일하는 Claude 는 `kbsearch/CLAUDE.md` 의 규칙대로, 고칠 때마다 판을 올려 저절로 릴리스합니다.
 
 ### 서비스 끄기 — 업데이트로
 
@@ -101,7 +106,7 @@ pyinstaller kbsearch.spec --noconfirm --clean   # dist\업무자료검색.exe  (
 ```
 kbsearch/
   main.py · kbsearch.spec · kbsearch.ico(make_icon.py 로 만듦) · requirements.txt
-  CHANGELOG.md · release_notes.py
+  CHANGELOG.md · release_notes.py · release_plan.py(push 때 저절로 릴리스할지) · CLAUDE.md(작업 규칙)
   kbsearch/
     app.py            시작 — 한 개만 실행 · 업데이트 확인 · 서비스 스위치 · 창
     config.py         이름·판 번호·스위치·구글 클라이언트·시트 주소(일정관리기와 같음)
