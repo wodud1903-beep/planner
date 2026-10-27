@@ -105,7 +105,9 @@ img.fill(QColor("#2563EB"))
 
 def do_edit():
     d = modal()
-    ok("관리자가 아니면 '내 메모' 묶음만", d.cmb_src.count() == 1)
+    srcs = [d.cmb_src.itemData(i) for i in range(d.cmb_src.count())]
+    ok("관리자가 아니면 '공통 — 이 PC 에서만' · '내 메모' 묶음", srcs == [kb.SRC_LOCAL, kb.SRC_MINE], srcs)
+    d.cmb_src.setCurrentIndex(d.cmb_src.findData(kb.SRC_MINE))
     d._add()
     d.ed_title.setText("내 전자약정 메모")
     d.txt_body.setPlainText("내가 적은 본문")
@@ -305,6 +307,95 @@ w.auto_pull()
 pump(0.2)
 ok("동기화를 끈 판은 받으러 가지 않는다", g.public_reads == n)
 config.SYNC_ON = True
+
+print("[12] 로그인 없이 — 회사 공통 자료(팩스번호)를 이 PC 에서만 고친다")
+FAX_OLD, FAX_NEW = "0504-214-5287", "0504-000-1111"
+g.public_csv = "ok"
+g.kb_rows = [["심사서류", "", "개인 심사서류", "", f"1. 면허증\n팩스- {FAX_OLD}", "면허증"],
+             ["캐피탈", "메리츠", "메리츠캐피탈", "", "메리츠 본문", ""]]
+g.kb_g = []
+w._pulled_at = None
+w.auto_pull()
+for _ in range(60):
+    pump(0.05)
+    if not w._pulling:
+        break
+ok("시트 자료를 받음", [x["title"] for x in kb.load_shared()] == ["개인 심사서류", "메리츠캐피탈"])
+w.view.ed_find.setText("개인 심사서류")
+w.view.flush_search()
+pump(0.2)
+seen = {}
+
+
+def do_local_edit():
+    d = modal()
+    seen["src"] = d.cmb_src.currentData()
+    seen["title"] = d.ed_title.text()
+    seen["btns"] = (d.b_add.isEnabled(), d.b_del.isEnabled(), d.b_revert.isVisible())
+    d.txt_body.setPlainText(f"1. 면허증\n팩스- {FAX_NEW}")
+    md = QMimeData()
+    md.setImageData(img)
+    d.drop_attachments(md)
+    d._ok()
+
+
+later(do_local_edit)
+w.edit()
+pump()
+ok("보던 공통 자료가 '이 PC 에서만' 묶음으로 열린다",
+   seen.get("src") == kb.SRC_LOCAL and seen.get("title") == "개인 심사서류", seen)
+ok("추가·삭제는 막고 [회사 자료로 되돌리기] 를 보인다", seen.get("btns") == (False, False, True), seen)
+ok("원본(공통 자료)은 그대로", FAX_OLD in kb.load_shared()[0]["body"]
+   and not kb.load_meta().get("shared_dirty"))
+rec = kb.load_local()
+ok("이 PC 에만 적힘 · 첨부도 이 PC 에", len(rec) == 1 and FAX_NEW in rec[0]["item"]["body"]
+   and str(rec[0]["item"]["files"][0]["id"]).startswith(kb_files.LOCAL_PREFIX))
+lat = rec[0]["item"]["files"][0] if rec else {}
+ok("첨부 파일이 PC 에 있다", kb_files.cached(lat) is not None)
+ok("저장 안내", "이 PC 에서만" in w.lbl_msg.text(), w.lbl_msg.text())
+w.view.ed_find.setText("개인 심사서류")
+w.view.flush_search()
+pump(0.3)
+cur = w.view.lst.current_item_data() or {}
+ok("검색 화면은 고친 팩스번호 · '이 PC 에서 고침' 배지", FAX_NEW in cur.get("body", "")
+   and "이 PC 에서 고침" in w.view.lbl_title.text(), w.view.lbl_title.text())
+ok("아래 줄에 건수", "이 PC 에서만 고친 공통 자료 1건" in w.lbl_account.text(), w.lbl_account.text())
+
+g.kb_rows[0][4] = f"1. 면허증\n2. 등본\n팩스- {FAX_OLD}"
+w._pulled_at = None
+w.auto_pull()
+for _ in range(60):
+    pump(0.05)
+    if not w._pulling:
+        break
+w.view.ed_find.setText("개인 심사서류")
+w.view.flush_search()
+pump(0.3)
+cur = w.view.lst.current_item_data() or {}
+ok("회사가 원본을 고쳐 새로 받아도 내 팩스번호는 남는다", FAX_NEW in cur.get("body", ""))
+ok("'회사에서 새로 고침' 을 알린다", "새로 고쳤습니다" in w.view.lbl_title.text(), w.view.lbl_title.text())
+
+
+def do_revert():
+    d = modal()
+    seen["note"] = d.lbl_note.isVisible() and "새로 고쳤습니다" in d.lbl_note.text()
+    d.revert(ask=False)
+    seen["body"] = d.txt_body.toPlainText()
+    d._ok()
+
+
+later(do_revert)
+w.edit()
+pump()
+ok("편집 창에도 안내", seen.get("note") is True)
+ok("되돌리면 회사의 새 내용", "2. 등본" in seen.get("body", "") and FAX_OLD in seen.get("body", ""))
+ok("이 PC 기록을 지움 · 이 PC 첨부도 지움", kb.load_local() == [] and kb_files.cached(lat) is None)
+w.view.ed_find.setText("개인 심사서류")
+w.view.flush_search()
+pump(0.3)
+cur = w.view.lst.current_item_data() or {}
+ok("검색 화면도 회사 자료로", cur.get("source") == kb.SRC_SHARED and "2. 등본" in cur.get("body", ""))
+ok("아래 줄 건수도 사라짐", "이 PC 에서만 고친" not in w.lbl_account.text())
 
 print()
 print("실패:", FAIL if FAIL else "없음")

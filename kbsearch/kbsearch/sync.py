@@ -210,6 +210,7 @@ def _upload_locals(auth, items: list, public: bool, done: dict) -> tuple:
 def _drop_unused_locals(old: list, new: list) -> None:
     """시트 내용으로 바꿀 때, 옛 공통 자료에만 붙어 있던 이 PC 첨부(local-)를 지운다."""
     keep = {f.get("id") for it in list(new) + kb.load_mine() for f in (it.get("files") or [])}
+    keep |= kb.local_file_ids()         # 이 PC 에서만 고친 공통 자료가 쓰는 것
     for it in old:
         for f in it.get("files") or []:
             if kb_files.is_local(f) and f.get("id") not in keep:
@@ -225,7 +226,7 @@ def _flush_queue(auth) -> None:
         return
     # 동기화로 되살아난 자료(다른 곳에서 더 나중에 고친 메모 등)가 아직 쓰는 첨부는 남긴다
     used = {f.get("id") for it in kb.load_shared() + kb.load_mine()
-            for f in (it.get("files") or [])}
+            for f in (it.get("files") or [])} | kb.local_file_ids()
     trash = [x for x in trash if x not in used]
     kb_files.trash(auth, trash)
     for fid, name in renames:
@@ -305,9 +306,12 @@ def run(auth, push_shared: bool = False) -> Result:
     kb.save_mine(merged, track=False)
     _set_mine_stamp(stamp)
 
-    # 3) 정리 — 올린 첨부의 이 PC 사본(local-)과 미뤄 둔 드라이브 일
+    # 3) 정리 — 올린 첨부의 이 PC 사본(local-)과 미뤄 둔 드라이브 일.
+    #    이 PC 에서만 고친 공통 자료는 올리지 않으므로, 같은 그림을 쓰면 사본을 남긴다.
+    keep = kb.local_file_ids()
     for f in [k for k in done]:
-        kb_files.drop_local({"id": f[0]})
+        if f[0] not in keep:
+            kb_files.drop_local({"id": f[0]})
     _flush_queue(auth)
 
     kb.update_meta(pending=False, account=res.account,
@@ -346,8 +350,10 @@ def apply_public(got) -> dict:
 
 def reset_mine_for_account() -> None:
     """다른 계정으로 바꿀 때 — 이 PC 의 내 메모를 비운다(그 계정 것을 새로 받는다)."""
+    keep = kb.local_file_ids()          # 이 PC 에서만 고친 공통 자료는 계정과 상관없다
     for it in kb.load_mine():
         for f in it.get("files") or []:
-            kb_files.drop_local(f)
+            if f.get("id") not in keep:
+                kb_files.drop_local(f)
     kb.save_mine([], track=False)
     kb.update_meta(deleted={}, account="", trash=[], renames=[])

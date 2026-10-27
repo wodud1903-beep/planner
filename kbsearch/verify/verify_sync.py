@@ -292,6 +292,76 @@ out = psync.merged_bundle(ours)
 ok("일정관리기가 다시 올려도 우리 메모가 남는다",
    "업무자료검색에서 쓴 메모" in out["files"]["kb_mine.json"])
 
+print("[16] 이 PC 에서만 고친 공통 자료(팩스번호 등) — 시트로 안 가고, 새로 받아도 남는다")
+g = fresh()
+FAX_OLD, FAX_NEW = "0504-214-5287", "0504-000-1111"
+base = {"category": "심사서류", "finance": "", "title": "개인 심사서류", "tags": "",
+        "body": f"1. 면허증\n팩스- {FAX_OLD}", "checklist": ["면허증"]}
+kb.save_shared([base, memo("메리츠캐피탈", "메리츠 본문")])
+v = kb.local_view()
+ok("처음엔 고친 것 없음", len(v) == 2 and not any(x.get("_local") for x in v))
+img = b"\x89PNG\r\n\x1a\n" + b"L" * 200
+la = kb_files.store_local(img, "내 명함.png")
+e = dict(v[0])
+e["body"] = f"1. 면허증\n팩스- {FAX_NEW}"
+e["files"] = [la]
+ok("저장하면 바뀐 것", kb.set_local([e, v[1]]) is True)
+ok("고친 한 건만 적힘", [r["key"] for r in kb.load_local()] == [("개인 심사서류", 0)])
+ok("원본(공통 자료)은 그대로", FAX_OLD in kb.load_shared()[0]["body"])
+allv = kb.load_all()
+ok("검색 화면은 고친 것 · '이 PC 에서 고침'", FAX_NEW in allv[0]["body"]
+   and allv[0]["source"] == kb.SRC_LOCAL and allv[1]["source"] == kb.SRC_SHARED)
+ok("그대로 또 저장하면 안 바뀜", kb.set_local(kb.local_view()) is False)
+m = kb.load_meta()
+ok("올릴 것·동기화 점으로 치지 않는다", not m.get("shared_dirty") and not m.get("pending"))
+
+g.kb_rows = [["심사서류", "", "개인 심사서류", "", f"1. 면허증\n2. 등본\n팩스- {FAX_OLD}", "면허증"],
+             ["기타", "", "메리츠캐피탈", "", "메리츠 본문", ""]]
+r = sync.apply_public(sheets_kb.read_kb_public())
+v = kb.local_view()
+ok("회사가 고친 원본을 받아도 이 PC 에서 고친 것이 남는다",
+   r["changed"] and FAX_NEW in v[0]["body"] and v[0].get("_local"))
+ok("'회사가 또 고침' 표시", v[0].get("_stale") is True)
+ok("이 PC 첨부를 지우지 않는다", kb_files.cached(la) is not None)
+ok("손대지 않고 저장하면 표시가 남는다", kb.set_local(v) is False and kb.local_view()[0].get("_stale"))
+v = kb.local_view()
+v[0]["_ack"] = True
+ok("안내를 보고 저장하면 지금 원본을 본 것으로", kb.set_local(v) is True
+   and not kb.local_view()[0].get("_stale") and FAX_NEW in kb.local_view()[0]["body"])
+
+put_bundle(g, planner_bundle([]))
+kb.save_mine([memo("같은 그림 메모", files=[dict(la)])])
+sync.run(FakeAuth())
+ok("직원 동기화 — 시트에 쓰지 않는다", g.put_values is None)
+ok("동기화 뒤에도 이 PC 에서 고친 것", FAX_NEW in kb.local_view()[0]["body"])
+ok("내 메모의 같은 그림은 올리되 이 PC 사본은 남긴다",
+   not kb_files.is_local(kb.load_mine()[0]["files"][0]) and kb_files.cached(la) is not None)
+sync.reset_mine_for_account()
+ok("계정을 바꿔 메모를 비워도 이 PC 첨부는 남는다", kb_files.cached(la) is not None)
+kb.save_shared(kb.load_shared(), edited=True)
+sync.run(FakeAuth(config.KB_ADMINS[0]), push_shared=True)
+sent = json.dumps(g.put_values, ensure_ascii=False)
+ok("관리자가 올려도 시트로 가는 것은 원본", g.put_values and FAX_NEW not in sent and FAX_OLD in sent)
+
+g.kb_rows = [["심사서류", "", "개인 심사서류 안내", "", "새 제목", ""]]
+sync.apply_public(sheets_kb.read_kb_public())
+v = kb.local_view()
+ok("회사가 제목을 바꾸면 고친 것을 따로 보여 준다(잃지 않는다)",
+   [x["title"] for x in v] == ["개인 심사서류 안내", "개인 심사서류"] and v[1].get("_orphan"))
+ok("원본이 없어져도 첨부는 남는다", kb_files.cached(la) is not None)
+kb.set_local([v[0]])                    # 편집 창의 [회사 자료로 되돌리기] = 목록에서 뺌
+ok("되돌리면 지운다", kb.load_local() == [] and len(kb.local_view()) == 1)
+kb.save_shared([base])
+v = kb.local_view()
+e = dict(v[0])
+e["body"] = "고침"
+kb.set_local([e])
+v = kb.local_view()
+v[0] = {**v[0]["_base"], "_key": v[0]["_key"], "_base": v[0]["_base"]}
+ok("원본과 같아지면 지운다", kb.set_local(v) is True and kb.load_local() == [])
+config.data_file(kb.LOCAL_FILE).write_text("[{\"key\": 3}, \"x\", {}]", encoding="utf-8")
+ok("깨진 파일은 무시", kb.load_local() == [] and len(kb.local_view()) == 1)
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

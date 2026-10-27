@@ -8,6 +8,8 @@
 
 일정관리기와 다른 점: [자료 편집] 이 로그인 없이 된다. 새 첨부는 이 PC 에 두었다가
 [동기화] 때 드라이브로 올라간다(kb_files.store_local / sync.py).
+관리자가 아니면 회사 공통 자료를 **이 PC 에서만** 고친다(kb.set_local) — 검색 화면에는
+'공통 · 이 PC 에서 고침' 으로 보이고, 회사가 원본을 또 고쳤으면 그 아래에 알린다.
 """
 
 from __future__ import annotations
@@ -297,11 +299,17 @@ class KbView(QWidget):
                else theme.strong("blue"))
         bg = (theme.strong_bg("violet") if it.get("source") == kb.SRC_MINE
               else theme.strong_bg("blue"))
+        note = ""
+        if it.get("_orphan"):
+            note = "회사 자료에서 없어진 자료입니다 — 이 PC 에서 고친 것을 보여 줍니다."
+        elif it.get("_stale"):
+            note = "회사에서 이 자료를 새로 고쳤습니다 — [자료 편집] 에서 확인해 주세요."
         self.lbl_title.setText(
             f"<b style='font-size:15px;'>{it.get('title', '')}</b> &nbsp;"
             + (_badge(src, col, bg) if src else "")
             + (f"<br><span style='color:{theme.c('subtext')};'>{tail}</span>"
-               if tail else ""))
+               if tail else "")
+            + (f"<br><span style='color:{theme.strong('orange')};'>{note}</span>" if note else ""))
         self.txt_body.setHtml(body_to_html(it.get("body", "")))
         self.btn_copy_body.setEnabled(bool(it.get("body", "").strip()))
         self._fill_attachments(it)
@@ -583,7 +591,7 @@ class _BodyEdit(QTextEdit):
 
 
 class KbEditDialog(QDialog):
-    """자료 편집 — 공통(관리자만) / 내 메모."""
+    """자료 편집 — 공통(관리자) / 공통을 이 PC 에서만 고침 / 내 메모."""
 
     def __init__(self, account: str = "", parent=None, select=None):
         super().__init__(parent)
@@ -599,8 +607,11 @@ class KbEditDialog(QDialog):
             self.resize(1000, 860)
         self.admin = config.is_admin(account)
         self.shared = [dict(x) for x in kb.load_shared()]
+        # 공통 자료를 이 PC 에서만 고친 것 — 원본(_base)과 열쇠(_key)를 달고 있다
+        self.local = [dict(x) for x in kb.local_view(self.shared)]
         self.mine = [dict(x) for x in kb.load_mine()]
         self._cur = -1
+        self._cur_src = None            # 지금 편집칸에 띄운 자료의 묶음(_stash 가 쓴다)
 
         root = QVBoxLayout(self)
 
@@ -610,14 +621,19 @@ class KbEditDialog(QDialog):
         searchcombo.install(self.cmb_src)
         if self.admin:
             self.cmb_src.addItem("회사 공통 (모든 직원이 봅니다)", kb.SRC_SHARED)
+        # 관리자는 시트를 고친다 — 이 PC 에서만 고친 것이 남아 있을 때만 그 묶음을 보여 준다
+        if not self.admin or any(x.get("_local") for x in self.local):
+            self.cmb_src.addItem("회사 공통 — 이 PC 에서만 고침", kb.SRC_LOCAL)
         self.cmb_src.addItem("내 메모 (내 계정에서만)", kb.SRC_MINE)
         self.cmb_src.currentIndexChanged.connect(self._switch)
         srow.addWidget(self.cmb_src, 1)
         root.addLayout(srow)
 
         if not self.admin:
-            lbl = QLabel("회사 공통 자료는 관리자 계정으로 [동기화](로그인)한 PC 에서만 고칠 수 있습니다.\n"
-                         "이 PC 는 시트에서 받아 둔 공통 자료를 검색에 씁니다.")
+            lbl = QLabel("회사 공통 자료는 고쳐도 이 PC 에서만 바뀝니다 — 시트·다른 직원에게는 가지 않습니다.\n"
+                         "팩스번호·내 연락처처럼 나만 다르게 쓸 것을 고치세요. "
+                         "[회사 자료로 되돌리기] 를 누르면 회사 원본으로 돌아갑니다.")
+            lbl.setWordWrap(True)
             lbl.setStyleSheet(f"color:{theme.c('subtext')};")
             root.addWidget(lbl)
 
@@ -629,19 +645,29 @@ class KbEditDialog(QDialog):
         self.lst.currentRowChanged.connect(self._on_row)
         left.addWidget(self.lst, 1)
         lrow = QHBoxLayout()
-        b_add = QPushButton("추가")
-        b_add.clicked.connect(self._add)
-        b_del = QPushButton("삭제")
-        b_del.clicked.connect(self._del)
-        lrow.addWidget(b_add)
-        lrow.addWidget(b_del)
+        self.b_add = QPushButton("추가")
+        self.b_add.clicked.connect(self._add)
+        self.b_del = QPushButton("삭제")
+        self.b_del.clicked.connect(self._del)
+        lrow.addWidget(self.b_add)
+        lrow.addWidget(self.b_del)
         left.addLayout(lrow)
+        self.b_revert = QPushButton("회사 자료로 되돌리기")
+        self.b_revert.setToolTip("이 PC 에서 고친 것을 버리고 회사 원본으로 돌아갑니다.")
+        self.b_revert.clicked.connect(lambda: self.revert())
+        left.addWidget(self.b_revert)
         holder = QWidget()
         holder.setLayout(left)
         holder.setFixedWidth(240)
         body.addWidget(holder)
 
         right = QVBoxLayout()
+        # 이 PC 에서 고친 공통 자료의 안내(회사가 원본을 또 고침 · 원본이 없어짐)
+        self.lbl_note = QLabel("")
+        self.lbl_note.setWordWrap(True)
+        self.lbl_note.setStyleSheet(f"color:{theme.strong('orange')};")
+        self.lbl_note.hide()
+        right.addWidget(self.lbl_note)
         r1 = QHBoxLayout()
         r1.addWidget(QLabel("분류"))
         self.cmb_cat = QComboBox()
@@ -705,8 +731,9 @@ class KbEditDialog(QDialog):
         body.addLayout(right, 1)
 
         hint = QLabel(
-            "고친 내용은 이 PC 에 바로 저장됩니다. 다른 PC·일정관리기와 맞추려면 [동기화] 를 누르세요."
-            + ("\n회사 공통 자료는 [동기화] 때 시트로 올라가 모든 직원에게 보입니다." if self.admin else ""))
+            "고친 내용은 이 PC 에 바로 저장됩니다. 내 메모를 다른 PC·일정관리기와 맞추려면 [동기화] 를 누르세요."
+            + ("\n회사 공통 자료는 [동기화] 때 시트로 올라가 모든 직원에게 보입니다." if self.admin
+               else "\n이 PC 에서만 고친 회사 공통 자료는 [동기화] 해도 올라가지 않습니다."))
         hint.setStyleSheet(f"color:{theme.c('subtext')};")
         root.addWidget(hint)
 
@@ -737,8 +764,12 @@ class KbEditDialog(QDialog):
             return False
         src = item.get("source")
         i = self.cmb_src.findData(src)
+        if i < 0 and src in (kb.SRC_SHARED, kb.SRC_LOCAL):
+            # 관리자가 아니면 공통 자료는 '이 PC 에서만' 묶음에서 고친다(관리자는 그 반대)
+            src = kb.SRC_LOCAL if src == kb.SRC_SHARED else kb.SRC_SHARED
+            i = self.cmb_src.findData(src)
         if i < 0:
-            return False                # 공통 자료인데 관리자가 아니면 고칠 수 없다
+            return False
         if i != self.cmb_src.currentIndex():
             self.cmb_src.setCurrentIndex(i)
 
@@ -757,28 +788,58 @@ class KbEditDialog(QDialog):
         return True
 
     # ---- 묶음 ----
+    def _list_of(self, src) -> list:
+        return {kb.SRC_SHARED: self.shared, kb.SRC_LOCAL: self.local}.get(src, self.mine)
+
     def _cur_list(self) -> list:
-        return (self.shared if self.cmb_src.currentData() == kb.SRC_SHARED
-                else self.mine)
+        return self._list_of(self.cmb_src.currentData())
+
+    def _is_local(self) -> bool:
+        return self.cmb_src.currentData() == kb.SRC_LOCAL
 
     def _switch(self, _i: int) -> None:
-        self._stash()
+        self._stash()                   # 바꾸기 전 묶음에 거둔다(_cur_src)
         self._cur = -1
         self._fill()
         self._sync_seed_btn()
 
     def _sync_seed_btn(self) -> None:
-        """기본 자료는 회사 공통 묶음에만 넣는다(전 직원이 같은 것을 봐야 한다)."""
+        """기본 자료는 회사 공통 묶음에만 넣는다(전 직원이 같은 것을 봐야 한다).
+
+        '이 PC 에서만' 묶음은 회사 자료를 고치기만 한다 — 더하거나 지우지 않는다.
+        """
         on = self.cmb_src.currentData() == kb.SRC_SHARED
         self.btn_seed.setEnabled(on)
         if not on:
             self.btn_seed.setToolTip("기본 자료는 '회사 공통' 묶음에만 넣을 수 있습니다.")
+        loc = self._is_local()
+        self.b_add.setEnabled(not loc)
+        self.b_del.setEnabled(not loc)
+        self.b_add.setToolTip("새 자료는 '내 메모' 에 추가하세요." if loc else "")
+        self.b_del.setToolTip("회사 공통 자료는 지울 수 없습니다 — 고친 것은 [회사 자료로 되돌리기]."
+                              if loc else "")
+        self.b_revert.setVisible(loc)
+
+    def _row_text(self, it: dict) -> str:
+        t = (it.get("title") or "").strip() or "(제목 없음)"
+        if self._is_local() and self._changed(it):
+            t += "  (이 PC 에서 고침)"
+        return t
+
+    @staticmethod
+    def _changed(it: dict) -> bool:
+        """이 PC 에서만 고친 공통 자료가 원본과 다른가(원본이 없어졌으면 다르다).
+
+        방금 붙여 아직 id 가 없는 첨부도 고친 것이다(kb.same 은 그런 첨부를 안 본다).
+        """
+        return (it.get("_base") is None or not kb.same(it, it["_base"])
+                or any(not a.get("id") for a in it.get("files") or []))
 
     def _fill(self) -> None:
         self.lst.blockSignals(True)
         self.lst.clear()
         for it in self._cur_list():
-            self.lst.addItem(it.get("title") or "(제목 없음)")
+            self.lst.addItem(self._row_text(it))
         self.lst.blockSignals(False)
         if self._cur_list():
             self.lst.setCurrentRow(0)
@@ -787,9 +848,13 @@ class KbEditDialog(QDialog):
 
     # ---- 편집 ----
     def _stash(self) -> None:
-        lst = self._cur_list()
+        # 편집칸이 띄운 묶음에 거둔다 — 묶음 콤보는 이미 바뀌었을 수 있다(예전엔 다른
+        # 묶음의 같은 줄을 덮어썼다: 공통 2번째를 보다 내 메모로 바꾸면 메모 2번째가 바뀜)
+        lst = self._list_of(self._cur_src)
         if 0 <= self._cur < len(lst):
+            tags = {k: v for k, v in lst[self._cur].items() if k.startswith("_")}
             lst[self._cur] = {
+                **tags,                 # 이 PC 에서만 고친 것의 원본·열쇠
                 "category": self.cmb_cat.currentText().strip(),
                 "finance": self.ed_fin.text().strip(),
                 "title": self.ed_title.text().strip(),
@@ -802,11 +867,16 @@ class KbEditDialog(QDialog):
             }
 
     def _on_row(self, row: int) -> None:
+        prev, prev_src = self._cur, self._cur_src
         self._stash()
+        if prev_src == self.cmb_src.currentData() and 0 <= prev < self.lst.count():
+            self.lst.item(prev).setText(self._row_text(self._cur_list()[prev]))
         self._cur = row
+        self._cur_src = self.cmb_src.currentData()
         lst = self._cur_list()
         on = 0 <= row < len(lst)
         it = lst[row] if on else {}
+        self._show_note(it)
         self.cmb_cat.setCurrentText(it.get("category", ""))
         self.ed_fin.setText(it.get("finance", ""))
         self.ed_title.setText(it.get("title", ""))
@@ -821,14 +891,58 @@ class KbEditDialog(QDialog):
                   self.btn_att_paste, self.btn_att_add, self.btn_att_ren, self.btn_att_del):
             w.setEnabled(on)
 
+    def _show_note(self, it: dict) -> None:
+        note = ""
+        if self._is_local() and it.get("_orphan"):
+            note = ("회사 자료에서 이 자료가 없어졌습니다(회사가 지웠거나 제목을 바꿨습니다). "
+                    "이 PC 에서 고친 것을 그대로 씁니다 — 필요 없으면 [회사 자료로 되돌리기] 로 지우세요.")
+        elif self._is_local() and it.get("_stale"):
+            note = ("회사에서 이 자료를 새로 고쳤습니다. 새 내용으로 바꾸려면 [회사 자료로 되돌리기] 를 "
+                    "누른 뒤 팩스번호 등을 다시 고치세요. 지금 것을 그대로 쓰려면 이 자료를 띄운 채 [저장] 하세요.")
+        self.lbl_note.setText(note)
+        self.lbl_note.setVisible(bool(note))
+
+    def revert(self, ask: bool = True) -> None:
+        """'이 PC 에서만' 묶음의 고른 자료를 회사 원본으로 되돌린다(원본이 없으면 지운다).
+
+        ask=False 면 묻지 않는다(검사용).
+        """
+        if not self._is_local() or not self._editing():
+            return
+        self._stash()
+        row = self._cur
+        it = self.local[row]
+        base = it.get("_base")
+        if base is not None and not self._changed(it):
+            QMessageBox.information(self, config.APP_NAME, "이미 회사 자료 그대로입니다.")
+            return
+        q = (f"'{it.get('title')}' 을(를) 회사 자료로 되돌릴까요?\n이 PC 에서 고친 내용은 사라집니다."
+             if base is not None else
+             "회사 자료에 이 자료가 없습니다(회사가 지웠거나 제목을 바꿨습니다).\n"
+             "이 PC 에서 고친 것을 지울까요?")
+        if ask and QMessageBox.question(self, config.APP_NAME, q) != QMessageBox.Yes:
+            return
+        if base is None:
+            self.local.pop(row)
+        else:
+            self.local[row] = {**dict(base), "_key": it.get("_key"), "_base": base}
+        self._cur = -1
+        self._fill()
+        if self.local:
+            self.lst.setCurrentRow(min(row, len(self.local) - 1))
+
     def _touch(self, *_a) -> None:
         pass          # 값은 _stash 에서 한꺼번에 거둔다
 
     def _title_edited(self, txt: str) -> None:
         if 0 <= self._cur < self.lst.count():
-            self.lst.item(self._cur).setText(txt.strip() or "(제목 없음)")
+            it = dict(self._cur_list()[self._cur])
+            it["title"] = txt
+            self.lst.item(self._cur).setText(self._row_text(it))
 
     def _add(self) -> None:
+        if self._is_local():
+            return                      # 회사 자료는 고치기만 — 새 것은 내 메모에
         self._stash()
         self._cur_list().append(
             {"category": "", "finance": "", "title": "새 자료",
@@ -849,6 +963,8 @@ class KbEditDialog(QDialog):
 
         묻지 않고 덮어쓰지는 않는다 — 고쳐 쓰신 내용이 말없이 사라지면 안 된다.
         """
+        if self.cmb_src.currentData() != kb.SRC_SHARED:
+            return
         lst = self._cur_list()
         self._stash()
         cur = {(it.get("title") or "").strip(): i for i, it in enumerate(lst)}
@@ -900,6 +1016,8 @@ class KbEditDialog(QDialog):
             "[저장] 을 눌러야 실제로 반영됩니다.")
 
     def _del(self) -> None:
+        if self._is_local():
+            return                      # 되돌리기만 된다(revert)
         lst = self._cur_list()
         row = self.lst.currentRow()
         if not (0 <= row < len(lst)):
@@ -1014,7 +1132,8 @@ class KbEditDialog(QDialog):
     def _pending(self) -> list:
         """아직 안 올린 첨부 → [(묶음 이름, 자료, 첨부)]."""
         out = []
-        for src, lst in ((kb.SRC_SHARED, self.shared), (kb.SRC_MINE, self.mine)):
+        for src, lst in ((kb.SRC_SHARED, self.shared), (kb.SRC_LOCAL, self.local),
+                         (kb.SRC_MINE, self.mine)):
             for it in lst:
                 for att in it.get("files") or []:
                     if not att.get("id"):
@@ -1046,10 +1165,14 @@ class KbEditDialog(QDialog):
             return False
         return True
 
-    def renamed(self) -> list:
-        """이름을 바꾼 '이미 올린' 첨부 → [(id, 새 이름)]."""
+    def renamed(self, local: bool = False) -> list:
+        """이름을 바꾼 '이미 올린' 첨부 → [(id, 새 이름)].
+
+        '이 PC 에서만' 묶음의 것은 드라이브 이름을 바꾸지 않는다(회사 파일이다) —
+        local=True 일 때만 넣는다(이 PC 의 받아 둔 파일 이름만 바꿀 때).
+        """
         out = []
-        for lst in (self.shared, self.mine):
+        for lst in ((self.shared, self.local, self.mine) if local else (self.shared, self.mine)):
             for it in lst:
                 for a in it.get("files") or []:
                     if a.get("id") and a.get("_was") and a.get("_was") != a.get("name"):
@@ -1058,16 +1181,21 @@ class KbEditDialog(QDialog):
 
     def _ok(self) -> None:
         self._stash()
+        # 띄워 둔 자료의 '회사가 또 고침' 안내를 보고 저장했다 — 지금 것을 그대로 쓰겠다는 뜻
+        if self._is_local() and self._editing() and self.local[self._cur].get("_stale"):
+            self.local[self._cur]["_ack"] = True
         if not self._store_pending():
             return
         # 받아 둔 파일도 새 이름으로 — 카톡에 새 이름으로 가고, 다시 받지 않는다
-        for fid, name in self.renamed():
+        for fid, name in self.renamed(local=True):
             kb_files.rename_cache({"id": fid, "name": name}, name)
         self.accept()
 
     @classmethod
     def run(cls, account: str = "", parent=None, select=None):
-        """반환: (공통 목록, 내 메모 목록) 또는 None(취소).
+        """반환: (공통 목록, 이 PC 에서만 고친 공통 목록, 내 메모 목록) 또는 None(취소).
+
+        두 번째는 kb.set_local 에 그대로 넘긴다(꼬리표 _key·_base 를 달고 있다).
 
         select: 처음에 골라 둘 자료(자료검색에서 보던 것).
         이름을 바꾼 첨부는 드라이브 이름도 [동기화] 때 바꿀 수 있게 `last_renamed` 에 남긴다.
@@ -1077,6 +1205,7 @@ class KbEditDialog(QDialog):
             return None
         cls.last_renamed = d.renamed()
         return ([x for x in d.shared if (x.get("title") or "").strip()],
+                list(d.local),
                 [x for x in d.mine if (x.get("title") or "").strip()])
 
     last_renamed: list = []

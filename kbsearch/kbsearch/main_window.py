@@ -231,6 +231,11 @@ class MainWindow(QMainWindow):
 
     def _shared_state(self, meta: dict) -> str:
         """아래 줄에 붙는 '회사 공통 자료' 상태."""
+        n = len(kb.load_local())
+        mine = f"  ·  이 PC 에서만 고친 공통 자료 {n}건" if n else ""
+        return self._shared_pull_state(meta) + mine
+
+    def _shared_pull_state(self, meta: dict) -> str:
         if meta.get("shared_dirty"):
             return "공통 자료: 이 PC 에서 고친 것을 [동기화] 로 올리기 전까지 자동 받기 멈춤"
         at = self._when(meta.get("shared_at"))
@@ -435,6 +440,10 @@ class MainWindow(QMainWindow):
         before = _file_ids(old_mine)
         if admin:
             before.update(_file_ids(old_shared))
+        # 이 PC 에서만 고친 공통 자료 — 이 PC 에 둔 첨부(local-)만 내 것이다. 회사 첨부는
+        # 빼도 이 PC 에서 안 보일 뿐, 드라이브 휴지통으로 보내지 않는다.
+        before.update({fid: f for fid, f in _file_ids([r["item"] for r in kb.load_local()]).items()
+                       if str(fid).startswith(kb_files.LOCAL_PREFIX)})
         # 편집 창이 떠 있는 동안에는 동기화를 막는다(sync_clicked). 창은 열 때 읽은 사본을
         # 들고 있어서, 그사이 동기화로 들어온 메모를 저장하면서 '지운 것' 으로 덮어쓴다.
         self._editing = True
@@ -445,10 +454,22 @@ class MainWindow(QMainWindow):
             self._editing = False
         if got is None:
             return
-        shared, mine = got
+        shared, local, mine = got
+        changed = local_changed = False
+        try:
+            if kb.clean_list(mine) != kb.clean_list(old_mine):
+                kb.save_mine(mine)
+                changed = True
+            if admin and kb.clean_list(shared) != kb.clean_list(old_shared):
+                kb.save_shared(shared, edited=True)
+                changed = True
+            local_changed = kb.set_local(local)
+        except Exception as e:
+            QMessageBox.warning(self, config.APP_NAME, "저장하지 못했습니다:\n" + str(e))
         after = _file_ids(mine)
         if admin:
             after.update(_file_ids(shared))
+        after.update(_file_ids([r["item"] for r in kb.load_local()]))
         # 뺀 첨부 — 이 PC 에만 있던 것은 지금 지우고, 올린 것은 [동기화] 때 드라이브 휴지통으로
         gone = [fid for fid in before if fid not in after]
         for fid in gone:
@@ -458,21 +479,13 @@ class MainWindow(QMainWindow):
         KbEditDialog.last_renamed = []
         kb.queue_remote(trash=[f for f in gone if not str(f).startswith(kb_files.LOCAL_PREFIX)],
                         renames=ren)
-        changed = False
-        try:
-            if kb.clean_list(mine) != kb.clean_list(old_mine):
-                kb.save_mine(mine)
-                changed = True
-            if admin and kb.clean_list(shared) != kb.clean_list(old_shared):
-                kb.save_shared(shared, edited=True)
-                changed = True
-        except Exception as e:
-            QMessageBox.warning(self, config.APP_NAME, "저장하지 못했습니다:\n" + str(e))
         self.view.reload()
         self.refresh_account()
         if changed:
             self._set_msg("이 PC 에 저장했습니다"
                           + (" — 다른 곳과 맞추려면 [동기화]" if config.SYNC_ON else ""), "ok")
+        elif local_changed:
+            self._set_msg("이 PC 에 저장했습니다 — 회사 공통 자료는 이 PC 에서만 바뀝니다", "ok")
 
     # ------------------------------------------------------------ 로그인 · 동기화
     def sync_clicked(self) -> None:

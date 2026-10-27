@@ -307,8 +307,9 @@ ok("내 메모 — 묶음도 바꿔서 그 자료", d8.ed_title.text() == "내 �
    and d8.cmb_src.currentData() == kb.SRC_MINE)
 d8.reject()
 d9 = KbEditDialog("", None, select={"source": kb.SRC_SHARED, "title": "메리츠캐피탈"})
-ok("로그인 안 함(관리자 아님)이면 공통 자료는 못 고치니 내 메모 맨 위",
-   d9.ed_title.text() == "개인 심사서류", d9.ed_title.text())
+ok("로그인 안 함(관리자 아님)이면 공통 자료를 '이 PC 에서만' 묶음에서 연다",
+   d9.ed_title.text() == "메리츠캐피탈" and d9.cmb_src.currentData() == kb.SRC_LOCAL,
+   d9.ed_title.text())
 d9.reject()
 d10 = KbEditDialog(ADMIN, None, select={"source": kb.SRC_SHARED, "title": "없는 자료"})
 ok("못 찾으면 맨 위", d10.lst.currentRow() == 0)
@@ -321,6 +322,40 @@ ok("[이름 바꾸기] 단추가 눌림 여부(False)를 새 이름으로 받지
 import kbsearch.main_window as _mw  # noqa: E402
 ok("메인 창 [자료 편집] 이 보던 자료를 넘긴다",
    "select=self.view.lst.current_item_data()" in inspect.getsource(_mw.MainWindow.edit))
+
+print("[9] 묶음을 바꿔도 다른 묶음의 같은 줄을 덮어쓰지 않는다")
+for who, first in ((ADMIN, kb.SRC_SHARED), ("", kb.SRC_LOCAL)):
+    d = KbEditDialog(who, None)
+    d.cmb_src.setCurrentIndex(d.cmb_src.findData(first))
+    d.lst.setCurrentRow(1)
+    d.ed_title.setText("가 먼저 (고침)")
+    d.cmb_src.setCurrentIndex(d.cmb_src.findData(kb.SRC_MINE))
+    ok(f"{'관리자' if who else '로그인 안 함'} — 내 메모 그대로",
+       [x["title"] for x in d.mine] == ["개인 심사서류", "내 메모 둘"], [x["title"] for x in d.mine])
+    lst = d.shared if first == kb.SRC_SHARED else d.local
+    ok(f"{'관리자' if who else '로그인 안 함'} — 고친 것은 원래 묶음에",
+       [x["title"] for x in lst] == ["메리츠캐피탈", "가 먼저 (고침)"], [x["title"] for x in lst])
+    d.reject()
+d = KbEditDialog("", None)
+d.lst.setCurrentRow(1)
+d.ed_title.setText("가 먼저 (고침)")
+d.lst.setCurrentRow(0)
+ok("고친 줄에 '이 PC 에서 고침' 표시", d.lst.item(1).text().endswith("(이 PC 에서 고침)"), d.lst.item(1).text())
+d._add()
+d._del()
+ok("'이 PC 에서만' 묶음은 더하거나 지우지 않는다", len(d.local) == 2)
+d.lst.setCurrentRow(1)
+d.revert(ask=False)
+ok("[회사 자료로 되돌리기]", d.local[1]["title"] == "가 먼저" and not d.lst.item(1).text().endswith(")"))
+_m = QMimeData()
+_m.setUrls([QUrl.fromLocalFile(_dd)])
+d.drop_attachments(_m)
+d.lst.setCurrentRow(0)
+ok("첨부만 붙여도 고친 것으로 본다", d.lst.item(1).text().endswith("(이 PC 에서 고침)"), d.lst.item(1).text())
+d.reject()
+d = KbEditDialog(ADMIN, None)
+ok("관리자는 이 PC 에서 고친 게 없으면 그 묶음을 안 보인다", d.cmb_src.findData(kb.SRC_LOCAL) < 0)
+d.reject()
 
 print()
 print("실패:", FAIL if FAIL else "없음")
