@@ -255,6 +255,77 @@ ok("켤 때 지난 상태를 되살린다", "_saved_maximized" in src
    and "showMaximized" in src)
 # 실제 동작(되돌리기·제약)은 verify_reg [E] 가 살아 있는 창으로 확인한다.
 
+print("\n[9] 휠로 끝까지 키워도 메모리가 안 터진다 (v1.21.2 비정상 종료)")
+# 휴대폰 사진(4000×3000)을 휠로 15번 굴리면 32000×24000 그림을 만들어 9GB 를 썼다.
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
+
+
+def wheel(wdg, delta=120):
+    ev = QWheelEvent(QPointF(wdg.rect().center()), QPointF(wdg.mapToGlobal(wdg.rect().center())),
+                     QPoint(0, 0), QPoint(0, delta), Qt.NoButton, Qt.NoModifier,
+                     Qt.NoScrollPhase, False)
+    QApplication.sendEvent(wdg, ev)
+
+
+def settle(pv_):
+    time.sleep(pv_.WHEEL_MS / 1000 + 0.03)
+    app.processEvents()
+
+
+photo = QImage(4000, 3000, QImage.Format_RGB32); photo.fill(QColor("#88AA44"))
+_b = QBuffer(); _b.open(QBuffer.WriteOnly); photo.save(_b, "JPG"); PHOTO = bytes(_b.data())
+del photo
+pv9 = FilePreview(); pv9.resize(900, 700); pv9.show(); app.processEvents()
+pv9.show_image(PHOTO, "photo", "사진.jpg"); app.processEvents()
+r0 = pv9.redraws
+t0 = time.time()
+for _ in range(30):
+    wheel(pv9.view)                 # 빠르게 30칸
+settle(pv9)
+pm = pv9.view.pixmap()
+ok("그린 그림이 예산 안(넓이)", pm.width() * pm.height() <= pv9.MAX_PIXELS,
+   (pm.width(), pm.height()))
+ok("그린 그림이 예산 안(한 변)", max(pm.width(), pm.height()) <= pv9.MAX_SIDE)
+ok("빠르게 30칸 굴려도 한 번만 그린다", pv9.redraws - r0 == 1, pv9.redraws - r0)
+ok("금방 끝난다(2초 안)", time.time() - t0 < 2.0, round(time.time() - t0, 2))
+ok("사진은 약 141% 까지", 1.3 < pv9.zoom < 1.5, round(pv9.zoom, 3))
+r1 = pv9.redraws
+for _ in range(5):
+    wheel(pv9.view); settle(pv9)
+ok("끝에서 더 굴려도 다시 그리지 않는다", pv9.redraws == r1, pv9.redraws - r1)
+pv9.zoom_by(1.25); app.processEvents()
+ok("단추로 키워도 예산을 넘지 않는다", pv9.zoom <= pv9._zoom_cap() + 1e-9)
+wheel(pv9.view, -120); settle(pv9)
+ok("내려 굴리면 작아진다", pv9.zoom < pv9._zoom_cap() - 1e-6, round(pv9.zoom, 3))
+pv9.rotate(90); app.processEvents()
+pm = pv9.view.pixmap()
+ok("돌려도 예산 안", pm.width() * pm.height() <= pv9.MAX_PIXELS)
+wheel(pv9.view)
+pv9.show_image(IMG, "small", "작은.png"); settle(pv9)
+ok("굴리던 중 다른 파일을 열면 그 휠은 버린다", pv9.fitted, pv9.zoom)
+ok("작은 그림은 지금처럼 8배까지", abs(pv9._zoom_cap() - pv9.MAX_ZOOM) < 1e-9, pv9._zoom_cap())
+if HAVE_PDF:
+    pv9.show_pdf(PDF, "pdf9", "계약서.pdf"); app.processEvents()
+    for _ in range(30):
+        wheel(pv9.view)
+    settle(pv9)
+    pm = pv9.view.pixmap()
+    ok("PDF 도 예산 안", pm.width() * pm.height() <= pv9.MAX_PIXELS, (pm.width(), pm.height()))
+    ok("A4 PDF 는 몇 배까지는 키운다", pv9.zoom > 3.0, round(pv9.zoom, 2))
+
+print("\n[10] 아주 큰 스캔(9000×8000)도 열린다 — 작게 풀어서")
+for fmt in ("PNG", "JPG"):
+    scan = QImage(9000, 8000, QImage.Format_RGB32); scan.fill(QColor("#FFFFFF"))
+    _b = QBuffer(); _b.open(QBuffer.WriteOnly); scan.save(_b, fmt); SCAN = bytes(_b.data())
+    del scan
+    ok(f"{fmt} 가 열린다", pv9.show_image(SCAN, "scan" + fmt, "스캔"))
+    ok(f"{fmt}: 들고 있는 원본이 예산 안", pv9._src is not None
+       and pv9._src.width() * pv9._src.height() <= pv9.MAX_PIXELS,
+       (pv9._src.width(), pv9._src.height()) if pv9._src is not None else None)
+    ok(f"{fmt}: 가로세로 비율 그대로", pv9._src is not None
+       and abs(pv9._src.width() / pv9._src.height() - 9000 / 8000) < 0.01)
+
 shutil.rmtree(tmp, ignore_errors=True)
 print("\n" + ("실패 %d건: %s" % (len(FAIL), FAIL) if FAIL else "전부 통과"))
 sys.exit(1 if FAIL else 0)

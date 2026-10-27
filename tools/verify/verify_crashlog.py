@@ -113,6 +113,85 @@ ok("무슨 일이었는지 · 무엇을 하면 되는지 · 파일 위치", "비
    and str(crashlog.log_path()) in t)
 crashlog.clean_exit()
 
+print("\n[8] 지점장이 보낸 기록 모양 — 앞의 오류 종류 줄이 잘리지 않는다")
+# v1.21.2: 스레드 목록이 길어 끝 6000자만 복사하니 "Windows fatal exception: …" 이 잘렸다
+crashlog.clean_exit()
+restart()
+crashlog.note("크게 보기 사진.jpg (3.1MB)")
+_threads = "".join(
+    f"\nThread 0x0000{n:04x} (most recent call first):\n"
+    + "".join(f'  File "urllib3\\connection.py", line {k} in connect\n' for k in range(14))
+    for n in range(12))
+with open(crashlog.log_path(), "a", encoding="utf-8") as f:
+    f.write("Windows fatal exception: access violation\n" + _threads
+            + "\nCurrent thread 0x00005178 (most recent call first):\n"
+            '  File "planner\\kb_tab.py", line 433 in open_attachment\n'
+            '  File "planner\\kb_attach.py", line 283 in _dbl\n'
+            '  File "planner\\app.py", line 130 in main\n\n')
+prev = restart()
+ok("알린다", prev != "")
+ok("오류 종류 줄이 들어 있다", "Windows fatal exception: access violation" in prev, prev[:200])
+ok("화면 스레드가 하던 일이 들어 있다", "open_attachment" in prev and "Current thread" in prev)
+ok("그 전에 무엇을 했는지(참고)도 보인다", "크게 보기 사진.jpg" in prev)
+ok("6000자 안", len(prev) <= crashlog.SUMMARY_MAX, len(prev))
+ok("[마지막 문제] 가 화면 스레드부터", prev.index("[마지막 문제]") < prev.index("open_attachment"))
+
+print("\n[9] 무해한 윈도 알림(0x8001010d 등)만 있으면 알리지 않는다")
+crashlog.clean_exit()
+restart()
+with open(crashlog.log_path(), "a", encoding="utf-8") as f:
+    for code in ("0x8001010d", "0x8001010e", "0x800706ba"):
+        f.write(f"Windows fatal exception: code {code}\n\nCurrent thread 0x1 (most recent call first):\n"
+                '  File "planner\\app.py", line 130 in main\n\n')
+crashlog.note("크게 보기 가.png (10KB)")
+ok("무해한 것만 → 알리지 않는다", restart() == "")
+ok("무해 판정", crashlog._harmless("Windows fatal exception: code 0x8001010d")
+   and not crashlog._harmless("Windows fatal exception: access violation")
+   and not crashlog._harmless("Windows fatal exception: code 0xc0000005"))
+ok("참고·Qt 경고는 문제가 아니다",
+   not crashlog.has_problem("----- 참고 — 크게 보기 · v1 · t -----\n----- Qt 경고 · v1 · t -----"))
+ok("파이썬 오류·멈춤·Qt 오류는 문제", all(crashlog.has_problem(f"----- {k} · v1 · t -----")
+                                    for k in ("파이썬 오류", "멈춤 — 화면이 20초째 응답 없음",
+                                              "Qt 오류", "메모리 2.1GB 넘음")))
+s2 = crashlog.summary("Windows fatal exception: code 0x8001010d\n" * 3
+                      + "Windows fatal exception: access violation\n")
+ok("요약에서 무해한 것은 표시하고 묶는다", "무해한 윈도 알림" in s2 and "×3" in s2, s2[:200])
+
+print("\n[10] 메모리 — 넘을 때 한 번만, 2GB 아래는 참고로")
+crashlog.clean_exit()
+restart()
+used = crashlog._mem_bytes()
+ok("메모리를 잰다", used > 0, used)
+_t, th = crashlog.start_watchdog(app=None, freeze_sec=999, every=0.05, mem_step=max(1, used // 3))
+time.sleep(0.4)
+crashlog._watch_stop.set(); th.join(2)
+txt = log()
+ok("넘은 것을 한 번 적는다", txt.count("GB 넘음") == 1, txt.count("GB 넘음"))
+ok("작은 메모리는 참고로", "참고 — 메모리" in txt)
+ok("그때 스레드 위치도", "Current thread" in txt.split("GB 넘음")[-1] or "Thread" in txt.split("GB 넘음")[-1])
+ok("참고뿐이면 알리지 않는다", restart() == "")
+_old = crashlog.MEM_PROBLEM
+crashlog.MEM_PROBLEM = 1
+_t, th = crashlog.start_watchdog(app=None, freeze_sec=999, every=0.05, mem_step=max(1, used // 3))
+time.sleep(0.3)
+crashlog._watch_stop.set(); th.join(2)
+crashlog.MEM_PROBLEM = _old
+prev = restart()
+ok("문턱을 넘은 메모리는 알린다", "메모리" in prev and "넘음" in prev, prev[:120])
+
+print("\n[11] Qt 오류 문구도 기록에")
+crashlog.clean_exit()
+restart()
+from PySide6.QtCore import qCritical, qWarning  # noqa: E402
+crashlog.install_qt_handler()
+qCritical("시험 Qt 오류 — 그림을 만들지 못함")
+qWarning("시험 Qt 경고")
+txt = log()
+ok("Qt critical 을 적는다", "Qt 오류" in txt and "그림을 만들지 못함" in txt, txt[-300:])
+ok("Qt 경고도 적는다(참고)", "Qt 경고" in txt and "시험 Qt 경고" in txt)
+ok("Qt 오류가 있으면 알린다", "그림을 만들지 못함" in restart())
+crashlog.clean_exit()
+
 print()
 if FAIL:
     print(f"{len(FAIL)}건 실패")

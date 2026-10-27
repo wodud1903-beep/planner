@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QVBoxLayout, QWidget,
 )
 
-from . import config, kb, kb_files, searchcombo, theme
+from . import config, crashlog, kb, kb_files, searchcombo, theme
 from .clipfiles import file_mime
 from .kb_attach import AttachList, AttachViewer
 from .livesearch import LiveLineEdit
@@ -426,6 +426,7 @@ class KbView(QWidget):
         except OSError as e:
             self.lbl_status.setText("첨부를 열지 못했습니다: " + str(e))
             return
+        crashlog.note(f"크게 보기 {att.get('name', '')} ({kb_files.size_text(len(data))})")
         # 창은 닫히면 스스로 없어진다(WA_DeleteOnClose) — 원본을 든 채 남지 않는다
         dlg = AttachViewer(att, data, on_send=lambda a=att: self.copy_attachments([a]),
                            parent=self)

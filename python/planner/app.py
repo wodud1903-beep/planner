@@ -74,6 +74,7 @@ def main() -> int:
     # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py). 두 번째 실행은 위에서 이미 빠졌으므로
     # 여기는 '실제로 도는 하나' 만 지난다.
     prev_crash = crashlog.start()
+    crashlog.install_qt_handler()       # Qt 의 오류 문구도 같은 기록에(창 프로그램이라 안 보인다)
     app.aboutToQuit.connect(crashlog.clean_exit)
     # 윈도를 끌 때(앱을 켜 둔 채)도 정상 종료다 — 다음에 '비정상' 이라고 묻지 않게
     app.commitDataRequest.connect(crashlog.clean_exit)
