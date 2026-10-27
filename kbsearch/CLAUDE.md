@@ -14,6 +14,7 @@
 판 번호를 안 올리면 빌드만 되고 아무 PC 에도 가지 않는다. CHANGELOG 절이 없으면 빌드가 멈춘다.
 
 ## 지킬 것
+- 지점장에게 알리는 말(답장·진행 상황)은 **한국어로** 쓴다(2026-10-27 요청).
 - 일정관리기(`python/`, `build-exe.yml`, 루트 CHANGELOG.md)는 건드리지 않는다.
 - 일정관리기의 자료검색 공용 부분(`kb_attach` · `livesearch` · `kb_tab` 의 KbView · `hangul` 등)이
   고쳐지면 `kbsearch/kbsearch/` 의 사본에도 옮긴다(README 의 '그대로 복사' 목록).
