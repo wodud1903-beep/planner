@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>업무자료검색</title>
+<meta name="description" content="회사 공통 업무자료(심사서류·캐피탈·연락처)를 로그인 없이 검색합니다.">
+<meta name="theme-color" content="#6A5AE0">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+    <h1>업무자료검색</h1>
+    <span class="grow"></span>
+    <button class="ghost" id="btn-admin" type="button">관리</button>
+  </header>
+
+  <main id="main">
+    <section class="split" id="split">
+      <div class="left">
+        <div class="searchbar">
+          <input id="q" type="search" placeholder="캐피탈·서류·연락처 검색 (초성도 됩니다)"
+                 autocomplete="off" enterkeyhint="search" aria-label="검색">
+        </div>
+        <div class="cats" id="cats" role="toolbar" aria-label="분류"></div>
+        <ul class="list" id="list" aria-live="polite"></ul>
+        <p class="foot" id="foot"></p>
+      </div>
+      <div class="right" id="detail">
+        <p class="empty">왼쪽에서 자료를 고르세요.</p>
+      </div>
+    </section>
+
+    <section class="off" id="off" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+      <h2>서비스가 꺼져 있습니다</h2>
+      <p id="off-msg"></p>
+    </section>
+  </main>
+</div>
+
+<dialog id="admin">
+  <form method="dialog" id="admin-form">
+    <h2>서버 켜기 / 끄기</h2>
+    <p class="sub">끄면 이 웹페이지와 직원 PC 의 업무자료검색이 함께 멈춥니다(PC 는 몇 분 안에).</p>
+    <div id="admin-login">
+      <label for="pw">관리자 비밀번호</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <p class="err" id="admin-err" role="alert"></p>
+      <div class="row">
+        <button type="button" class="ghost" id="admin-cancel">닫기</button>
+        <button type="submit" class="primary" id="admin-go">확인</button>
+      </div>
+    </div>
+    <div id="admin-panel" hidden>
+      <div class="state" id="admin-state"></div>
+      <label for="offmsg">끌 때 직원에게 보일 안내</label>
+      <textarea id="offmsg" rows="3" maxlength="300"></textarea>
+      <p class="err" id="admin-err2" role="alert"></p>
+      <div class="row">
+        <button type="button" class="ghost" id="admin-close">닫기</button>
+        <button type="button" class="danger" id="btn-off">서버 끄기</button>
+        <button type="button" class="primary" id="btn-on">서버 켜기</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
