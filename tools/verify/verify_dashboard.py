@@ -333,6 +333,66 @@ ok("주 이름", (weekly.week_word(T, T), weekly.week_word(T + timedelta(days=7)
               weekly.week_word(T - timedelta(days=7), T), weekly.week_word(T + timedelta(days=21), T))
    == ("이번 주", "다음 주", "지난 주", "그 주"))
 
+print("\n[13] 켤 때 자동 업데이트 — 묻지 않고, 같은 판 두 번 실패하면 그만")
+from PySide6.QtWidgets import QMessageBox  # noqa: E402
+from planner import updater  # noqa: E402
+asked, told, started = [], [], []
+_q, _i = QMessageBox.question, QMessageBox.information
+QMessageBox.question = staticmethod(lambda *a, **k: asked.append(a) or QMessageBox.No)
+QMessageBox.information = staticmethod(lambda *a, **k: told.append(a))
+_frozen, _att, _note = updater.is_frozen, updater.attempts, updater.note_attempt
+updater.is_frozen = lambda: True
+tries = {"n": 0}
+updater.attempts = lambda v: tries["n"]
+updater.note_attempt = lambda v: tries.__setitem__("n", tries["n"] + 1)
+w._start_update = lambda res, manual: started.append((res["version"], manual))
+w._update_failed = ""
+res = {"version": "v9.9.9", "asset_url": "x", "notes": ""}
+w._on_update_checked(res, "", False)
+ok("켤 때는 묻지 않고 바로 받는다", started == [("v9.9.9", False)] and asked == [], (started, asked))
+ok("시도를 센다", tries["n"] == 1)
+w._on_update_checked(res, "", False)
+ok("두 번째도 한다", len(started) == 2 and tries["n"] == 2)
+w._on_update_checked(res, "", False)
+ok("같은 판 두 번 실패 뒤엔 그만(켤 때마다 꺼지지 않게)", len(started) == 2, started)
+ok("그만둘 때 한 번 알린다", len(told) == 1)
+w._on_update_checked(res, "", False)
+ok("알림은 한 번만", len(told) == 1)
+tries["n"] = 0
+w._update_failed = "missing"
+w._on_update_checked(res, "", False)
+ok("지난 업데이트가 실패했다고 알린 판에서는 자동으로 다시 안 한다", len(started) == 2)
+w._update_failed = ""
+w._on_update_checked(res, "", True)
+ok("[업데이트 확인](직접 누름)은 물어본다", len(asked) == 1 and len(started) == 2)
+w._on_update_checked(None, "연결 안 됨", False)
+ok("켤 때 확인이 실패해도 창을 띄우지 않는다", len(told) == 1)
+QMessageBox.question, QMessageBox.information = _q, _i
+updater.is_frozen, updater.attempts, updater.note_attempt = _frozen, _att, _note
+src_up = inspect.getsource(MainWindow._on_update_checked)
+ok("업데이트를 걸면 곧바로 끝낸다(마무리 정리에서 멈추지 않게)",
+   "os._exit(0)" in src_up and "crashlog.shutdown()" in src_up)
+
+print("\n[14] 남아 있는 옛 판 — 방금 깔린 새 판이 넘겨받는다")
+from planner import app as _app  # noqa: E402
+_ji, _ko, _fz = updater.just_installed, updater.kill_other_instances, updater.is_frozen
+kills = []
+updater.is_frozen = lambda: True
+updater.kill_other_instances = lambda: kills.append(1) or 1
+updater.just_installed = lambda: True
+ok("대답 없는(옛) 판이 남아 있으면 끝내고 뜬다", _app._take_over_after_update("") and kills == [1])
+ok("더 낮은 판이 남아 있어도", _app._take_over_after_update("1.0.0") and len(kills) == 2)
+ok("같은 판이면(그냥 두 번 실행) 넘겨받지 않는다",
+   not _app._take_over_after_update(config.APP_VERSION) and len(kills) == 2)
+updater.just_installed = lambda: False
+ok("방금 깔린 게 아니면 예전처럼 있는 창만 띄운다", not _app._take_over_after_update("")
+   and len(kills) == 2)
+updater.just_installed, updater.kill_other_instances, updater.is_frozen = _ji, _ko, _fz
+msrc = inspect.getsource(_app.main)
+ok("대답에 판 번호를 싣는다", 'f"ok {config.APP_VERSION}' in msrc)
+ok("끝낼 때 Qt 문구 처리기를 먼저 뗀다", "aboutToQuit.connect(crashlog.remove_qt_handler)" in msrc)
+ok("마무리 정리 없이 끝낸다(os._exit)", "os._exit(rc)" in msrc and "crashlog.shutdown()" in msrc)
+
 w.hide()
 print()
 if FAIL:

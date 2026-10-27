@@ -419,6 +419,36 @@ def install_qt_handler() -> None:
         pass
 
 
+def remove_qt_handler() -> None:
+    """끌 때 — Qt 가 정리하며 내는 문구가 파이썬을 부르지 않게 먼저 뗀다.
+
+    ⚠️ 파이썬이 끝나 가는 중에 Qt 가 문구 처리기(파이썬)를 부르면 그 자리에서 멈추거나
+       꺼질 수 있다. 그러면 프로그램이 다 끝나지 않고 남아, 업데이트 뒤 새 판이
+       '이미 실행 중' 으로 보고 꺼져 버렸다.
+    """
+    try:
+        from PySide6.QtCore import qInstallMessageHandler
+        qInstallMessageHandler(None)
+    except Exception:
+        pass
+
+
+def shutdown() -> None:
+    """프로그램을 끝내기 직전 — 처리기를 떼고, 기록 파일을 닫는다(정상 종료 표시는 따로)."""
+    global _fh
+    _watch_stop.set()
+    remove_qt_handler()
+    with _lock:
+        try:
+            if _fh is not None:
+                faulthandler.disable()
+                _fh.flush()
+                _fh.close()
+        except Exception:
+            pass
+        _fh = None
+
+
 def note(text: str) -> None:
     """참고 한 줄 — 문제가 아니라, 문제가 났을 때 '그 전에 무엇을 했나' 를 보려고."""
     write(f"참고 — {text}", "")

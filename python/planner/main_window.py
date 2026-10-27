@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import uuid
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, backup_dialog, changelog, config, contacts, customer_docs,
+    alarm_window, backup_dialog, changelog, config, contacts, crashlog, customer_docs,
     dashboard, deliver_cal, drive_path, followup,
     google_client, hotkey, kb, navicons, searchcombo, sheets, sync, theme, updater,
     weekly,
@@ -338,7 +339,13 @@ class MainWindow(QMainWindow):
             self._backup(manual=False)
             QTimer.singleShot(600, lambda: self._do_startup_brief(force=True))
 
-        # 시작 시 조용히 업데이트 확인
+        # 시작 시 업데이트 확인 — 새 판이 있으면 **묻지 않고** 받아서 깐다(v1.23.1, 요청).
+        # 지난 업데이트가 실패했으면 먼저 그 이유를 알려 준다.
+        updater.clear_attempt_if_done(config.APP_VERSION)
+        # 지난 업데이트가 실패했으면 이번에는 자동으로 다시 하지 않는다 — 안내를 읽는 중에
+        # 창이 꺼지지 않게(같은 이유로 또 실패하기 쉽다). 다음에 켤 때 한 번 더 해 본다.
+        self._update_failed = updater.last_failure()
+        QTimer.singleShot(3000, self._tell_update_failure)
         QTimer.singleShot(4000, lambda: self.check_update(manual=False))
 
         # 창이 뜬 직후 고객관리 시트를 자동으로 불러온다.
@@ -707,40 +714,88 @@ class MainWindow(QMainWindow):
 
     def _on_update_checked(self, res, err, manual):
         if res == "__applied__":
-            # 교체 배치가 실행됨 → 앱 종료하면 새 버전이 뜬다
+            # 교체 배치가 실행됨 → 바로 끝낸다(배치가 우리가 끝나기를 기다린다).
+            # ⚠️ QApplication.quit() 로 끝내면 파이썬 마무리 정리에서 멈춰 프로그램이 남는
+            #    일이 있었다 — 그러면 새 판이 '이미 실행 중' 으로 보고 꺼졌다(v1.22.1 무한
+            #    업데이트). 저장할 것은 _shutdown 에서 끝내고 곧바로 끝낸다.
             self._really_close = True
             self._shutdown()
-            QApplication.quit()
-            return
+            crashlog.clean_exit()
+            crashlog.shutdown()
+            os._exit(0)
         if err:
             if manual:
-                QMessageBox.warning(self, config.APP_NAME, "업데이트 확인 실패:\n" + err)
+                QMessageBox.warning(self, config.APP_NAME, "업데이트 실패:\n" + err)
+            elif getattr(self, "_auto_updating", False):
+                self._auto_updating = False
+                self.sig_toast.emit(config.APP_NAME, "자동 업데이트를 받지 못했습니다 — 다음에 켤 때 "
+                                                     "다시 해 봅니다.")
             return
         if not res:
             if manual:
                 QMessageBox.information(self, config.APP_NAME,
                                        f"현재 최신 버전입니다. (v{config.APP_VERSION})")
             return
+        if not updater.is_frozen():
+            if manual:
+                QMessageBox.information(
+                    self, config.APP_NAME,
+                    "개발 모드에서는 자동 교체가 되지 않습니다.\n"
+                    f"릴리스에서 {config.UPDATE_ASSET_NAME} 를 받아 사용하세요.")
+            return
+        if not manual:
+            # 켤 때 — 묻지 않고 받는다. 단 같은 판에서 두 번 실패했으면 그만둔다
+            # (안 그러면 켤 때마다 꺼졌다 켜지기를 되풀이한다). 그때는 한 번 알린다.
+            ver = res["version"]
+            if getattr(self, "_update_failed", ""):
+                return
+            if updater.attempts(ver) >= updater.AUTO_MAX_TRIES:
+                if not getattr(self, "_auto_stop_told", False):
+                    self._auto_stop_told = True
+                    QMessageBox.information(
+                        self, config.APP_NAME,
+                        f"새 버전 {ver} 자동 업데이트가 {updater.AUTO_MAX_TRIES}번 실패해 "
+                        "이번에는 건너뜁니다.\n트레이 아이콘 → [업데이트 확인] 으로 다시 하거나, "
+                        "받는 곳에서 직접 받아 주세요.")
+                return
+            updater.note_attempt(ver)
+            self._auto_updating = True
+            self.sig_toast.emit(config.APP_NAME, f"새 버전 {ver} 을(를) 받는 중입니다 — "
+                                                 "다 받으면 저절로 다시 켜집니다.")
+            self._start_update(res, manual=False)
+            return
         msg = (f"새 버전 {res['version']} 이(가) 있습니다. (현재 v{config.APP_VERSION})\n\n"
                f"{(res.get('notes') or '').strip()[:300]}\n\n지금 업데이트할까요?")
         if QMessageBox.question(self, config.APP_NAME, msg) != QMessageBox.Yes:
             return
-        if not updater.is_frozen():
-            QMessageBox.information(
-                self, config.APP_NAME,
-                "개발 모드에서는 자동 교체가 되지 않습니다.\n"
-                f"릴리스에서 {config.UPDATE_ASSET_NAME} 를 받아 사용하세요.")
-            return
         self.sig_toast.emit(config.APP_NAME, "업데이트 다운로드 중...")
+        self._start_update(res, manual=True)
 
+    def _start_update(self, res, manual: bool):
         def worker():
             try:
                 path = updater.download(res["asset_url"])
                 updater.apply_and_restart(path)
                 self.sig_update.emit("__applied__", "", manual)
             except Exception as e:
-                self.sig_update.emit(None, str(e), True)
+                self.sig_update.emit(None, str(e), manual)
         threading.Thread(target=worker, daemon=True).start()
+
+    def _tell_update_failure(self):
+        """지난 업데이트를 마치지 못했으면(배치가 남긴 결과) 이유와 받는 곳을 알려 준다."""
+        reason = getattr(self, "_update_failed", "") or updater.last_failure()
+        if not reason:
+            return
+        updater.ack_failure()
+        box = QMessageBox(self)
+        box.setWindowTitle(config.APP_NAME)
+        box.setIcon(QMessageBox.Warning)
+        box.setText(updater.failure_text(reason))
+        go = box.addButton("받는 곳 열기", QMessageBox.ActionRole)
+        box.addButton("닫기", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is go:
+            webbrowser.open(f"https://github.com/{config.UPDATE_REPO}/releases/latest")
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
