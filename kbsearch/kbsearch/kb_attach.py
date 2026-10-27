@@ -198,10 +198,48 @@ class AttachList(QListWidget):
         if editable:
             self.setAcceptDrops(True)
             self.setDragDropMode(QAbstractItemView.DropOnly)
+            # ⚠️ 끌어 놓는 알림은 안쪽 칸(viewport)이 받는다. 위 setMovement(Static) 이
+            #    그 칸의 acceptDrops 를 꺼 버려서, 탐색기에서 끌어 와도 첨부 칸이 거절했다
+            #    (본문 칸에 놓을 때만 들어갔다). 다시 켠다.
+            self.viewport().setAcceptDrops(True)
+            self.setDropIndicatorShown(False)
         else:
             self.setDragEnabled(True)
             self.setDragDropMode(QAbstractItemView.DragOnly)
         self.itemDoubleClicked.connect(self._dbl)
+
+    # ---- 한 줄 보기 ----
+    def one_row(self) -> None:
+        """보기 화면용 — 줄바꿈 없이 가로 한 줄, 높이는 칸 하나만큼.
+
+        첨부는 많아야 서너 장이라(지점장) 두 줄이 될 일이 없다. 예전엔 칸이 창 따라
+        커져 그림 한 장 뒤로 크게 비어 있었다 — 줄인 자리는 본문이 쓴다.
+        창이 좁아 한 줄에 다 안 들어가면 가로로 넘겨 본다(높이는 막대만큼만 늘어난다).
+        """
+        self._one_row = True
+        self.setFlow(QListView.LeftToRight)
+        self.setWrapping(False)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._fit_row()
+
+    def row_height(self, with_scrollbar: bool = False) -> int:
+        h = self.gridSize().height() + 2 * self.frameWidth() + 2
+        if with_scrollbar:
+            h += self.horizontalScrollBar().sizeHint().height()
+        return h
+
+    def _fit_row(self) -> None:
+        if not getattr(self, "_one_row", False):
+            return
+        need = self.count() * self.gridSize().width() + 2 * self.frameWidth()
+        h = self.row_height(with_scrollbar=need > self.width())
+        if self.height() != h or self.minimumHeight() != h:
+            self.setFixedHeight(h)
+
+    def resizeEvent(self, ev):          # noqa: N802 — Qt 이름 그대로
+        super().resizeEvent(ev)
+        self._fit_row()
 
     # ---- 채우기 ----
     def fill(self, files: list) -> None:
@@ -211,6 +249,7 @@ class AttachList(QListWidget):
             li.setData(Qt.UserRole, att)
             li.setToolTip(tip_for(att))
             self.addItem(li)
+        self._fit_row()
 
     def refresh(self, att_id: str, err: str = "") -> None:
         """받기가 끝난 첨부의 그림만 다시 그린다(못 받았으면 그 이유를 달아 둔다).

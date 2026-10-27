@@ -79,10 +79,16 @@ class UpdateDialog(QDialog):
             self.btn_go.clicked.connect(self._continue)
         elif failed_before:
             # 방금 바꾸려다 그대로 이 판으로 켜졌다 — 저절로 또 받지 않는다(무한 반복 방지)
+            why = updater.last_failure()
             self.lbl_state.setText(
-                "조금 전 업데이트가 적용되지 않았습니다. 다른 창에서 이 프로그램을 쓰고 있지 "
-                "않은지 확인한 뒤 [다시 시도] 를 눌러 주세요.\n기록: " + updater.log_path())
+                "조금 전 업데이트가 적용되지 않았습니다. "
+                + (updater.failure_text(why) + " " if why else "")
+                + "[다시 시도] 를 누르거나, [받는 곳 열기] 에서 새 판을 직접 받아 지금 파일과 "
+                  "바꿔 주세요(프로그램을 완전히 끈 뒤).\n기록: " + updater.log_path())
             self.lbl_state.setStyleSheet(f"color:{theme.strong('red')};")
+            self.btn_web = QPushButton("받는 곳 열기")
+            self.btn_web.clicked.connect(self._open_releases)
+            row.insertWidget(1, self.btn_web)
         else:
             self.btn_go.setEnabled(False)
             QTimer.singleShot(300, self.start)
@@ -134,6 +140,10 @@ class UpdateDialog(QDialog):
             return
         self.outcome = RESTART
         self.done(QDialog.Accepted)
+
+    def _open_releases(self) -> None:
+        import webbrowser
+        webbrowser.open(updater.RELEASES_URL)
 
     # ---- 나가기 ----
     def _continue(self) -> None:

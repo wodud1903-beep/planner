@@ -439,7 +439,8 @@ class MainWindow(QMainWindow):
         # 들고 있어서, 그사이 동기화로 들어온 메모를 저장하면서 '지운 것' 으로 덮어쓴다.
         self._editing = True
         try:
-            got = KbEditDialog.run(account, self)
+            # 보고 있던 자료가 바로 열리게(일정관리기와 같다 — 예전엔 늘 맨 위 자료부터)
+            got = KbEditDialog.run(account, self, select=self.view.lst.current_item_data())
         finally:
             self._editing = False
         if got is None:

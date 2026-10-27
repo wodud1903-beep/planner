@@ -167,6 +167,13 @@ def cmds(s):
 args = (r"C:\a\_update_업무자료검색.exe", r"C:\a\업무자료검색.exe", r"C:\a\업무자료검색.exe.old",
         r"C:\log.txt", 4242)
 ok("같은 명령 순서", cmds(updater.update_script(*args)) == cmds(pupd.update_script(*args)))
+args2 = args + (5151, r"C:\Users\me\AppData\Roaming\KbSearch\update_status.txt")
+sc = updater.update_script(*args2)
+ok("부모(PPID)·결과 파일까지 넘겨도 같다(일정관리기 v1.23.1)",
+   cmds(sc) == cmds(pupd.update_script(*args2)))
+ok("30초 넘게 남으면 끝낸다 · 결과를 남긴다",
+   "taskkill /F /T /PID %PID%" in sc and "echo ok> \"%STATUS%\"" in sc
+   and "fail missing" in sc and "fail locked" in sc)
 
 print("[8] 업데이트 창 — 건너뛰기 없음")
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
@@ -192,6 +199,69 @@ d.reject()
 ok("받는 중이 아니면 Esc = 종료", closed and d.outcome == update_ui.QUIT)
 
 config.APP_VERSION = REAL_VERSION
+
+print("[10] 업데이트 뒤 — 남은 옛 판 넘겨받기 · 지난 실패 알리기 (일정관리기 v1.23.1)")
+import subprocess as _sp  # noqa: E402
+from kbsearch import app as kapp  # noqa: E402
+logf = config.base_dir() / "update_log.txt"
+logf.write_text("[update] start\n[update] replaced ok\n", encoding="utf-8")
+ok("방금 깔렸다(기록에 replaced ok, 10분 안)", updater.just_installed())
+os.utime(logf, (time.time() - 700, time.time() - 700))
+ok("오래된 기록이면 아니다", not updater.just_installed())
+os.utime(logf, None)
+killed = []
+updater.kill_other_instances = lambda: (killed.append(1), 1)[1]
+_frozen = updater.is_frozen
+updater.is_frozen = lambda: True
+config.APP_VERSION, _kv = "1.0.4", config.APP_VERSION
+ok("대답 없는 옛 판(1.0.3 이하)이 남았으면 끝내고 이어서 뜬다",
+   kapp._take_over_after_update("") is True and killed)
+killed.clear()
+ok("더 낮은 판이 대답해도 넘겨받는다", kapp._take_over_after_update("1.0.3") is True and killed)
+killed.clear()
+ok("같은·높은 판이면 보통 두 번 실행 — 있는 창만 띄운다",
+   kapp._take_over_after_update("1.0.4") is False and not killed)
+logf.unlink()
+ok("방금 깔린 게 아니면 넘겨받지 않는다", kapp._take_over_after_update("") is False and not killed)
+config.APP_VERSION = _kv
+updater.is_frozen = _frozen
+st = config.base_dir() / "update_status.txt"
+st.write_text("fail missing\n", encoding="utf-8")
+ok("지난 실패 이유", updater.last_failure() == "missing" and "백신" in updater.failure_text("missing"))
+d = update_ui.UpdateDialog({"version": "1.0.4", "notes": ""}, failed_before=True)
+ok("실패했으면 이유와 [받는 곳 열기]", "백신" in d.lbl_state.text()
+   and any(b.text() == "받는 곳 열기" for b in d.findChildren(QPushButton)))
+ok("그래도 건너뛰기 단추는 없다", not any(b.text() in ("나중에", "건너뛰기", "계속")
+                                    for b in d.findChildren(QPushButton)))
+st.unlink()
+# 켜져 있는 쪽이 'ok 판번호' 로 대답하는지 — 따로 띄운 프로그램(서버)에 붙어 본다
+key = f"KbSearchVerify_{os.getpid()}"
+srv = _sp.Popen([_sys.executable, "-c", f"""
+import sys
+from PySide6.QtCore import QCoreApplication, QTimer
+from PySide6.QtNetwork import QLocalServer
+app = QCoreApplication([])
+QLocalServer.removeServer({key!r})
+s = QLocalServer(); s.listen({key!r})
+def on():
+    c = s.nextPendingConnection()
+    c.write(b"ok 9.9.9\\n"); c.flush(); c.waitForBytesWritten(300); c.disconnectFromServer()
+s.newConnection.connect(on)
+print("ready", flush=True)
+QTimer.singleShot(8000, app.quit)
+app.exec()
+"""], stdout=_sp.PIPE, text=True)
+srv.stdout.readline()
+kapp._SINGLE_KEY = key
+ok("켜져 있는 쪽이 판 번호로 대답한다", kapp._activate_existing() == "9.9.9")
+srv.kill()
+kapp._SINGLE_KEY = "KbSearchVerify_none"
+ok("아무것도 없으면 None", kapp._activate_existing() is None)
+import inspect as _insp  # noqa: E402
+src = _insp.getsource(kapp.main)
+ok("끝낼 때 마무리 정리 없이 바로 끝낸다(os._exit)", "_hard_exit(app.exec())" in src
+   and "os._exit" in _insp.getsource(kapp._hard_exit))
+ok("끌 때 Qt 문구 처리기를 뗀다", "crashlog.remove_qt_handler" in src)
 
 print("[9] push 때 저절로 릴리스할지 (release_plan)")
 _sys.path.insert(0, str(_HERE.parent))
