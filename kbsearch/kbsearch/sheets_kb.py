@@ -6,12 +6,18 @@
   A 카테고리  B 금융사  C 제목  D 태그  E 본문  F 체크리스트(줄바꿈)
   G 첨부(앱 전용) — {"title": 제목, "files": [{id, name, mime, size}]} JSON
 
-일정관리기와 다른 점 하나: 읽기 실패를 조용히 삼키지 않는다. [동기화] 를 누른 사람에게
-'시트에 접근할 수 없다' 를 알려야 한다. 탭이 아직 없는 것만 None 으로 돌려준다.
+일정관리기와 다른 점
+  · 읽기 실패를 조용히 삼키지 않는다. [동기화] 를 누른 사람에게 '시트에 접근할 수 없다'
+    를 알려야 한다. 탭이 아직 없는 것만 None 으로 돌려준다.
+  · **로그인 없이 읽는 길**(read_kb_public)이 있다. 시트가 '링크가 있는 모든 사용자 —
+    뷰어' 로 열려 있어서, 공개 CSV 로 받으면 로그인 없이 같은 내용이 온다. 회사 공통 자료를
+    켜 둔 동안 저절로 맞추는 데 쓴다(sync.pull_shared_public).
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import urllib.parse
 
@@ -157,6 +163,11 @@ def read_kb(auth: GoogleAuth, sheet_id: str = config.KB_SHEET_ID,
                     for x in (rg.json() or {}).get("values", [])]
     except Exception:
         gcol = []
+    return items_from_rows(rows, gcol)
+
+
+def items_from_rows(rows: list, gcol: list) -> list | None:
+    """A:F 행들 + G 열 → 자료 목록. 빈 줄·머리글은 건너뛴다. 하나도 없으면 None."""
     out = []
     for i, row in enumerate(rows):
         vals = [str(x).strip() for x in row] + [""] * 6
@@ -176,6 +187,46 @@ def read_kb(auth: GoogleAuth, sheet_id: str = config.KB_SHEET_ID,
             it["files"] = files
         out.append(it)
     return out or None
+
+
+# ---------------------------------------------------------------------------
+# 로그인 없이 — 공개 CSV
+# ---------------------------------------------------------------------------
+PUBLIC_CSV_URL = ("https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq"
+                  "?tqx=out:csv&headers=1&sheet={tab}")
+
+
+class NotPublic(Exception):
+    """공개로 못 읽었다(시트가 잠겼거나 인터넷이 안 됨). 화면에 크게 알릴 일은 아니다."""
+
+
+def read_kb_public(sheet_id: str = config.KB_SHEET_ID, tab: str = config.KB_TAB):
+    """공통 업무자료를 **로그인 없이** 읽는다. 비었으면 None, 못 읽으면 NotPublic.
+
+    ⚠️ 이 주소는 탭 이름이 틀리면 오류 대신 **첫 탭(수당율)을 준다.** 그대로 쓰면
+       수당율 표가 업무자료를 덮어쓴다. 그래서 머리글이 업무자료의 것과 같을 때만 받는다.
+    ⚠️ 시트가 잠겨 있으면 구글이 로그인 화면(HTML)을 200 으로 준다 — 종류(CSV)를 본다.
+    """
+    url = PUBLIC_CSV_URL.format(sheet_id=sheet_id, tab=urllib.parse.quote(tab, safe=""))
+    try:
+        r = _http().get(url, timeout=20)
+    except Exception as e:
+        raise NotPublic(f"인터넷 연결: {e}")
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    if r.status_code != 200 or "csv" not in ctype:
+        raise NotPublic(f"공개로 읽지 못했습니다 (HTTP {r.status_code}, {ctype or '종류 없음'})")
+    try:
+        text = r.content.decode("utf-8-sig")
+        rows = list(csv.reader(io.StringIO(text)))
+    except Exception as e:
+        raise NotPublic(f"내용을 읽지 못했습니다: {e}")
+    if not rows:
+        return None
+    head = [str(x).strip() for x in rows[0]]
+    if head[:3] != KB_HEADER[:3]:
+        raise NotPublic("업무자료 탭이 아닌 것이 왔습니다(탭 이름이 바뀌었을 수 있습니다).")
+    body = rows[1:]
+    return items_from_rows([r[:6] for r in body], [(r[6] if len(r) > 6 else "") for r in body])
 
 
 def write_kb(auth: GoogleAuth, items: list, sheet_id: str = config.KB_SHEET_ID,

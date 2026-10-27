@@ -203,18 +203,59 @@ ok("시트 내용으로 바뀜", [x["title"] for x in kb.load_shared()] == ["시
 print("[12] 시트 오류는 알린다 · 탭이 없으면 이 PC 자료를 둔다")
 g = fresh()
 g.sheet_code = 403
+g.public_csv = "html"           # 공개로도 못 읽는 경우
 try:
     sync.run(FakeAuth())
     msg = ""
 except sync.SyncError as e:
     msg = str(e)
-ok("403 → 알림", "403" in msg, msg[:60])
+ok("403 · 공개도 안 됨 → 알림", "403" in msg, msg[:60])
+g = fresh()
+g.sheet_code = 403
+g.kb_rows = [["캐피탈", "", "공개로 받은 것", "", "", ""]]
+res = sync.run(FakeAuth("notinvited@example.com"))
+ok("403 이어도 시트가 공개면 공개로 받는다", res.shared_pulled == 1
+   and [x["title"] for x in kb.load_shared()] == ["공개로 받은 것"])
 g = fresh()
 g.tab = False
 kb.save_shared([memo("이 PC 공통")])
 res = sync.run(FakeAuth())
 ok("탭 없음 → 그대로 두고 안내", [x["title"] for x in kb.load_shared()] == ["이 PC 공통"]
    and res.shared_note)
+
+print("[12-2] 로그인 없이 — 공개 CSV 로 공통 자료 받기")
+g = fresh()
+g.kb_rows = [sheets_kb.KB_HEADER[:6],
+             ["캐피탈", "메리츠", "메리츠캐피탈", "", "본문\n여러 줄, 쉼표 \"따옴표\"", "등본\n초본"]]
+att = {"id": "PUB1", "name": "법인전자약정1.png", "mime": "image/png", "size": 9}
+g.kb_g = ["", json.dumps({"title": "메리츠캐피탈", "files": [att]}, ensure_ascii=False)]
+got = sheets_kb.read_kb_public()
+ok("로그인 없이 받음 — 여러 줄 본문·따옴표 그대로", got and got[0]["body"] == '본문\n여러 줄, 쉼표 "따옴표"', got)
+ok("첨부(G열)도 함께", got[0].get("files") == [att])
+ok("체크리스트", got[0]["checklist"] == ["등본", "초본"])
+ok("인증 머리 없이 요청", g.count("GET", "docs.google.com") == 1)
+r = sync.apply_public(got)
+ok("이 PC 에 맞춤", r["changed"] and [x["title"] for x in kb.load_shared()] == ["메리츠캐피탈"])
+ok("받은 때를 적는다", bool(kb.load_meta().get("shared_at")))
+ok("같으면 다시 쓰지 않는다", sync.apply_public(sheets_kb.read_kb_public())["changed"] is False)
+kb.save_shared([memo("관리자가 고친 것")], edited=True)
+r = sync.apply_public(sheets_kb.read_kb_public())
+ok("관리자가 고친 게 남아 있으면 덮어쓰지 않는다", r["skipped"] == "dirty"
+   and kb.load_shared()[0]["title"] == "관리자가 고친 것")
+kb.update_meta(shared_dirty=False)
+ok("시트가 비었으면 그대로 둔다", sync.apply_public(None)["skipped"] == "empty"
+   and kb.load_shared()[0]["title"] == "관리자가 고친 것")
+for mode, why in (("html", "잠긴 시트(로그인 화면)"), ("firsttab", "다른 탭(수당율)이 옴")):
+    g.public_csv = mode
+    try:
+        sheets_kb.read_kb_public()
+        hit = False
+    except sheets_kb.NotPublic:
+        hit = True
+    ok(f"{why} → 받지 않음", hit)
+g.public_csv = "ok"
+g.tab = False
+ok("탭이 없으면 None", sheets_kb.read_kb_public() is None)
 
 print("[13] 미뤄 둔 첨부 휴지통 · 이름 바꾸기")
 g = fresh()

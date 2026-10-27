@@ -75,12 +75,18 @@ NOTICES = []
 QMessageBox.information = staticmethod(lambda *a, **k: NOTICES.append(a[2]) or QMessageBox.Ok)
 QMessageBox.warning = staticmethod(lambda *a, **k: NOTICES.append(a[2]) or QMessageBox.Ok)
 
+# 진짜 구글에 나가지 않게 가짜를 먼저 끼운다(켜자마자 공통 자료를 저절로 받으러 간다).
+# 처음엔 시트 탭이 없는 것으로 — 받아도 바뀌는 게 없다.
+g0 = FakeGoogle().install()
+g0.tab = False
+
 w = MainWindow(Settings.load())
 w.show_window()
-pump()
+pump(2.0)
 
 print("[1] 처음 — 로그인 없이")
-ok("자료가 보인다(기본 자료)", len(w.view.items) == len(kb.SAMPLE))
+ok("켜자마자 공통 자료를 받으러 간다(로그인 없이)", g0.public_reads >= 1, g0.public_reads)
+ok("시트가 비었으면 기본 자료 그대로", len(w.view.items) == len(kb.SAMPLE))
 ok("로그인 안 함 안내", "로그인 안 함" in w.lbl_account.text())
 ok("[동기화] 단추", w.btn_sync.isVisible() and w.btn_sync.text() == "동기화")
 ok("로그아웃은 숨김", not w.btn_logout.isVisible())
@@ -113,7 +119,7 @@ ok("첨부는 이 PC 에만(local-)", str(att.get("id", "")).startswith(kb_files
 ok("첨부 파일이 PC 에 있다", kb_files.cached(att) is not None)
 ok("동기화 점", w.btn_sync.text() == "동기화 ●")
 w.view.ed_find.setText("ㄴ ㅈㅈㅇㅈ ㅁㅁ")
-pump(0.1)
+pump(0.3)                               # 검색은 타자가 멎은 뒤(120ms) 한 번
 ok("초성으로 바로 찾음", w.view.lst.count() >= 1 and
    "내 전자약정 메모" in w.view.lst.item(0).text())
 
@@ -226,6 +232,71 @@ print("[10] 동기화를 끈 판(SYNC_ON=False)")
 config.SYNC_ON = False
 w.refresh_account()
 ok("[동기화] 가 사라진다", not w.btn_sync.isVisible() and "이 PC 에만" in w.lbl_account.text())
+config.SYNC_ON = True
+
+print("[11] 로그인 없이 — 관리자가 일정관리기에서 고친 공통 자료·첨부가 저절로 온다")
+w.gauth.disconnect()
+w.refresh_account()
+g = FakeGoogle().install()
+g.kb_rows = [["캐피탈", "메리츠", "메리츠캐피탈", "", "메리츠 본문", ""]]
+png = b"\x89PNG\r\n\x1a\n" + b"m" * 300
+g.files["PUB1"] = png
+g.public.add("PUB1")                    # 공통 자료의 첨부는 '링크가 있는 누구나 보기'
+att = {"id": "PUB1", "name": "법인전자약정1.png", "mime": "image/png", "size": len(png)}
+g.kb_g = [json.dumps({"title": "메리츠캐피탈", "files": [att]}, ensure_ascii=False)]
+w.auto_pull()
+for _ in range(60):
+    pump(0.05)
+    if not w._pulling:
+        break
+pump(0.2)
+ok("새 자료가 화면에", any(x["title"] == "메리츠캐피탈" for x in w.view.items))
+ok("안내", "새로 받았습니다" in w.lbl_msg.text(), w.lbl_msg.text())
+ok("아래 줄에 받은 때", "공통 자료 자동 받음" in w.lbl_account.text(), w.lbl_account.text())
+w.view.ed_find.setText("메리츠")
+w.view.flush_search()
+pump(0.5)
+ok("첨부를 로그인 없이 받는다(공개 주소)", kb_files.cached(att) is not None)
+ok("첨부 줄에 보인다", w.view.lst_att.count() == 1)
+kb.save_shared(kb.load_shared() + [{"title": "관리자 수정", "body": "b"}], edited=True)
+g.kb_rows = [["캐피탈", "", "시트 새것", "", "", ""]]
+w.auto_pull()
+for _ in range(60):
+    pump(0.05)
+    if not w._pulling:
+        break
+ok("이 PC 에서 고친 공통 자료가 있으면 덮어쓰지 않는다",
+   any(x["title"] == "관리자 수정" for x in kb.load_shared()))
+ok("멈춘 까닭을 보여 준다", "자동 받기 멈춤" in w.lbl_account.text())
+kb.update_meta(shared_dirty=False)
+n = g.public_reads
+w._pulled_at = 0
+w.show_window()
+for _ in range(60):
+    pump(0.05)
+    if not w._pulling:
+        break
+ok("창을 열 때 오래됐으면 다시 받는다", g.public_reads == n + 1)
+ok("받은 것으로 바뀜", [x["title"] for x in kb.load_shared()] == ["시트 새것"])
+n = g.public_reads
+w.show_window()
+pump(0.2)
+ok("방금 받았으면 또 받지 않는다", g.public_reads == n)
+g.public_csv = "html"
+w._pulled_at = 0
+kb.update_meta(shared_at="")
+w.auto_pull()
+for _ in range(60):
+    pump(0.05)
+    if not w._pulling:
+        break
+ok("못 받아도 창을 띄우지 않고 조용히 알린다", "받지 못함" in w.lbl_account.text()
+   and not any("받지 못" in n_ for n_ in NOTICES[-1:]))
+config.SYNC_ON = False
+n = g.public_reads
+w.auto_pull()
+pump(0.2)
+ok("동기화를 끈 판은 받으러 가지 않는다", g.public_reads == n)
 config.SYNC_ON = True
 
 print()

@@ -1,7 +1,9 @@
 """[동기화] — 이 PC 의 자료를 구글과 주고받는다. 누를 때만 돈다.
+(회사 공통 자료만은 로그인 없이 저절로도 받는다 — 맨 아래 apply_public)
 
 **회사 공통 자료** — 일정관리기와 같은 스프레드시트의 `업무자료` 탭.
-  · 보통은 받기만 한다(시트 → 이 PC).
+  · 보통은 받기만 한다(시트 → 이 PC). 로그인 계정이 시트에 초대돼 있지 않아도, 시트가
+    공개로 열려 있으면 공개 CSV 로 받는다(sheets_kb.read_kb_public).
   · 관리자 계정이 이 PC 에서 고친 것이 있으면(kb_meta.shared_dirty) 시트로 올린다.
     시트 내용을 통째로 바꾸므로 화면이 먼저 묻는다(main_window._sync).
 
@@ -261,11 +263,16 @@ def run(auth, push_shared: bool = False) -> Result:
         try:
             got = sheets_kb.read_kb(auth)
         except google_auth.GoogleError as e:
-            raise SyncError(f"공통 자료를 받지 못했습니다:\n{e}")
+            # 로그인으로 못 읽어도(시트에 초대 안 된 계정) 공개로는 읽힐 수 있다
+            try:
+                got = sheets_kb.read_kb_public()
+            except sheets_kb.NotPublic:
+                raise SyncError(f"공통 자료를 받지 못했습니다:\n{e}")
         if got:
             _drop_unused_locals(kb.load_shared(), got)
             kb.save_shared(got)
-            kb.update_meta(shared_dirty=False)
+            kb.update_meta(shared_dirty=False,
+                           shared_at=datetime.datetime.now().isoformat(timespec="seconds"))
             res.shared_pulled = len(got)
         else:
             res.shared_note = "시트에 아직 공통 자료가 없어 이 PC 의 자료를 그대로 둡니다."
@@ -308,6 +315,33 @@ def run(auth, push_shared: bool = False) -> Result:
     if meta.get("account") and meta.get("account") != res.account:
         res.notes.append(f"이전 계정({meta.get('account')}) 대신 {res.account} 와 동기화했습니다.")
     return res
+
+
+# ---------------------------------------------------------------------------
+# 로그인 없이 — 회사 공통 자료 저절로 받기
+# ---------------------------------------------------------------------------
+def apply_public(got) -> dict:
+    """공개 CSV 로 받은 공통 자료(sheets_kb.read_kb_public)를 이 PC 에 맞춘다.
+
+    받기(인터넷)는 일꾼 스레드가, 이 함수(파일 쓰기)는 **화면 스레드**가 부른다 — 자료 편집
+    창의 저장과 엇갈려 고친 것을 덮어쓰지 않게(main_window.auto_pull).
+
+    반환 {"changed": 바뀌었나, "count": 받은 수, "skipped": 안 맞춘 이유("" 면 맞춤)}
+      · "dirty" — 관리자가 이 PC 에서 고친 공통 자료가 아직 안 올라갔다. 덮어쓰면 그게
+                  사라지므로 손대지 않는다([동기화] 가 올릴지 묻는다).
+      · "empty" — 시트가 비었다(관리자가 막 고쳐 쓰는 중일 수도). 이 PC 것을 둔다.
+    """
+    if kb.load_meta().get("shared_dirty"):
+        return {"changed": False, "count": 0, "skipped": "dirty"}
+    if not got:
+        return {"changed": False, "count": 0, "skipped": "empty"}
+    old = kb.load_shared()
+    changed = (not kb.has_shared_cache()) or kb.clean_list(got) != kb.clean_list(old)
+    if changed:
+        _drop_unused_locals(old, got)
+        kb.save_shared(got)
+    kb.update_meta(shared_at=datetime.datetime.now().isoformat(timespec="seconds"))
+    return {"changed": changed, "count": len(got), "skipped": ""}
 
 
 def reset_mine_for_account() -> None:

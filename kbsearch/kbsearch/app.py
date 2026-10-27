@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import config, startup, theme, updater
+from . import config, crashlog, startup, theme, updater
 from .icon import make_icon
 from .settings import Settings
 
@@ -105,6 +105,10 @@ def main() -> int:
 
     if _activate_existing():
         return 0
+    # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py — 일정관리기와 같다). 두 번째 실행은 위에서 빠졌다.
+    prev_crash = crashlog.start()
+    app.aboutToQuit.connect(crashlog.clean_exit)
+    app.commitDataRequest.connect(crashlog.clean_exit)      # 윈도를 끌 때도 정상 종료
     QLocalServer.removeServer(_SINGLE_KEY)
     server = QLocalServer()
     server.listen(_SINGLE_KEY)
@@ -139,12 +143,14 @@ def main() -> int:
     if info:
         from .update_ui import CONTINUE, UpdateDialog
         if UpdateDialog.run(info) != CONTINUE:
+            crashlog.clean_exit()        # 업데이트로 끝나는 것도 정상 종료다
             return 0
 
     # ── 서비스 스위치 ──
     if not config.SERVICE_ON:
         if not tray_start:           # 부팅 때마다 안내가 뜨지 않게, 직접 켰을 때만 알린다
             QMessageBox.information(None, config.APP_NAME, config.SERVICE_OFF_MESSAGE)
+        crashlog.clean_exit()
         return 0
 
     startup.refresh()                # exe 를 옮겼으면 자동 실행 경로를 고친다
@@ -152,6 +158,10 @@ def main() -> int:
     from .main_window import MainWindow
     win = MainWindow(settings, update_checked=checked)
     win_box["win"] = win
+    crashlog.start_watchdog(app)        # 화면이 15초 넘게 멈추면 그때 상황을 적는다
+    if prev_crash:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(2500, lambda: crashlog.show_notice(win, prev_crash))
     if tray_start:
         win.start_in_tray()
     else:

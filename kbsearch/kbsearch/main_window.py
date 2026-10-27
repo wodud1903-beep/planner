@@ -4,9 +4,13 @@
 
   위   : [자료 편집] [동기화] [설정]
   가운데: 검색칸 · 결과 목록 · 본문/첨부 (kb_view.KbView)
-  아래 : 로그인 상태 · 마지막 동기화
+  아래 : 로그인 상태 · 마지막 동기화 · 공통 자료를 저절로 받은 때
 
-로그인은 [동기화] 를 처음 누를 때만 한다. 그 전에는 모든 것이 이 PC 에만 저장된다.
+**회사 공통 자료는 로그인 없이 저절로 받는다** — 켤 때, 그리고 config.KB_AUTO_MINUTES 마다
+(창을 열거나 빠른검색을 띄울 때 오래됐으면 그때도). 관리자가 일정관리기에서 고친 자료·첨부가
+그대로 따라온다(auto_pull).
+로그인은 [동기화] 를 처음 누를 때만 한다 — 내 메모를 구글 계정과 맞추거나, 관리자가 고친
+공통 자료를 올릴 때다. 그 전에는 내 메모가 이 PC 에만 저장된다.
 창을 닫으면 트레이로 내려가 빠른검색 단축키를 계속 받는다. 끄려면 트레이 → [종료].
 """
 
@@ -15,6 +19,7 @@ from __future__ import annotations
 import base64
 import sys
 import threading
+import time
 from datetime import datetime
 
 from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
@@ -23,7 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
-from . import config, hotkey, kb, kb_files, sync, theme, updater
+from . import config, hotkey, kb, kb_files, sheets_kb, sync, theme, updater
 from .google_auth import GoogleAuth, LoginCancelled
 from .icon import make_icon
 from .kb_view import KbEditDialog, KbView, QuickSearch
@@ -42,6 +47,9 @@ class MainWindow(QMainWindow):
     sig_login = Signal(str, str)             # (이메일, 오류)
     sig_sync = Signal(object, str)           # (sync.Result | None, 오류)
     sig_update = Signal(object, str, bool)   # (새 판 정보 | None, 오류, 직접 눌렀나)
+    sig_public = Signal(object, str)         # (공개로 받은 공통 자료 | None, 오류)
+
+    STALE_SEC = 5 * 60          # 창·빠른검색을 열 때 이보다 오래됐으면 공통 자료를 다시 받는다
 
     def __init__(self, settings: Settings | None = None, update_checked: bool = True):
         super().__init__()
@@ -55,6 +63,9 @@ class MainWindow(QMainWindow):
         self._updating = False
         self._quick = None
         self._icon = make_icon()
+        self._pulling = False               # 공통 자료를 저절로 받는 중
+        self._pulled_at = 0.0               # 마지막으로 받으러 간 때(time.monotonic)
+        self._public_err = ""
 
         self.setWindowTitle(f"{config.APP_NAME}  v{config.APP_VERSION}")
         self.setWindowIcon(self._icon)
@@ -68,6 +79,7 @@ class MainWindow(QMainWindow):
         self.sig_login.connect(self._on_login)
         self.sig_sync.connect(self._on_sync)
         self.sig_update.connect(self._on_update)
+        self.sig_public.connect(self._on_public)
 
         # 전역 단축키 (윈도) — 업무자료 빠른검색
         self.hotkeys = hotkey.HotkeyManager(QApplication.instance(), int(self.winId()))
@@ -82,6 +94,12 @@ class MainWindow(QMainWindow):
         self._upd_timer.start(int(config.UPDATE_CHECK_HOURS * 3600 * 1000))
         if not update_checked:
             QTimer.singleShot(60 * 1000, lambda: self.check_update(manual=False))
+
+        # 회사 공통 자료 — 로그인 없이 저절로 받는다(켜자마자 한 번, 그 뒤로 몇 분마다)
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self.auto_pull)
+        self._auto_timer.start(int(config.KB_AUTO_MINUTES * 60 * 1000))
+        QTimer.singleShot(1500, self._pull_if_stale)     # 창을 띄우며 이미 받았으면 건너뛴다
 
         self.apply_theme()
         self.refresh_account()
@@ -169,21 +187,18 @@ class MainWindow(QMainWindow):
             self.lbl_account.setText("자료는 이 PC 에만 저장됩니다.")
             self._sync_actions_visible(False)
             return
-        last = ""
-        try:
-            if meta.get("last_sync"):
-                last = datetime.fromisoformat(meta["last_sync"]).strftime("%m/%d %H:%M")
-        except Exception:
-            last = ""
+        last = self._when(meta.get("last_sync"))
+        shared = self._shared_state(meta)
         if self.gauth.is_connected():
             who = self.gauth.email or "구글 계정"
             role = " (관리자)" if config.is_admin(who) else ""
             self.lbl_account.setText(
-                f"● {who}{role}" + (f"  ·  마지막 동기화 {last}" if last else "  ·  아직 동기화 안 함"))
+                f"● {who}{role}" + (f"  ·  마지막 동기화 {last}" if last else "  ·  아직 동기화 안 함")
+                + f"  ·  {shared}")
             self.btn_logout.setVisible(not self._busy and self._login_cancel is None)
         else:
-            self.lbl_account.setText("로그인 안 함  ·  자료는 이 PC 에만 저장됩니다. "
-                                     "[동기화] 를 누르면 구글 로그인 후 주고받습니다.")
+            self.lbl_account.setText(f"로그인 안 함  ·  {shared}  ·  내 메모는 이 PC 에만 저장 "
+                                     "([동기화] 로 구글 계정과 맞춤)")
             self.btn_logout.hide()
         if self._login_cancel is not None:
             self.btn_sync.setText("로그인 취소")
@@ -196,10 +211,74 @@ class MainWindow(QMainWindow):
             self.btn_sync.setText("동기화 ●" if dot else "동기화")
             self.btn_sync.setToolTip(
                 ("이 PC 에서 고친 내용이 아직 동기화되지 않았습니다.\n" if dot else "")
-                + "구글에 로그인해 회사 공통 자료를 받고, 내 메모를 내 구글 계정과 맞춥니다.\n"
-                  "일정관리기와 같은 스프레드시트·같은 메모를 씁니다.")
+                + "회사 공통 자료는 로그인 없이도 저절로 받습니다.\n"
+                  "[동기화] 는 구글에 로그인해 내 메모를 내 구글 계정·일정관리기와 맞추고,\n"
+                  "관리자 계정이면 이 PC 에서 고친 공통 자료를 시트로 올립니다.")
             self.btn_sync.setEnabled(True)
         self._sync_actions_visible(True)
+
+    @staticmethod
+    def _when(iso) -> str:
+        """저장해 둔 시각 → '09:15'(오늘) 또는 '10/26 09:15'. 없으면 ""."""
+        try:
+            t = datetime.fromisoformat(str(iso))
+        except Exception:
+            return ""
+        return t.strftime("%H:%M") if t.date() == datetime.now().date() else t.strftime("%m/%d %H:%M")
+
+    def _shared_state(self, meta: dict) -> str:
+        """아래 줄에 붙는 '회사 공통 자료' 상태."""
+        if meta.get("shared_dirty"):
+            return "공통 자료: 이 PC 에서 고친 것을 [동기화] 로 올리기 전까지 자동 받기 멈춤"
+        at = self._when(meta.get("shared_at"))
+        if self._public_err and not at:
+            return "공통 자료를 저절로 받지 못함 — 인터넷을 확인해 주세요"
+        if at:
+            return f"공통 자료 자동 받음 {at}"
+        return "공통 자료 받는 중…"
+
+    # ------------------------------------------------------------ 공통 자료 저절로 받기
+    def auto_pull(self) -> None:
+        """회사 공통 자료를 로그인 없이 받는다(시트 공개 CSV). 조용히 한다 — 실패해도 창을 띄우지 않는다."""
+        if not config.SYNC_ON or self._pulling or self._busy:
+            return
+        self._pulling = True
+        self._pulled_at = time.monotonic()
+
+        def work():
+            try:
+                self.sig_public.emit(sheets_kb.read_kb_public(), "")
+            except Exception as e:
+                self.sig_public.emit(None, str(e) or "받지 못함")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _pull_if_stale(self) -> None:
+        if time.monotonic() - self._pulled_at > self.STALE_SEC:
+            self.auto_pull()
+
+    def _on_public(self, items, err: str) -> None:
+        self._pulling = False
+        if err:
+            self._public_err = err
+            self.refresh_account()
+            return
+        self._public_err = ""
+        # 동기화·편집 중에는 파일을 건드리지 않는다 — 1분 뒤 다시 받는다
+        if self._busy or self._editing:
+            QTimer.singleShot(60 * 1000, self.auto_pull)
+            return
+        try:
+            got = sync.apply_public(items)
+        except Exception as e:
+            self._public_err = str(e)
+            self.refresh_account()
+            return
+        if got["changed"]:
+            self.view.reload()
+            if self._quick is not None and self._quick.isVisible():
+                self._quick.view.reload()     # 떠 있는 빠른검색 창도 새 자료로
+            self._set_msg(f"회사 공통 자료를 새로 받았습니다 ({got['count']}건)", "ok")
+        self.refresh_account()
 
     # ------------------------------------------------------------ 트레이
     def _build_tray(self) -> None:
@@ -239,6 +318,7 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.view.focus_search()
+        self._pull_if_stale()
 
     def start_in_tray(self) -> None:
         """부팅 때(/tray) — 창 없이 시작한다. 트레이가 없는 환경이면 그냥 창을 띄운다."""
@@ -323,6 +403,7 @@ class MainWindow(QMainWindow):
         if self._quick is None:
             self._quick = QuickSearch(self, auth=self.gauth)
         self._quick.popup()
+        self._pull_if_stale()
 
     # ------------------------------------------------------------ 설정
     def open_settings(self) -> None:
@@ -405,7 +486,8 @@ class MainWindow(QMainWindow):
             self.show_window()
             ans = QMessageBox.question(
                 self, config.APP_NAME,
-                "동기화하려면 구글 계정으로 로그인해야 합니다.\n\n"
+                "회사 공통 자료는 로그인 없이도 저절로 받고 있습니다.\n"
+                "[동기화] 는 내 메모를 내 구글 계정·일정관리기와 맞추는 일이라 로그인이 필요합니다.\n\n"
                 "브라우저가 열리면 회사에서 쓰는 구글 계정으로 로그인하고 [허용] 을 눌러 주세요.\n"
                 "(일정관리기에서 쓰던 계정이면 그 메모도 함께 받습니다)\n\n로그인할까요?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
@@ -514,6 +596,7 @@ class MainWindow(QMainWindow):
                 err += "\n\n다시 [동기화] 를 누르면 로그인 창이 열립니다."
             QMessageBox.warning(self, config.APP_NAME, "동기화하지 못했습니다.\n\n" + err)
             return
+        self._pulled_at = time.monotonic()      # 방금 공통 자료도 받았다
         self._set_msg("동기화 완료 — " + res.summary(), "ok")
         extra = [x for x in [res.shared_note] + list(res.notes) if x]
         if extra:

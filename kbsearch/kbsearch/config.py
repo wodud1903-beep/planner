@@ -84,6 +84,10 @@ SHEETS_BATCH_UPDATE_URL = SHEETS_BASE_URL + ":batchUpdate"
 KB_SHEET_ID = "1PSjqA7wvIBHusjYHFfD9cLKP-EbtdFrCkNqlZHz2jm0"
 KB_TAB = "업무자료"
 
+# 회사 공통 자료를 **로그인 없이** 저절로 받는 간격(분). 켤 때 한 번, 그 뒤로 이 간격마다.
+# 시트가 '링크가 있는 모든 사용자 — 뷰어' 로 열려 있어야 한다(지금 그렇다).
+KB_AUTO_MINUTES = 10
+
 # 회사 공통 자료를 고칠 수 있는 계정(일정관리기 RATES_ADMINS 와 같다)
 KB_ADMINS = ("wodud1903@gmail.com",)
 

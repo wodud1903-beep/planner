@@ -6,6 +6,8 @@ install() 이 그 세 모듈의 `_http` 를 이 가짜로 바꿔 끼운다.
 
 from __future__ import annotations
 
+import csv
+import io
 import itertools
 import json
 import urllib.parse
@@ -55,6 +57,9 @@ class FakeGoogle:
         self.kb_g = []                  # G
         self.sheet_code = 200           # 읽기 응답 코드(403 등을 흉내)
         self.put_values = None
+        # 공개 CSV(로그인 없이 읽기) — "ok" | "html"(잠긴 시트: 로그인 화면) | "firsttab"(탭 이름 틀림)
+        self.public_csv = "ok"
+        self.public_reads = 0
         # 드라이브 앱 전용 공간
         self.appdata = {}               # id → {"name", "content"}
         self.appdata_find_code = 200
@@ -99,6 +104,8 @@ class FakeGoogle:
         params = dict(params or {}) if not isinstance(params, list) else dict(params)
         if url.startswith("https://sheets.googleapis.com"):
             return self._sheets(method, url, body)
+        if url.startswith("https://docs.google.com/spreadsheets/d/") and "/gviz/" in url:
+            return self._gviz()
         if url.startswith(config.DRIVE_UPLOAD_URL):
             return self._upload(method, url, params, body, data, headers)
         if url.startswith("upload://"):
@@ -140,6 +147,25 @@ class FakeGoogle:
             self.kb_g = [r[6] if len(r) > 6 else "" for r in body["values"]]
             return Resp(200, {})
         return Resp(400, {"error": {"message": "?"}})
+
+    def _gviz(self):
+        """공개 CSV 흉내 — 진짜처럼 머리글 줄이 맨 위에 온다."""
+        self.public_reads += 1
+        if self.public_csv == "html":
+            return Resp(200, text="<html>로그인</html>", headers={"Content-Type": "text/html"})
+        if self.public_csv == "firsttab":
+            rows = [["브랜드", "차종", "수당율(%)", "화물차"], ["현대", "아반떼", "2.5", "FALSE"]]
+        elif not self.tab:
+            rows = []
+        else:
+            body = [r for r in self.kb_rows if (r[2] if len(r) > 2 else "") != "제목"]
+            g = [x for r, x in zip(self.kb_rows, self.kb_g + [""] * len(self.kb_rows))
+                 if (r[2] if len(r) > 2 else "") != "제목"]
+            rows = [list(sheets_kb.KB_HEADER)] + [
+                (list(r) + [""] * 6)[:6] + [x] for r, x in zip(body, g)]
+        out = io.StringIO()
+        csv.writer(out, quoting=csv.QUOTE_ALL).writerows(rows)
+        return Resp(200, text=out.getvalue(), headers={"Content-Type": "text/csv; charset=utf-8"})
 
     def _drive(self, method, url, params, body):
         rest = url[len(config.DRIVE_FILES_URL):].strip("/")
