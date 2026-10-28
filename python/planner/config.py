@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.23.2"
+APP_VERSION = "1.24.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -59,7 +59,14 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     # 견적서/계약서 이미지 업로드 — 앱이 만든 파일에만 접근하는 최소 권한
     "https://www.googleapis.com/auth/drive.file",
+    # 오늘의 뉴스 — 구글 문서 읽기(제한됨이 아니라 '민감' 등급). 드라이브 읽기 권한을
+    # 켠 사람은 그것으로 읽으므로 이 권한이 없어도 된다(news.fetch)
+    "https://www.googleapis.com/auth/documents.readonly",
 ]
+SCOPE_DOCS_READ = "https://www.googleapis.com/auth/documents.readonly"
+# 오늘의 뉴스 문서 — 제미나이가 매일 아침(8:40) 새로 쓴다. [설정] 에서 바꿀 수 있다.
+# 문서 id 만으로는 열 수 없다(그 계정에 있거나 공유된 문서만 읽힌다).
+DEF_NEWS_DOC = "1KhvgFvtETklf2wAoJjSzCJLh3iyKCYB19LaH_j03rqI"
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"

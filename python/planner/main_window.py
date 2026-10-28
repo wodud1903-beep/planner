@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
 from . import (
     alarm_window, backup_dialog, changelog, config, contacts, crashlog, customer_docs,
     dashboard, deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, navicons, searchcombo, sheets, sync, theme, updater,
-    weekly,
+    google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheets, sync,
+    theme, updater, weekly,
 )
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
+    sig_news = Signal(object, str, bool)    # 오늘의 뉴스 (뉴스|None, 오류, 권한 모자람)
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
@@ -287,6 +288,7 @@ class MainWindow(QMainWindow):
         self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
         self.sig_update.connect(self._on_update_checked)
+        self.sig_news.connect(self._on_news)
         self.sig_write_done.connect(self._on_write_done)
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
@@ -1046,6 +1048,11 @@ class MainWindow(QMainWindow):
             "오늘 브리핑과 이번 주 요약을 한 화면으로 — 켤 때 나오는 그 화면입니다")
         self.btn_weekly.clicked.connect(self.show_startup_screen)
         row.addWidget(self.btn_weekly)
+        # 제미나이가 매일 아침 구글 문서에 써 두는 뉴스 — 켤 때 받아 두므로 누르면 바로 뜬다
+        self.btn_news = QPushButton("오늘의 뉴스")
+        self.btn_news.setToolTip("매일 아침 새로 쓰이는 뉴스 문서를 봅니다([설정] 에서 문서를 바꿀 수 있습니다)")
+        self.btn_news.clicked.connect(self.show_news)
+        row.addWidget(self.btn_news)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
@@ -2635,6 +2642,106 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # ------------------------------------------------------------ 오늘의 뉴스
+    NEWS_MIN_GAP_SEC = 600          # 저절로 받을 때는 10분에 한 번까지(누르면 늘 새로)
+
+    def _news_doc_id(self) -> str:
+        return news.doc_id_from(getattr(self.settings, "news_doc", "") or "")
+
+    def fetch_news_async(self, force: bool = False):
+        """뉴스 문서를 뒤에서 받는다. 끝나면 sig_news → _on_news."""
+        doc_id = self._news_doc_id()
+        if not doc_id or not self.gauth.is_connected():
+            return
+        if getattr(self, "_news_busy", False):
+            return
+        import time
+        now = time.monotonic()
+        if not force and now - getattr(self, "_news_tried", -1e9) < self.NEWS_MIN_GAP_SEC:
+            return
+        self._news_tried = now
+        self._news_busy = True
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.set_busy(True)
+
+        def worker():
+            try:
+                n = news.fetch(self.gauth, doc_id)
+                n["docId"] = doc_id
+                news.save_cache(doc_id, n)
+                self.sig_news.emit(n, "", False)
+            except news.NeedScope as e:
+                self.sig_news.emit(None, str(e), True)
+            except Exception as e:
+                self.sig_news.emit(None, str(e) or "뉴스를 받지 못했습니다.", False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_news(self, n, err: str, need_scope: bool):
+        self._news_busy = False
+        if n:
+            self._news = n
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is None or not dlg.isVisible():
+            return
+        dlg.set_busy(False)
+        if n:
+            dlg.show_news(n)
+        else:
+            dlg.set_error(err, need_scope)
+
+    def show_news(self):
+        """[오늘의 뉴스] — 받아 둔 것을 바로 띄우고, 새로 받아 바꿔 끼운다."""
+        doc_id = self._news_doc_id()
+        if not doc_id:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "[설정] → '오늘의 뉴스' 에 구글 문서 주소를 넣어 주세요.")
+            return
+        cached = getattr(self, "_news", None)
+        if not cached or cached.get("docId") != doc_id:
+            cached = news.load_cache(doc_id)
+            if cached:
+                cached["docId"] = doc_id
+            self._news = cached
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is None or dlg._doc_id != doc_id:
+            if dlg is not None:
+                dlg.deleteLater()
+            dlg = news_dialog.NewsDialog(doc_id, self)
+            dlg.refresh_requested.connect(lambda: self.fetch_news_async(force=True))
+            dlg.relogin_requested.connect(self._relogin_for_news)
+            self._news_dlg = dlg
+        dlg.show_news(cached)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        if not self.gauth.is_connected():
+            dlg.set_error("먼저 [Google 로그인] 을 해 주세요.")
+            return
+        self.fetch_news_async(force=True)
+        if getattr(self, "_news_busy", False):
+            dlg.set_busy(True)
+
+    def _relogin_for_news(self):
+        """뉴스 문서 권한이 모자랄 때 — 기본 권한(문서 읽기 포함)으로 다시 로그인."""
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is not None:
+            dlg.set_busy(True)
+            dlg.lbl_state.setText("브라우저에서 로그인해 주세요…")
+        extra = ([config.SCOPE_DRIVE_READ]
+                 if getattr(self.settings, "drive_api_on", True) else [])
+        self._news_tried = -1e9          # 로그인 뒤 새로고침이 끝나면 바로 받는다
+
+        def worker():
+            try:
+                self.gauth.authorize(extra_scopes=extra)
+                self.sig_google_login.emit(True, "")
+            except Exception as e:
+                self.sig_google_login.emit(False, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def fetch_tasks_async(self):
         """'할일'만 다시 받아온다(캘린더 조회 없이).
 
@@ -2659,6 +2766,7 @@ class MainWindow(QMainWindow):
     def _on_fetch_done(self):
         # 캘린더 조회가 실패해도 새로고침 버튼이 잠긴 채 남지 않도록 여기서도 푼다
         self.btn_fetch.setEnabled(True)
+        self.fetch_news_async()             # 오늘의 뉴스도 미리 받아 둔다(누르면 바로 뜨게)
         # 시작 브리핑이 대기 중이면 데이터가 채워진 지금 표시
         self._do_startup_brief()
 

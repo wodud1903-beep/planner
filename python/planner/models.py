@@ -294,6 +294,8 @@ class AppSettings:
     tab_order: list = field(default_factory=list)
     # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
     side_collapsed: bool = False
+    # 오늘의 뉴스 — 구글 문서 주소(또는 id)
+    news_doc: str = config.DEF_NEWS_DOC
 
     def to_json(self) -> dict:
         return {
@@ -334,6 +336,7 @@ class AppSettings:
             "filesDriveFolder": self.files_drive_folder,
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
+            "newsDoc": self.news_doc,
         }
 
     @classmethod
@@ -402,6 +405,7 @@ class AppSettings:
                                 or drive_path.CUSTOMER_DIR)
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
+        s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")
         return s
 
     def save(self, path: Path) -> None:
