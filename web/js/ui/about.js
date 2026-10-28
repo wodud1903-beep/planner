@@ -55,6 +55,8 @@ export async function screen() {
            ${raw(auth.email() ? '<button class="chip" id="signout">로그아웃</button>' : "")}
            <button class="chip" id="diag">화면 정보</button></p>
         <p id="diagout" class="s"></p>
+        <p class="s"><a href="./privacy.html">개인정보처리방침</a> ·
+           <a href="./terms.html">서비스 약관</a></p>
       </section>
       <section class="card">
         <h3 class="cardtitle">테마</h3>

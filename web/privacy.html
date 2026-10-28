@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>개인정보처리방침 — 일정관리기</title>
+<link rel="icon" href="./icons/icon-192.png">
+<style>
+  :root { --bg:#f3f4f9; --card:#fff; --text:#252839; --sub:#575d76; --line:#e6e8f0; --accent:#4434b8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0a0a0a; --card:#141414; --text:#f5f5f5; --sub:#9a9a9a; --line:#262626; --accent:#8fbaff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.7 system-ui,"Noto Sans KR","Malgun Gothic",sans-serif; word-break:keep-all; overflow-wrap:anywhere; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
+  .card { background:var(--card); border-radius:16px; padding:22px 20px; box-shadow:0 1px 2px rgba(37,40,57,.04),0 6px 18px rgba(37,40,57,.06); }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:26px 0 6px; }
+  .s { color:var(--sub); font-size:13px; margin:0 0 8px; } a { color:var(--accent); }
+  ul { padding-left:20px; margin:6px 0; } li { margin:3px 0; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:6px 0; }
+  td, th { border-top:1px solid var(--line); padding:7px 6px; text-align:left; vertical-align:top; }
+  th { width:34%; font-weight:600; }
+  nav { margin:0 0 14px; font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+<nav><a href="./">일정관리기</a> · <a href="./privacy.html">개인정보처리방침</a> · <a href="./terms.html">서비스 약관</a></nav>
+<div class="card">
+<h1>개인정보처리방침</h1>
+<p class="s">시행일 2026년 10월 28일 · 대상: 일정관리기(PC 프로그램과 웹앱 https://jyplanner.vercel.app)</p>
+
+<p>일정관리기(이하 "앱")는 사용자가 자기 구글 계정의 시트·드라이브·캘린더·할일을 한곳에서 보고
+관리하도록 돕는 업무용 도구입니다. 앱은 사용자의 정보를 판매하거나 광고에 쓰지 않으며,
+앱을 쓰는 데 필요한 만큼만 다룹니다.</p>
+
+<h2>1. 앱이 받는 구글 권한과 쓰는 곳</h2>
+<table>
+<tr><th>계정 이메일 (openid · email)</th><td>누구로 로그인했는지 보여 주고, 계정이 바뀌면 앞 계정의 자료를 지우는 데 씁니다.</td></tr>
+<tr><th>구글 시트 (spreadsheets)</th><td>사용자가 정한 고객관리 시트를 읽어 목록·주간 요약을 보여 주고, 사용자가 화면에서 고친 칸만 그 시트에 씁니다.</td></tr>
+<tr><th>구글 드라이브 읽기 (drive.readonly)</th><td>사용자가 정한 폴더의 서류·견적서 파일을 보여 줍니다. 파일을 바꾸거나 지우지 않습니다.</td></tr>
+<tr><th>드라이브 앱 전용 폴더 (drive.appdata)</th><td>앱 설정(시트 주소·서류 폴더)을 사용자 드라이브의 앱 전용 숨김 폴더에 저장해 다른 기기에서도 이어 씁니다.</td></tr>
+<tr><th>구글 캘린더 읽기 (calendar.readonly)</th><td>다가오는 일정을 홈 화면에 보여 줍니다.</td></tr>
+<tr><th>구글 할일 (tasks)</th><td>할일을 보여 주고, 사용자가 누를 때 할일을 추가하거나 완료로 표시합니다.</td></tr>
+</table>
+
+<h2>2. 저장하는 곳</h2>
+<ul>
+<li><b>사용자의 기기</b> — 화면을 빨리 띄우려고 받아 둔 목록·일정은 사용자의 브라우저(또는 PC) 안에만 저장합니다.</li>
+<li><b>로그인 유지 쿠키</b> — 웹앱은 다시 로그인하지 않도록 구글이 준 갱신 토큰을 <b>암호화하여 사용자 브라우저의 쿠키</b>(화면 코드가 읽을 수 없는 HttpOnly·Secure 쿠키)에 둡니다. 앱 운영자의 서버나 데이터베이스에는 사용자의 구글 자료나 토큰을 저장하지 않습니다.</li>
+<li>로그인 서버(Vercel)는 쿠키의 토큰으로 구글에서 1시간짜리 접근 토큰을 받아 사용자에게 돌려주는 일만 하며, 구글 자료 내용을 받거나 보관하지 않습니다.</li>
+</ul>
+
+<h2>3. 제3자 제공</h2>
+<p>앱은 사용자의 정보를 누구에게도 팔거나 넘기지 않습니다. 사용자가 [복사]·[보내기] 단추로 직접 다른 앱(카카오톡 등)에 붙여 넣는 경우만 예외이며, 그것은 사용자가 고른 동작입니다.</p>
+
+<h2>4. 구글 사용자 데이터 정책 준수</h2>
+<p>구글 API 에서 받은 정보를 쓰고 다른 앱으로 옮기는 것은
+<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API 서비스 사용자 데이터 정책</a>과
+그 <b>제한적 사용(Limited Use)</b> 요건을 따릅니다. 앱은 구글 사용자 데이터를 광고에 쓰지 않고,
+사람이 읽지 않으며(사용자가 요청한 경우·보안·법적 의무 제외), AI 모델 학습에 쓰지 않습니다.</p>
+
+<h2>5. 보관 기간과 삭제</h2>
+<ul>
+<li>웹앱 [정보] 탭의 <b>[로그아웃]</b> — 로그인 쿠키와 이 기기에 받아 둔 자료를 지웁니다.</li>
+<li>구글 계정의 <a href="https://myaccount.google.com/permissions">서드파티 앱 액세스</a>에서 "일정관리기" 권한을 없애면 앱은 더 이상 구글 자료에 접근하지 못합니다.</li>
+<li>로그인 쿠키는 마지막 사용 후 최대 400일이 지나면 브라우저에서 스스로 사라집니다.</li>
+<li>드라이브 앱 전용 폴더의 설정은 구글 드라이브 설정 → 앱 관리에서 지울 수 있습니다.</li>
+</ul>
+
+<h2>6. 보안</h2>
+<p>모든 통신은 HTTPS 로 합니다. 갱신 토큰은 AES-256-GCM 으로 암호화되며, 로그인 서버는 이 앱 주소에서 온 요청만 받습니다.</p>
+
+<h2>7. 바뀔 때</h2>
+<p>이 방침이 바뀌면 이 페이지에 시행일과 함께 올립니다.</p>
+
+<h2>8. 문의</h2>
+<p>개인정보 관련 문의는 구글 로그인 동의 화면에 표시된 개발자 지원 이메일로 보내 주세요.</p>
+
+</div>
+</main>
+</body>
+</html>

@@ -15,6 +15,7 @@ const CACHE = "app-" + BUILD;
 //    verify_web.mjs 의 [2] 가 web/ 의 파일과 이 목록을 대조해 막아 준다.
 const PRECACHE = [
   "./", "./index.html", "./manifest.webmanifest", "./CHANGELOG.md",
+  "./privacy.html", "./terms.html",
   "./css/app.css",
   "./js/boot.js", "./js/config.js", "./js/store.js", "./js/auth.js",
   "./js/sheets.js", "./js/hangul.js", "./js/fmt.js", "./js/kb.js",
