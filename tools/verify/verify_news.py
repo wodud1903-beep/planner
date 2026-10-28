@@ -105,7 +105,21 @@ print("[4] 화면 HTML")
 theme.set_theme("light")
 html = news.render_html({"blocks": B}, news_dialog.colors())
 ok("제목 줄", "주요 경제 및 증시 뉴스 요약</p>" in html and "**" not in html)
-ok("머리줄은 표 머리(th)", "<th" in html and "구분</th>" in html)
+ok("붙은 3칸 표가 아니라 뉴스 한 건마다 카드 한 장(가독성)",
+   html.count("cellpadding='18'") == 2 and "<th" not in html and "구분" not in html.replace("구분선", ""))
+ok("카드 사이를 띄운다", html.count("font-size:6px;'>&nbsp;</p>") == 2)
+ok("제목은 크게", "font-size:17px;font-weight:bold;'>[속보] SK하이닉스" in html)
+ok("본문은 줄 간격 넉넉히 · 한 문장씩", "line-height:170%" in html)
+P = news.analysis_parts(ANAL1)
+ok("분석은 항목마다 따로(수익성 · 리스크)", [x[0] for x in P] == ["수익성 요인", "리스크 요인 (있음)"]
+   and P[1][1].startswith("단기"), P)
+ok("분석은 연한 상자 안에, 리스크는 빨강", "cellpadding='14'" in html
+   and f"color:{theme.strong('red')};'>리스크 요인 (있음)</span><br>" in html)
+NP = news.news_parts(CELL1)
+ok("뉴스 칸 나누기 — 제목·링크·시각·본문", NP["title"].startswith("[속보]") and NP["url"] == URL1
+   and NP["time"] == "2026-10-28 08:30 KST" and NP["body"].startswith("SK하이닉스가"), NP)
+ok("다른 표는 예전처럼 표로", "<table" in news.render_html(
+   {"blocks": [("table", [["가", "나"], ["1", "2"]])]}, news_dialog.colors()))
 ok("호재·악재는 색 알약", "&nbsp;호재&nbsp;" in html and "&nbsp;악재&nbsp;" in html
    and theme.strong("green") in html and theme.strong("red") in html)
 ok("기사 링크가 살아 있다", f"href='{URL1}'" in html)

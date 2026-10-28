@@ -21,6 +21,7 @@ def colors() -> dict:
     return {
         "text": theme.c("text"), "sub": theme.c("subtext"), "line": theme.c("border"),
         "link": theme.c("accent"), "head_bg": theme.c("header_bg"), "zebra": theme.c("panel_bg"),
+        "card": theme.c("panel_bg"), "box": theme.c("brief_bg"),
         "strong": theme.strong, "strong_bg": theme.strong_bg,
     }
 
@@ -82,7 +83,9 @@ class NewsDialog(QDialog):
 
         self.view = QTextBrowser()
         self.view.setOpenExternalLinks(True)       # [기사 원문 보기] 는 브라우저로
-        self.view.setObjectName("dashtext")
+        # 바탕은 창 색, 뉴스는 그 위의 흰 카드 — 건마다 또렷이 갈린다
+        self.view.setStyleSheet(f"QTextBrowser {{ background:{theme.c('window_bg')}; border:0; }}")
+        self.view.document().setDocumentMargin(4)
         root.addWidget(self.view, 1)
 
         scr = QGuiApplication.primaryScreen()

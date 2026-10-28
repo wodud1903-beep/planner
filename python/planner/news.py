@@ -314,6 +314,105 @@ def _plain(s: str) -> str:
     return re.sub(r"[*\\]", "", s or "").strip()
 
 
+def news_parts(cell: str) -> dict:
+    """뉴스 칸 → 제목 · 링크 · 시각 · 본문(본문 안의 굵은 글은 그대로 굵게)."""
+    out = {"title": "", "link": "", "url": "", "time": "", "body": ""}
+    body = []
+    for tk in tokens(cell):
+        k = tk[0]
+        if k == "b" and not out["title"]:
+            out["title"] = tk[1].strip()
+        elif k == "a" and not out["url"]:
+            out["link"], out["url"] = tk[1].strip(), tk[2]
+        elif k == "i" and not out["time"]:
+            out["time"] = tk[1].strip()
+        elif k == "b":
+            body.append(f"<b>{html.escape(tk[1].strip())}</b>")
+        elif k == "a":
+            body.append(f"<a href='{html.escape(tk[2], quote=True)}'>{html.escape(tk[1])}</a>")
+        else:
+            body.append(html.escape(tk[1]))
+    out["body"] = "".join(body).strip()
+    return out
+
+
+def analysis_parts(cell: str) -> list:
+    """분석 칸 → [(항목, 설명)] — '**수익성 요인:** …**리스크 요인 (있음):** …'."""
+    parts, label, buf = [], "", []
+    for tk in tokens(cell):
+        if tk[0] == "b":
+            if label or "".join(buf).strip():
+                parts.append((label, "".join(buf).strip()))
+            label, buf = tk[1].strip().rstrip(":：").strip(), []
+        elif tk[0] == "a":
+            buf.append(tk[1])
+        else:
+            buf.append(tk[1])
+    if label or "".join(buf).strip():
+        parts.append((label, "".join(buf).strip()))
+    return parts
+
+
+def _sentences(h: str) -> str:
+    # 한 문장씩 줄을 바꾼다 — 두세 문장이 한 덩어리로 붙어 있으면 눈이 길을 잃는다
+    return re.sub(r"(다\.|요\.)\s+(?=\S)", r"\1<br>", h)
+
+
+def _news_cards(rows: list, c: dict) -> str:
+    """구분 · 뉴스 · 분석 표 → 뉴스 한 건마다 카드 한 장."""
+    txt, sub, link = c["text"], c["sub"], c["link"]
+    card, box = c["card"], c["box"]
+    strong, strong_bg = c["strong"], c["strong_bg"]
+    out = []
+    for row in rows:
+        if len(row) < 2 or not "".join(row).strip():
+            continue
+        tone_word = _plain(row[0])
+        tone = _TONE.get(tone_word)
+        n = news_parts(row[1])
+        if not (n["title"] or n["body"]):
+            continue
+        badge = (f"<span style='background-color:{strong_bg(tone)};color:{strong(tone)};"
+                 f"font-weight:bold;font-size:12px;'>&nbsp;{html.escape(tone_word)}&nbsp;</span>"
+                 f"&nbsp;&nbsp;" if tone else "")
+        meta = []
+        if n["url"]:
+            meta.append(f"<a href='{html.escape(n['url'], quote=True)}' style='color:{link};'>"
+                        f"{html.escape(n['link'] or '기사 원문 보기')} ↗</a>")
+        if n["time"]:
+            meta.append(html.escape(n["time"]))
+        out.append(f"<table width='100%' cellspacing='0' cellpadding='18' border='0' bgcolor='{card}'>"
+                   f"<tr><td>")
+        out.append(f"<p style='margin:0 0 6px 0;'>{badge}"
+                   f"<span style='font-size:17px;font-weight:bold;'>{html.escape(n['title'])}</span></p>")
+        if meta:
+            out.append(f"<p style='margin:0 0 12px 0;font-size:12px;color:{sub};'>"
+                       + " &nbsp;·&nbsp; ".join(meta) + "</p>")
+        if n["body"]:
+            out.append(f"<p style='margin:0 0 14px 0;line-height:170%;font-size:14px;'>"
+                       f"{_sentences(n['body'])}</p>")
+        ana = analysis_parts(row[2]) if len(row) > 2 else []
+        if ana:
+            out.append(f"<table width='100%' cellspacing='0' cellpadding='14' border='0' bgcolor='{box}'>"
+                       f"<tr><td>")
+            for k, (label, text) in enumerate(ana):
+                col = strong("red") if "리스크" in label else strong("blue")
+                mb = "0" if k == len(ana) - 1 else "10px"
+                out.append(f"<p style='margin:0 0 {mb} 0;line-height:165%;font-size:13px;color:{txt};'>"
+                           + (f"<span style='font-weight:bold;color:{col};'>{html.escape(label)}</span><br>"
+                              if label else "")
+                           + f"{_sentences(html.escape(text))}</p>")
+            out.append("</td></tr></table>")
+        out.append("</td></tr></table>")
+        # 카드 사이 띄우기(Qt 글 상자는 표 바깥 여백을 안 받는다)
+        out.append("<p style='margin:0;font-size:6px;'>&nbsp;</p>")
+    return "".join(out)
+
+
+def _is_news_table(rows: list) -> bool:
+    return bool(rows) and len(rows[0]) >= 2 and _plain(rows[0][0]) == "구분"
+
+
 def render_html(news: dict, colors: dict) -> str:
     """colors: text·sub·line·link·head_bg + strong(색이름)·strong_bg(색이름) 함수."""
     txt, sub, line = colors["text"], colors["sub"], colors["line"]
@@ -323,13 +422,16 @@ def render_html(news: dict, colors: dict) -> str:
     for b in news.get("blocks") or []:
         kind = b[0]
         if kind == "h":
-            out.append(f"<p style='font-size:19px;font-weight:bold;margin:2px 0 10px 0;'>"
+            out.append(f"<p style='font-size:20px;font-weight:bold;margin:2px 0 14px 2px;'>"
                        f"{html.escape(_plain(b[1]))}</p>")
         elif kind == "p":
             out.append(f"<p style='margin:4px 0;'>{inline_html(b[1], link, sub)}</p>")
         elif kind == "table":
             rows = b[1]
             if not rows:
+                continue
+            if _is_news_table(rows):
+                out.append(_news_cards(rows[1:], colors))
                 continue
             head = all(re.fullmatch(r"\s*\*\*.*\*\*\s*", c or "") for c in rows[0]) or \
                 any(_plain(c) == "구분" for c in rows[0])
