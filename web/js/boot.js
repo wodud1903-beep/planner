@@ -2,7 +2,7 @@
 //
 // 순서가 중요하다: **캐시로 먼저 그리고**, 그 다음에 조용히 새로 받는다.
 // 로그인이나 네트워크를 기다리며 빈 화면을 보여 주지 않는다.
-import { shell, paintState } from "./ui/chrome.js";
+import { shell, paintState, toast, signIn } from "./ui/chrome.js";
 import * as router from "./router.js";
 import * as theme from "./theme.js";
 import * as auth from "./auth.js";
@@ -24,6 +24,9 @@ document.getElementById("app").innerHTML = shell();
 addEventListener("pointerdown", () => { _touched = true; }, { once: true, capture: true });
 addEventListener("keydown", () => { _touched = true; }, { once: true, capture: true });
 
+// 로그인 화면에서 돌아왔으면 결과(?auth=…)를 먼저 읽는다 — init() 이 이 탭에 남은
+// 앞 토큰을 집기 전에(계정을 바꿨으면 그 토큰은 앞사람 것이다)
+const _authFlag = auth.takeReturn();
 auth.init();
 auth.onChange(paintState);
 // 계정이 바뀌면 앞사람 자료를 지우고 화면을 다시 그린다.
@@ -42,8 +45,9 @@ auth.onEmail(async (mail) => {
 });
 paintState();
 // [다시 로그인] 이 끝나면 — 새로고침 없이 보던 화면의 자료만 다시 받는다
-addEventListener("planner:reauthed", () => {
+addEventListener("planner:reauthed", async () => {
   paintState();
+  if (await pullSettings()) await cust.loadSettings();
   for (const m of [kbui, cust, docs, agenda, calc]) {
     try { m.load(); } catch (e) { /* 하나가 탈나도 나머지는 받는다 */ }
   }
@@ -70,52 +74,88 @@ router.on(/^\/docs$/, () => docs.screen(null));
   } catch (e) { /* 옛 브라우저 */ }
   // ⚠️ 누구로 로그인했는지 **먼저** 알아낸다. 모르는 채로 그리면 앞사람 자료를
   //    그대로 보여 주고, 앞사람 시트를 조회하기까지 한다(실제로 그랬다).
-  //    통신이 늦으면 4초에 포기하고 이 기기의 마지막 사람으로 본다.
+  //    서버 쿠키 방식은 한 번 묻기(보통 0.3~0.6초)라 빠르다. 늦으면 2.5초에
+  //    포기하고 이 기기의 마지막 사람으로 본다(예전엔 팝업을 4초씩 기다렸다).
   try {
-    const who = await auth.ensureEmail({ timeoutMs: 4000 });
+    const who = await auth.ensureEmail({ timeoutMs: 2500 });
     if (who) await store.useAccount(who);
   } catch (e) { /* 못 알아내면 마지막 사람으로 본다 */ }
 
   // 이 기기에 아직 없는 설정은 **계정에 저장된 것**으로 채운다.
   // PC 앱이 올려 둔 것도 그대로 읽으므로, PC 에서 쓰시던 분은 폰에서
   // 시트 주소나 서류 폴더를 따로 넣을 일이 없다.
-  await pullSettings();
+  // ⚠️ 토큰이 이미 있을 때만 기다린다. 없으면(예전 방식) 조용한 로그인 팝업을
+  //    4초씩 기다리느라 첫 화면이 늦게 뜬다 — 그때는 화면을 띄운 뒤 뒤에서 한다.
+  if (auth.state() === auth.STATE.AUTHED) await pullSettings();
 
   await cust.loadSettings();          // 시트 주소·탭은 라우팅 전에 읽어 둔다
   // 주소만 치거나 홈 화면 아이콘으로 열면 늘 일정 화면이다(router 기본값).
   // 마지막에 보던 화면으로 가지 않는다 — 업데이트로 다시 불러올 때는 주소의
   // #… 가 그대로 남으므로 보던 화면은 그대로 유지된다.
   router.start();
+  tellAuth(_authFlag);
 
   // 화면이 뜬 다음에 조용히 로그인·자료 받기
   setTimeout(async () => {
     await auth.token();                 // 조용한 시도 (실패해도 화면은 그대로)
     paintState();
+    if (await pullSettings()) await cust.loadSettings();
     kbui.load();
     cust.load();
     docs.load();
     agenda.load();
     calc.load();
+    // 어느 로그인 방식인지 알아 두고(예전 방식이면 로그인 스크립트를 미리 받는다),
+    // 동의 화면에서 빠진 항목이 있으면 알려 준다
+    await auth.preload();
+    paintState();
+    if (auth.missing().length && !_authFlag) tellAuth("partial");
   }, 0);
 
   registerSW();
 })();
 
+// 로그인 화면에서 돌아온 결과를 한 줄로 알린다.
+function tellAuth(flag) {
+  const again = { action: "로그인", onAction: () => signIn(), sticky: true };
+  const say = {
+    ok: ["로그인했어요. 이제 이 기기에서는 다시 로그인하지 않아도 됩니다.", {}],
+    // 구글은 동의 화면에서 항목마다 체크를 받는다. 하나라도 빼면 그 화면이 안 열린다.
+    partial: ["구글 동의 화면에서 빠진 항목이 있어요. [다시 로그인] 을 누르고 "
+              + "'모두 선택' 에 체크해 주세요.", { ...again, action: "다시 로그인", tone: "bad" }],
+    denied: ["로그인을 취소했어요.", again],
+    expired: ["로그인 시간이 지났어요. 한 번만 더 눌러 주세요.", again],
+    norefresh: ["로그인을 마무리하지 못했어요. 한 번만 더 로그인해 주세요.", again],
+    error: ["로그인 중 문제가 생겼어요. 잠시 뒤 다시 해 주세요.", { ...again, tone: "bad" }],
+    unconfigured: ["로그인 서버를 아직 설정하지 않아 예전 방식(팝업)으로 로그인합니다.", again],
+  }[flag];
+  if (say) toast(say[0], say[1]);
+}
+
+/** 새로 채운 것이 있으면 true. */
 async function pullSettings() {
   try {
     const have = await store.get("meta", "sheet");
     const folder = await store.get("meta", "driveFolder");
-    if (have && have.id && folder) return;      // 이 기기에 이미 다 있다
+    if (have && have.id && folder) return false;   // 이 기기에 이미 다 있다
+    if (auth.state() !== auth.STATE.AUTHED) return false;
     const got = await appdata.loadSettings();
-    if (!got) return;
+    if (!got) return false;
+    let changed = false;
     if ((!have || !have.id) && got.sheetId) {
       await store.put("meta", "sheet",
                       { id: got.sheetId, tab: got.sheetTab || "미출고차량" });
+      changed = true;
     }
-    if (!folder && got.driveFolder) await store.put("meta", "driveFolder", got.driveFolder);
+    if (!folder && got.driveFolder) {
+      await store.put("meta", "driveFolder", got.driveFolder);
+      changed = true;
+    }
+    return changed;
   } catch (e) {
     // 권한이 아직 없거나(다시 로그인 전) 통신이 안 되면 그냥 넘어간다.
     // 이 기기에 저장된 값이 있으면 그것으로 계속 쓴다.
+    return false;
   }
 }
 
@@ -142,7 +182,10 @@ async function registerSW() {
     if (_touched && document.visibilityState === "visible") return;
     w.postMessage({ type: "SKIP_WAITING" });
   };
-  swc.addEventListener("controllerchange", () => location.reload());
+  // 새 판이 화면을 넘겨받으면 다시 불러온다. ⚠️ 처음 설치될 때(맡은 워커가 없던 때)도
+  // 이 알림이 오는데, 그때 다시 불러오면 첫 방문이 두 번 뜬다 — 그건 건너뛴다.
+  const hadController = !!swc.controller;
+  swc.addEventListener("controllerchange", () => { if (hadController) location.reload(); });
   reg.addEventListener("updatefound", () => {
     const sw = reg.installing;
     if (sw) sw.addEventListener("statechange", () => {

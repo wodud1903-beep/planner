@@ -103,6 +103,8 @@ function setRows(rows, at) {
      r.values.status, r.values.note].filter(Boolean).join(" ")));
   const cur = router.current();
   if (cur && cur.path.startsWith("/customers")) { paintChips(); paintList(); }
+  // 홈(대시보드)의 이번 주·다음 주 요약도 이 줄로 계산한다
+  dispatchEvent(new CustomEvent("planner:rows"));
 }
 
 // ---------------------------------------------------------------- 화면

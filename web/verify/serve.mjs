@@ -18,6 +18,13 @@ export function serve(root, { port = 8123, base = "/planner/", build = "dev" } =
   const srv = createServer(async (req, res) => {
     let p = decodeURIComponent(req.url.split("?")[0]);
     hits.push(p);
+    // 로그인 서버(api/auth/*)는 Vercel 에만 있다 — 여기서는 '설정 전'(503)으로 답해
+    // 앱이 예전 방식으로 돌게 한다. 새 방식은 검사에서 page.route 로 따로 물린다.
+    if (p.includes("/api/")) {
+      res.writeHead(503, { "Content-Type": "application/json" })
+        .end('{"error":"not_configured"}');
+      return;
+    }
     if (!p.startsWith(base)) { res.writeHead(404).end("밖"); return; }
     let rel = p.slice(base.length) || "index.html";
     if (rel.endsWith("/")) rel += "index.html";

@@ -8,15 +8,19 @@
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>일정관리기</title>
-<meta name="theme-color" content="#5b8fbf">
+<meta name="theme-color" content="#fbfbfe">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" href="./icons/icon-192.png">
 <link rel="apple-touch-icon" href="./icons/icon-192.png">
 <link rel="stylesheet" href="./css/app.css">
+<!-- 구글 API 에 미리 길을 터 둔다(첫 자료가 0.1~0.3초 빨리 온다) -->
+<link rel="preconnect" href="https://www.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://sheets.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://tasks.googleapis.com" crossorigin>
+<!--MODULEPRELOAD-->
 </head>
 <body>
 <div id="app"></div>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script type="module" src="./js/boot.js"></script>
 </body>
 </html>

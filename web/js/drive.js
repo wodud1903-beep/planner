@@ -14,7 +14,7 @@ async function call(url, { raw = false } = {}) {
   let r;
   try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
-    tok = await token({ interactive: false });
+    tok = await token({ fresh: true });   // 들고 있던 토큰은 버리고 새로
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }

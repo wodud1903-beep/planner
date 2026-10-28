@@ -17,7 +17,7 @@ async function call(url, { method = "GET", body = null } = {}) {
   let r;
   try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
-    tok = await token({ interactive: false });
+    tok = await token({ fresh: true });   // 들고 있던 토큰은 버리고 새로
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
@@ -135,4 +135,13 @@ export function completeTask(listId, taskId) {
   return call(`${TASKS_API}/lists/${encodeURIComponent(listId)}`
             + `/tasks/${encodeURIComponent(taskId)}`,
               { method: "PATCH", body: { status: "completed" } });
+}
+
+/** 할일 추가 — 구글 할일의 기본 목록에 넣는다(PC 앱의 구글 할일에도 그대로 뜬다).
+ *  due 는 Date(날짜만 본다) 또는 null. */
+export function addTask(title, due = null) {
+  const body = { title: String(title || "").trim() };
+  // 구글 할일의 기한은 날짜만 쓴다 — 시각은 버려지므로 그날 0시(UTC)로 보낸다
+  if (due) body.due = `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T00:00:00.000Z`;
+  return call(`${TASKS_API}/lists/%40default/tasks`, { method: "POST", body });
 }

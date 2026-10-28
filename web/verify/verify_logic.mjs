@@ -132,6 +132,18 @@ for (const [day, title, want] of V.weekly_sections) {
   eq(`sections(${day})`, WK.sections(wrows, today), want);
 }
 console.log(`  ${V.weekly_sections.length}일치 대조`);
+// 대시보드 '다음 주 요약' — 다음 주 월요일 기준, 출고 예정·계약만
+for (const [day, want] of V.weekly_next) {
+  const nmon = WK.weekRange(new Date(day + "T00:00:00"), 1)[0];
+  eq(`sections(${day} 다음 주)`, WK.sections(wrows, nmon, undefined,
+                                          { word: "다음 주", weekOnly: true }), want);
+}
+// 복사용 평문(카톡에 붙여 넣는 글)
+for (const [day, want] of V.weekly_text) {
+  const today = new Date(day + "T00:00:00");
+  eq(`renderText(${day})`, WK.renderText(WK.titleLine(today), WK.sections(wrows, today)), want);
+}
+console.log(`  다음 주 ${V.weekly_next.length}일 · 복사 글 ${V.weekly_text.length}일 대조`);
 
 console.log("\n[14] 시트에 적을 날짜 서식 (sheets.fmt_date)");
 // ⚠️ 0 을 안 채운다. "2026. 8. 14" 이지 "2026. 08. 14" 가 아니다.

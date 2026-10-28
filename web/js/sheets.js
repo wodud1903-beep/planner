@@ -10,8 +10,15 @@ export class Offline extends Error {}
 export class BadRange extends Error {}
 /** 토큰에 그 권한이 안 붙어 있을 때. **다시 로그인하면 풀린다** —
  *  '계정이 다르다'(WrongAccount) 와 처방이 정반대라 반드시 갈라야 한다.
- *  권한 목록을 늘리면 기존 토큰에는 새 권한이 없어서 꼭 한 번은 여기로 온다. */
-export class NeedScope extends Error {}
+ *  권한 목록을 늘리면 기존 토큰에는 새 권한이 없어서 꼭 한 번은 여기로 온다.
+ *  만들어지는 순간 화면 틀(chrome.js)에 알려 [다시 로그인] 을 띄운다 — 네 군데
+ *  (시트·드라이브·일정·앱 설정)에서 던지므로 한 곳에서 알린다. */
+export class NeedScope extends Error {
+  constructor(m) {
+    super(m);
+    try { dispatchEvent(new CustomEvent("planner:needscope")); } catch (e) { /* 검사(node) */ }
+  }
+}
 
 /** 구글이 돌려준 진짜 메시지를 뽑는다.
  *
@@ -45,7 +52,7 @@ async function call(url, body = null) {
   let r;
   try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
-    tok = await token({ interactive: false });
+    tok = await token({ fresh: true });   // 들고 있던 토큰은 버리고 새로
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }

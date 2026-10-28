@@ -18,6 +18,8 @@ let _rows = () => [];
 
 /** 고객 탭이 자기 줄을 넘겨준다 — 주간 요약은 그걸 계산만 한다. */
 export function useRows(fn) { _rows = fn; }
+/** 지금 고객 줄(대시보드의 이번 주·다음 주 요약이 쓴다). */
+export function rows() { return _rows() || []; }
 
 export function screen() {
   markTab("/customers");
@@ -37,7 +39,12 @@ export function screen() {
     </div>`);
 
   $("#wkback").onclick = () => router.go("/customers");
-  for (const b of $$("#body .wkitem")) {
+  wire($("#body"));
+}
+
+/** 요약 안의 고객을 누르면 그 고객 상세로 간다. */
+export function wire(root) {
+  for (const b of $$(".wkitem", root)) {
     b.onclick = () => {
       const r = b.dataset.row;
       if (r) router.go("/customers/" + r);
@@ -52,7 +59,7 @@ export function screen() {
  *    옮긴 계산은 건드리지 않고, 여기서 이름으로 되찾는다.
  *    동명이인이면 아무 데도 안 보낸다 — 엉뚱한 고객을 여는 것보다 낫다.
  */
-function rowIndex(rows) {
+export function rowIndex(rows) {
   const by = new Map();
   for (const cr of rows) {
     const k = String((cr.values || {}).customer || "").trim();
@@ -63,7 +70,8 @@ function rowIndex(rows) {
   return by;
 }
 
-function sec(s, idx) {
+/** 요약 한 칸(출고·계약·진행 중·만기…). 대시보드 카드도 같은 모양으로 그린다. */
+export function sec(s, idx) {
   const n = s.count !== undefined ? s.count : s.items.length;
   const hint = HINTS[s.hint] || s.hint || "";
   return html`

@@ -224,6 +224,8 @@ def main() -> int:
         "default_rates": {},
         "weekly_rows": [],
         "weekly_sections": [],
+        "weekly_next": [],
+        "weekly_text": [],
         "fmt_sheet_date": [],
         "choices": [],
     }
@@ -270,6 +272,11 @@ def main() -> int:
         today = _dt.date.fromisoformat(day)
         secs = weekly.sections(_weekly_rows(), today)
         out["weekly_sections"].append([day, weekly.title_line(today), secs])
+        # 대시보드 '다음 주 요약' — 다음 주 월요일 기준, 출고 예정·계약만
+        nmon = weekly.week_range(today + _dt.timedelta(days=7))[0]
+        out["weekly_next"].append(
+            [day, weekly.sections(_weekly_rows(), nmon, word="다음 주", week_only=True)])
+        out["weekly_text"].append([day, weekly.to_text(_weekly_rows(), today)])
 
     # 시트에 적을 날짜 서식 — **0 을 안 채운다**("2026. 8. 14")
     import datetime as _d2
