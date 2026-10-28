@@ -78,6 +78,8 @@ crash_log.txt       갑자기 꺼짐·멈춤 기록(다음에 켤 때 알리고 
 - 비밀번호는 Vercel → kbsearch → Settings → Environment Variables 의 `KB_ADMIN_PASSWORD`
   (바꾼 뒤 Redeploy). 스위치 상태는 Vercel Blob 저장소에 둡니다(연결 안 됐으면 켜고 끌 수 없고, 켜짐).
 - 새 판으로 끄는 길(`config.SERVICE_ON = False`)도 그대로 있습니다. 둘 중 하나라도 꺼지면 꺼집니다.
+- 빠르게 열리도록 자료는 Vercel 끝(CDN)에 받아 두고 5분마다 뒤에서 새로 받습니다 — 시트를 고치면
+  웹에는 5분쯤 안에 보입니다. 브라우저도 마지막으로 받은 자료를 먼저 보여 주고 새 자료로 바꿉니다.
 - 검사: `cd kbsearch/web && npm install && node verify/verify_web.mjs`
 
 ## 🔄 자동 업데이트 (관리자)

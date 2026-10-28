@@ -7,5 +7,5 @@ import { send } from "../lib/http.js";
 export default async function handler(req, res) {
   const s = await readState();
   send(res, 200, { on: s.on, message: s.message, at: s.at, store: s.store },
-       "public, max-age=0, s-maxage=30, stale-while-revalidate=30");
+       "no-cache", "max-age=30, stale-while-revalidate=30");
 }
