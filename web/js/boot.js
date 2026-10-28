@@ -28,7 +28,11 @@ addEventListener("keydown", () => { _touched = true; }, { once: true, capture: t
 // 앞 토큰을 집기 전에(계정을 바꿨으면 그 토큰은 앞사람 것이다)
 const _authFlag = auth.takeReturn();
 auth.init();
-auth.onChange(paintState);
+auth.onChange(() => {
+  paintState();
+  // 로그인 전/후로 홈의 빈 칸 안내가 달라진다
+  if (router.current() && router.current().path === "/agenda") agenda.repaint();
+});
 // 계정이 바뀌면 앞사람 자료를 지우고 화면을 다시 그린다.
 // (저장한 것은 기기에 딸린 것이라 계정이 바뀌어도 그냥 남는다 — 그게 새어 나갔다)
 auth.onEmail(async (mail) => {

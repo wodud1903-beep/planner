@@ -13,6 +13,7 @@ import * as weeklyui from "./weekly.js";
 import { setBody, markTab, paintState, toast } from "./chrome.js";
 import { icon } from "./icons.js";
 import * as router from "../router.js";
+import * as auth from "../auth.js";
 
 const DAY = ["일", "월", "화", "수", "목", "금", "토"];
 const FORWARD = 30;
@@ -238,6 +239,9 @@ function copy(btn) {
   }).catch(() => toast("복사하지 못했습니다.", { tone: "bad" }));
 }
 
+// 로그인 전이라 비어 있는 것 — '없습니다' 라고 하면 정말 없는 줄 안다
+const signedOut = () => !_at && auth.state() === auth.STATE.NEED;
+
 const sameDay = (a, b) => a.getFullYear() === b.getFullYear()
   && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 
@@ -251,6 +255,8 @@ function dayLabel(d) {
   if (diff < 0) return { text: base, tone: "past" };
   return { text: base, tone: "" };
 }
+
+export function repaint() { paint(); }
 
 function paint() {
   const w = $("#agwarn");
@@ -276,6 +282,7 @@ function paint() {
     if (n) n.textContent = live.length ? `${live.length}건` : "";
     if (!live.length) {
       render(tl, html`<li class="empty">${_tk.length ? "할일을 다 했습니다 👍"
+        : signedOut() ? "로그인하면 구글 할일이 여기에 보입니다."
         : (_err ? "" : "할일이 없습니다.")}</li>`);
     } else {
       render(tl, live.map((t) => {
@@ -301,7 +308,8 @@ function paint() {
   const en = $("#agevn");
   if (en) en.textContent = _ev.length ? `앞으로 ${FORWARD}일 · ${_ev.length}건` : "";
   if (!_ev.length) {
-    render(el, html`<li class="empty">${_err ? "" : "일정이 없습니다."}</li>`);
+    render(el, html`<li class="empty">${signedOut() ? "로그인하면 구글 캘린더 일정이 여기에 보입니다."
+      : _err ? "" : "일정이 없습니다."}</li>`);
     return;
   }
   let last = null;
