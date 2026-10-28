@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>일정관리기 — 내 구글 일정·할일·고객 시트를 한 화면에</title>
+<meta name="description" content="일정관리기는 내 구글 캘린더·할일·고객관리 시트·드라이브 서류를 한 화면에서 보고 관리하는 업무용 앱입니다.">
+<link rel="icon" href="./icons/icon-192.png">
+<style>
+  :root { --bg:#f3f4f9; --card:#fff; --text:#252839; --sub:#575d76; --line:#e6e8f0; --accent:#4434b8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0a0a0a; --card:#141414; --text:#f5f5f5; --sub:#9a9a9a; --line:#262626; --accent:#8fbaff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:15px/1.7 system-ui,"Noto Sans KR","Malgun Gothic",sans-serif; word-break:keep-all; overflow-wrap:anywhere; }
+  main { max-width:760px; margin:0 auto; padding:24px 16px 48px; }
+  .card { background:var(--card); border-radius:16px; padding:22px 20px; box-shadow:0 1px 2px rgba(37,40,57,.04),0 6px 18px rgba(37,40,57,.06); }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:26px 0 6px; }
+  .s { color:var(--sub); font-size:13px; margin:0 0 8px; } a { color:var(--accent); }
+  ul { padding-left:20px; margin:6px 0; } li { margin:3px 0; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:6px 0; }
+  td, th { border-top:1px solid var(--line); padding:7px 6px; text-align:left; vertical-align:top; }
+  th { width:34%; font-weight:600; }
+  nav { margin:0 0 14px; font-size:14px; }
+  .hero { text-align:center; padding:12px 0 6px; }
+  .hero svg { color:#6a5ae0; }
+  .hero h1 { font-size:26px; margin:10px 0 6px; }
+  .hero p { color:var(--sub); margin:0 0 18px; }
+  .btn { display:inline-block; background:#5b4bd6; color:#fff !important; text-decoration:none;
+    font-weight:700; padding:11px 22px; border-radius:999px; }
+  footer { text-align:center; font-size:14px; margin-top:18px; color:var(--sub); }
+</style>
+
+</head>
+<body>
+<main>
+<div class="card">
+<div class="hero">
+<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="16" rx="4.5"/><path d="M3.5 9.5h17M8 2.8v3.4M16 2.8v3.4"/><path d="M8.5 14.6l2.4 2.3 4.6-4.6"/></svg>
+<h1>일정관리기</h1>
+<p>내 구글 캘린더·할일·고객관리 시트·드라이브 서류를 한 화면에서 보고 관리하는 업무용 앱입니다.</p>
+<a class="btn" href="./">웹앱 열기</a>
+</div>
+
+<h2>할 수 있는 일</h2>
+<ul>
+<li><b>홈(대시보드)</b> — 내 할일·다가오는 일정·이번 주/다음 주 요약을 한눈에 봅니다.</li>
+<li><b>할일</b> — 구글 할일을 보고, 추가하고, 완료로 표시합니다.</li>
+<li><b>고객</b> — 내가 정한 고객관리 구글 시트를 검색하고, 고친 칸만 시트에 저장합니다.</li>
+<li><b>서류</b> — 내가 정한 구글 드라이브 폴더의 서류·견적서를 바로 봅니다(읽기 전용).</li>
+<li><b>수당·자료</b> — 수당 계산과 업무 자료 검색.</li>
+</ul>
+
+<h2>구글 계정 정보는 이렇게 씁니다</h2>
+<p>앱은 사용자가 구글 로그인으로 허락한 본인의 자료만, 사용자가 화면에서 요청한 동작을 위해서만 씁니다.
+자료는 사용자 기기에만 저장하며 운영자 서버에 보관하지 않고, 누구에게도 팔거나 넘기지 않습니다.
+자세한 내용은 <a href="./privacy.html">개인정보처리방침</a>을 보세요.</p>
+</div>
+<footer>
+<a href="./privacy.html">개인정보처리방침</a> · <a href="./terms.html">서비스 약관</a><br>
+일정관리기 · https://jyplanner.vercel.app
+</footer>
+</main>
+</body>
+</html>
