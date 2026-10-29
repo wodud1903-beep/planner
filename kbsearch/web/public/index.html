@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>업무자료검색</title>
+<meta name="description" content="회사 공통 업무자료(심사서류·캐피탈·연락처)를 로그인 없이 검색합니다.">
+<meta name="theme-color" content="#F3F4F9">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<script>
+  // 첫 화면을 빨리 — 자료 받기를 HTML 을 읽자마자 시작한다(스크립트 파일을 기다리지 않는다).
+  window.__boot = {
+    kb: fetch("/api/kb").then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, j: j }; });
+    }).catch(function () { return { status: 0, j: {} }; }),
+    st: fetch("/api/status").then(function (r) { return r.json(); }).catch(function () { return null; })
+  };
+</script>
+<link rel="modulepreload" href="app.js">
+<link rel="modulepreload" href="kb.js">
+<link rel="modulepreload" href="hangul.js">
+<link rel="stylesheet" href="style.css">
+<!-- 글꼴(Pretendard)은 화면을 막지 않고 뒤에서 받는다. 받기 전에는 기기 글꼴로 보인다. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+      </span>
+      <div>
+        <h1>업무자료검색</h1>
+        <p>회사 공통 자료 · 로그인 없이</p>
+      </div>
+    </div>
+    <button class="btn ghost small" id="btn-admin" type="button" aria-label="관리 — 서버 켜기/끄기">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>
+      <span>관리</span>
+    </button>
+  </header>
+
+  <main class="wrap" id="main">
+    <section class="split" id="split">
+      <div class="card left">
+        <div class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+          <input id="q" type="search" placeholder="캐피탈·서류·연락처 검색 (초성도 됩니다)"
+                 autocomplete="off" enterkeyhint="search" aria-label="검색">
+          <kbd class="hotkey" aria-hidden="true">/</kbd>
+        </div>
+        <div class="chips" id="cats" role="toolbar" aria-label="분류"></div>
+        <ul class="list" id="list" aria-live="polite"></ul>
+        <p class="foot" id="foot"><span class="dot"></span><span id="foot-text">자료를 받는 중…</span></p>
+      </div>
+      <div class="card right" id="detail">
+        <div class="hello">
+          <span class="hello-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+          </span>
+          <h2>찾을 자료를 골라 주세요</h2>
+          <p>왼쪽 목록에서 고르면 본문과 첨부가 여기에 보입니다.<br>
+             초성으로도 찾을 수 있어요 — 예: <b>ㄱㅇ ㅅㅅㅅㄹ</b></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="off" id="off" hidden>
+      <div class="card offcard">
+        <span class="off-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3.5v7.5"/><path d="M6.6 6.9a7.5 7.5 0 1 0 10.8 0"/></svg>
+        </span>
+        <h2>지금은 서비스를 쉬고 있습니다</h2>
+        <p id="off-msg"></p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="admin">
+  <form method="dialog" id="admin-form">
+    <div class="dlg-head">
+      <span class="dlg-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3.5v7.5"/><path d="M6.6 6.9a7.5 7.5 0 1 0 10.8 0"/></svg>
+      </span>
+      <div>
+        <h2>서버 켜기 · 끄기</h2>
+        <p class="sub">끄면 이 웹페이지와 직원 PC 의 업무자료검색이 함께 멈춥니다(PC 는 몇 분 안에).</p>
+      </div>
+    </div>
+    <div id="admin-login" class="dlg-body">
+      <label for="pw">관리자 비밀번호</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <p class="err" id="admin-err" role="alert"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn ghost" id="admin-cancel">닫기</button>
+        <button type="submit" class="btn primary" id="admin-go">확인</button>
+      </div>
+    </div>
+    <div id="admin-panel" class="dlg-body" hidden>
+      <div class="state" id="admin-state"></div>
+      <label for="offmsg">끌 때 직원에게 보일 안내</label>
+      <textarea id="offmsg" rows="3" maxlength="300"></textarea>
+      <p class="err" id="admin-err2" role="alert"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn ghost" id="admin-close">닫기</button>
+        <button type="button" class="btn danger" id="btn-off">서버 끄기</button>
+        <button type="button" class="btn primary" id="btn-on">서버 켜기</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
