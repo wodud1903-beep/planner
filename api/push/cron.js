@@ -15,6 +15,16 @@ function allowed(req) {
 module.exports = async (req, res) => {
   if (!allowed(req)) { s.send(res, 403, { error: "cron" }); return; }
   if (!s.configured() || !p.storeReady()) { s.send(res, 503, { error: "not_configured" }); return; }
+  // ?check=1 — 저장소(비공개 Blob)에 실제로 닿는지만 본다(보내지 않는다). 설정 확인용.
+  if (/[?&]check=1\b/.test(req.url || "")) {
+    try {
+      const n = (await p.store().list()).length;
+      s.send(res, 200, { ok: true, store: "ok", subscriptions: n });
+    } catch (e) {
+      s.send(res, 500, { ok: false, store: "fail", error: String(e && e.message || e).slice(0, 200) });
+    }
+    return;
+  }
   const now = p.now();
   if (!p.dueNow(now)) { s.send(res, 200, { ok: true, skipped: "time" }); return; }
   const today = p.kst(now).ymd;

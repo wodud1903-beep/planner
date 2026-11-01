@@ -297,6 +297,10 @@ globalThis.fetch = async (url, init = {}) => {
 const cron = load("push/cron.js");
 const cronReq = () => ({ ...req({ method: "GET" }), headers: { "user-agent": "vercel-cron/1.0" } });
 r = res();
+await cron({ ...cronReq(), url: "/api/push/cron?check=1" }, r);
+ok("?check=1 — 저장소에 닿는지만 본다(보내지 않음)", r.statusCode === 200 && r.json().store === "ok"
+   && r.json().subscriptions === 1 && pushed.length === 0, JSON.stringify(r.json()));
+r = res();
 await cron({ ...req({ method: "GET" }), headers: { "user-agent": "curl" } }, r);
 ok("예약 작업이 아니면 거절(403)", r.statusCode === 403);
 PU._setClock(() => new Date("2026-11-01T23:30:00Z"));      // 한국 08:30 — 아직
