@@ -276,7 +276,9 @@ function paint() {
 
   // ---- 할일
   const tl = $("#agtasks");
-  if (tl) {
+  // 고치는 중이면 목록을 다시 그리지 않는다 — 뒤에서 새로 받은 자료가 와도
+  // 적고 있던 글이 지워지지 않게(닫으면 그때 새로 그린다)
+  if (tl && !(_editing && $("#agedit"))) {
     const live = _tk.filter((t) => !_done.has(t.id));
     const n = $("#agtaskn");
     if (n) n.textContent = live.length ? `${live.length}건` : "";
@@ -286,11 +288,13 @@ function paint() {
         : (_err ? "" : "할일이 없습니다.")}</li>`);
     } else {
       render(tl, live.map((t) => {
+        if (t.id === _editing) return editRow(t);
         const d = t.due ? dayLabel(t.due.at) : null;
         return html`<li class="taskrow">
           <button class="tickbtn" data-id="${t.id}" data-list="${t.listId}"
                   aria-label="했음으로 표시">${raw(icon("check", 20))}</button>
-          <div class="taskbody">
+          <div class="taskbody" role="button" tabindex="0" data-edit="${t.id}"
+               title="눌러서 고치기">
             <span class="t">${t.title}</span>
             ${raw(t.notes ? `<span class="s">${esc(t.notes)}</span>` : "")}
             <span class="meta">${raw(d
@@ -299,6 +303,16 @@ function paint() {
           </div></li>`;
       }).join(""));
       for (const b of $$("#agtasks .tickbtn")) b.onclick = () => tick(b);
+      for (const b of $$("#agtasks [data-edit]")) {
+        b.onclick = () => {
+          const open = $("#agedit");
+          if (open) open.remove();           // 다른 할일을 고치던 중이면 그건 닫는다
+          _editing = b.dataset.edit;
+          paint();
+          focusEdit();
+        };
+      }
+      wireEdit();
     }
   }
 
@@ -328,6 +342,91 @@ function paint() {
         e.calName ? `<span class="d">${esc(e.calName)}</span>` : "")}</span></li>`);
   }
   render(el, out.join(""));
+}
+
+// ---------------------------------------------------------------- 할일 고치기 · 지우기
+// 할일을 누르면 그 자리에서 고친다(제목·메모·기한). 플로우처럼 따로 창을 띄우지 않는다.
+let _editing = "";
+
+function editRow(t) {
+  const due = t.due ? `${t.due.at.getFullYear()}-${String(t.due.at.getMonth() + 1).padStart(2, "0")}-`
+    + `${String(t.due.at.getDate()).padStart(2, "0")}` : "";
+  return html`<li class="taskrow editing" data-id="${t.id}" data-list="${t.listId}">
+    <form class="taskedit" id="agedit">
+      <input id="etitle" class="bigin" type="text" value="${t.title}" maxlength="300"
+             aria-label="할일" autocomplete="off">
+      <textarea id="enotes" class="bigin" rows="2" placeholder="메모(선택)"
+                aria-label="메모">${t.notes || ""}</textarea>
+      <div class="addrow">
+        <label class="flab" for="edue">기한</label>
+        <input id="edue" class="bigin" type="date" value="${due}">
+        <button type="submit" class="primary" id="esave2">저장</button>
+        <button type="button" class="chip bad" id="edel">지우기</button>
+        <button type="button" class="chip" id="ecancel">취소</button>
+      </div>
+    </form></li>`;
+}
+
+function focusEdit() {
+  const el = $("#etitle");
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+function wireEdit() {
+  const form = $("#agedit");
+  if (!form) return;
+  const li = form.closest("li");
+  const { id, list } = li.dataset;
+  const t = _tk.find((x) => x.id === id);
+  if (!t) return;
+  $("#ecancel").onclick = () => { _editing = ""; paint(); };
+  $("#edel").onclick = async () => {
+    if (!confirm(`'${t.title}' 할일을 지울까요?`)) return;
+    _done.add(id);                         // 기다리지 않고 바로 뺀다
+    _editing = "";
+    paint();
+    try {
+      await gcal.deleteTask(list, id);
+      _tk = _tk.filter((x) => x.id !== id);
+      await store.put("data", "agenda", { events: _ev, tasks: _tk, at: _at });
+      toast("할일을 지웠어요.");
+    } catch (e) {
+      _done.delete(id);
+      fail(e, "할일을 지우지 못했습니다.");
+    }
+    paint();
+  };
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const title = $("#etitle").value.trim();
+    if (!title) { $("#etitle").focus(); return; }
+    const notes = $("#enotes").value.trim();
+    const v = $("#edue").value;
+    const due = v ? new Date(+v.slice(0, 4), +v.slice(5, 7) - 1, +v.slice(8, 10)) : null;
+    const before = { ...t };
+    // 화면부터 바꾼다 — 통신을 기다리면 두 번 누르게 된다
+    t.title = title;
+    t.notes = notes;
+    t.due = due ? { at: due, hasTime: false } : null;
+    _editing = "";
+    paint();
+    try {
+      await gcal.updateTask(list, id, { title, notes, due });
+      await store.put("data", "agenda", { events: _ev, tasks: _tk, at: _at });
+    } catch (e) {
+      Object.assign(t, before);              // 못 바꿨으면 되돌린다
+      fail(e, "할일을 고치지 못했습니다.");
+      paint();
+    }
+  };
+}
+
+function fail(e, fallback) {
+  _err = e instanceof sheets.NeedScope
+    ? "할일을 고칠 권한이 없습니다. 위 [다시 로그인] 을 눌러 허용해 주세요."
+    : e instanceof sheets.Offline ? "인터넷에 연결되지 않았습니다."
+    : (e.message || fallback);
+  paintState();
 }
 
 async function tick(btn) {

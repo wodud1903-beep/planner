@@ -484,3 +484,69 @@ textarea.bigin { font: inherit; font-size: 15px; resize: vertical; min-height: 7
   nav.tabs a:hover:not([aria-current="page"]) { background: var(--bg); }
   .toast { left: 224px; }
 }
+
+/* ---- 고객 피드(이력 · 메모) ---- */
+.feedadd { display: flex; gap: 8px; align-items: flex-end; margin: 4px 0 10px; }
+.feedadd textarea { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 10px 12px;
+  border: 1px solid var(--edge); border-radius: 14px; background: var(--card); color: var(--text);
+  resize: vertical; min-height: 48px; }
+.feedadd textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+ul.feed { list-style: none; margin: 0 0 14px; padding: 0; }
+ul.feed .fi { position: relative; padding: 8px 0 10px 16px; border-left: 2px solid var(--line);
+  margin-left: 6px; }
+ul.feed .fi::before { content: ""; position: absolute; left: -6px; top: 13px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--edge); }
+ul.feed .fi.memo::before { background: var(--accent); }
+ul.feed .fi.green::before { background: var(--ok); }
+ul.feed .fi.violet::before { background: var(--violet); }
+ul.feed .fi.orange::before { background: var(--warn); }
+.fhead { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub); }
+.ftag { font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--bg); color: var(--sub); }
+.fi.memo .ftag { background: var(--accent-bg); color: var(--accent-text); }
+.ftext { margin-top: 3px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.fdel { font-size: 12px; padding: 2px 4px; }
+
+/* ---- 할일 고치기 ---- */
+.taskbody[data-edit] { cursor: pointer; }
+.taskrow.editing { display: block; }
+.taskedit { display: flex; flex-direction: column; gap: 8px; padding: 6px 0; }
+.taskedit textarea.bigin { min-height: 60px; }
+
+/* ---- 진행 보드(플로우 업무 상태) ---- */
+.boardpane { display: flex; flex-direction: column; min-height: 100%; }
+.boardtop { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.boardtop h2 { margin: 0; font-size: 18px; }
+.bchk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--sub); }
+.bhint { font-size: 12px; margin: 0 0 10px; }
+.board { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; padding-bottom: 12px;
+  scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
+.bcol { flex: none; width: min(78vw, 280px); background: var(--side); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 10px; scroll-snap-align: start; }
+.bcol.over { border-color: var(--accent); background: var(--accent-bg); }
+.bcol .bhead { display: flex; align-items: center; gap: 8px; margin: 2px 2px 8px; font-size: 15px; }
+.bcards { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.bempty { font-size: 12px; color: var(--sub); text-align: center; margin: 10px 0; }
+.bcard { display: flex; align-items: flex-start; gap: 6px; background: var(--card);
+  border-radius: 12px; box-shadow: var(--shadow); padding: 4px 6px 4px 4px; }
+.bcard.drag { opacity: .5; }
+.bcard.busy { opacity: .6; }
+.bopen { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 8px;
+  font: inherit; color: var(--text); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.bopen .t { font-weight: 700; }
+.bopen .s { font-size: 12px; color: var(--sub); }
+.bchip { font-size: 12px; color: var(--sub); }
+.bchip.red { color: var(--bad); font-weight: 700; }
+.bchip.orange { color: var(--warn); font-weight: 700; }
+.bchip.green { color: var(--ok); font-weight: 700; }
+.bmove { margin-top: 8px; font-size: 12px; min-height: 30px; padding: 4px 10px; }
+/* 아래에서 올라오는 고르기 판 */
+.sheet { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .35);
+  display: flex; align-items: flex-end; justify-content: center; }
+.sheet[hidden] { display: none; }
+.sheetbox { background: var(--card); width: 100%; max-width: 520px; border-radius: 20px 20px 0 0;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 70dvh; overflow: auto; }
+.sheettitle { margin: 0 0 8px; }
+.sheetlist { display: flex; flex-direction: column; margin-bottom: 10px; }
+.sheetlist .row { border-bottom: 1px solid var(--line); padding: 14px 4px; text-align: left;
+  background: none; border-left: 0; border-right: 0; border-top: 0; font: inherit; color: var(--text);
+  cursor: pointer; }

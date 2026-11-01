@@ -21,13 +21,14 @@ from html import escape as html_escape
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSystemTrayIcon,
-    QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
+    QStackedWidget, QSystemTrayIcon, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from . import (
-    alarm_window, backup_dialog, changelog, config, contacts, crashlog, customer_docs,
+    alarm_window, backup_dialog, board_view, changelog, config, contacts, crashlog, customer_docs,
     dashboard, deliver_cal, drive_path, followup,
     google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheets, sync,
     theme, updater, weekly,
@@ -1270,6 +1271,23 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
+        # [목록] / [보드] — 보드는 플로우의 '업무 상태' 처럼 진행현황별 칸에 고객 카드를
+        # 놓고, 끌어 옮기면 시트 진행현황이 바뀐다(board_view)
+        self.btn_view_list = QPushButton("목록")
+        self.btn_view_board = QPushButton("보드")
+        self._cust_view_group = QButtonGroup(self)
+        for b in (self.btn_view_list, self.btn_view_board):
+            b.setCheckable(True)
+            self._cust_view_group.addButton(b)
+            row.addWidget(b)
+        self.btn_view_board.setToolTip("진행현황별 칸에 고객 카드 — 끌어 옮기면 시트 진행현황이 바뀝니다")
+        for b in (self.btn_view_list, self.btn_view_board):
+            # 지금 보고 있는 쪽이 눌린 모양으로(왼쪽 메뉴의 고른 칸과 같은 색)
+            b.setStyleSheet(f"QPushButton:checked {{ background:{theme.c('select_bg')};"
+                            f" color:{theme.c('nav_sel_text')}; border-color:{theme.c('accent')};"
+                            " font-weight:bold; }")
+        self.btn_view_list.clicked.connect(lambda: self._set_cust_view("list"))
+        self.btn_view_board.clicked.connect(lambda: self._set_cust_view("board"))
         # [주간 요약] 은 [대시보드] 의 [새로고침] 옆으로 옮겼다.
         # 브리핑과 한 화면이 되었으니 하루를 여는 자리에 있는 편이 맞다.
         row.addStretch()
@@ -1320,8 +1338,69 @@ class MainWindow(QMainWindow):
         # 표가 실제 크기를 갖는 시점은 탭을 처음 열 때다. 그 전에 계산한 폭은
         # 화면과 안 맞아 오른쪽에 흰 칸이 남는다 → 크기가 바뀔 때마다 다시 맞춘다.
         self.tbl_cust.viewport().installEventFilter(self)
-        v.addWidget(self.tbl_cust)
+        self.cust_stack = QStackedWidget()
+        self.cust_stack.addWidget(self.tbl_cust)
+        self.board = board_view.BoardView()
+        self.board.moved.connect(self._move_customer_status)
+        self.board.opened.connect(self._open_customer_from_board)
+        self.cust_stack.addWidget(self.board)
+        v.addWidget(self.cust_stack)
+        self._set_cust_view(getattr(self.settings, "cust_view", "list"), save=False)
         return w
+
+    # ---- 고객 진행 보드 ----
+    def _set_cust_view(self, view: str, save: bool = True):
+        board_on = view == "board"
+        self.btn_view_board.setChecked(board_on)
+        self.btn_view_list.setChecked(not board_on)
+        self.cust_stack.setCurrentWidget(self.board if board_on else self.tbl_cust)
+        if board_on:
+            self.board.set_rows(getattr(self, "_cust_shown", self.sheet_rows))
+        if save and getattr(self.settings, "cust_view", "list") != view:
+            self.settings.cust_view = view
+            self._save_settings_quiet()
+
+    def _save_settings_quiet(self):
+        try:
+            self.settings.save(self.cfg_file)
+        except Exception:
+            pass
+
+    def _open_customer_from_board(self, rownum: int):
+        """보드 카드를 두 번 누르면 — 표에서 그 고객을 골라 [수정] 을 연다."""
+        for r in range(self.tbl_cust.rowCount()):
+            it = self.tbl_cust.item(r, 0)
+            if it is not None and it.data(Qt.UserRole) == rownum:
+                self.tbl_cust.setCurrentCell(r, 1)
+                self.on_customer_edit()
+                return
+
+    def _move_customer_status(self, rownum: int, status: str):
+        """보드에서 카드를 옮겼다 → 그 고객의 진행현황(L열)만 바꾼다.
+
+        화면 먼저 바꾸고, 시트에는 '고객 고치기' 와 같은 길로 쓴다 — 쓰기 직전에
+        그 고객이 아직 그 줄에 있는지(고객ID·이름) 확인한다. 못 쓰면 되돌린다.
+        """
+        cr = next((c for c in self.sheet_rows if c.row == rownum), None)
+        if cr is None or cr in self._sheet_pending or not self._sheet_ready():
+            return
+        old = dict(cr.values)
+        if (old.get("status") or "").strip() == status:
+            return
+        cr.values = {**old, "status": status}
+        self.refresh_customers()
+        self.refresh_dashboard()
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+
+        def worker():
+            try:
+                cr.row = sheets.update_row(self.gauth, sid, sname, cr.row, {"status": status},
+                                           name=old.get("customer", ""), uid=cr.uid)
+                self.sig_sheet_written.emit(None, cr.row, "")
+            except Exception as e:
+                cr.values = old         # 롤백 (화면은 핸들러에서 다시 그린다)
+                self.sig_sheet_written.emit(None, None, str(e))
+        threading.Thread(target=worker, daemon=True).start()
 
     def eventFilter(self, obj, ev):
         if (ev.type() == QEvent.Resize
@@ -1854,12 +1933,14 @@ class MainWindow(QMainWindow):
         self.tbl_cust.setRowCount(0)
         rows = self._visible_sheet_rows()
         shown = 0
+        shown_rows = []
         for cr in rows:
             if q:
                 hay = " ".join([cr.get("customer"), cr.get("model"),
                                 cr.get("finance")]).lower()
                 if q not in hay:
                     continue
+            shown_rows.append(cr)
             r = self.tbl_cust.rowCount()
             self.tbl_cust.insertRow(r)
             pend = cr in self._sheet_pending
@@ -1932,6 +2013,10 @@ class MainWindow(QMainWindow):
                         cell.setForeground(fg)
             shown += 1
         self._fit_cust_columns()
+        # 보드도 같은 고객(검색 결과)으로 — 등록 중인 줄은 아직 옮길 수 없어 뺀다
+        self._cust_shown = [c for c in shown_rows if c not in self._sheet_pending]
+        if hasattr(self, "board") and self.cust_stack.currentWidget() is self.board:
+            self.board.set_rows(self._cust_shown)
         total = len(rows)
         self.lbl_cust.setText(
             f"고객 {total}건" + (f" · 검색 {shown}건" if q else "")

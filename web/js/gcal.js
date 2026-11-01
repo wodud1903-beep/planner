@@ -145,3 +145,19 @@ export function addTask(title, due = null) {
   if (due) body.due = `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T00:00:00.000Z`;
   return call(`${TASKS_API}/lists/%40default/tasks`, { method: "POST", body });
 }
+
+/** 할일 고치기 — 제목·메모·기한(Date|null). 기한을 비우면 지운다. */
+export function updateTask(listId, taskId, { title, notes = "", due = null }) {
+  const body = { title: String(title || "").trim(), notes: String(notes || "") };
+  body.due = due
+    ? `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T00:00:00.000Z`
+    : null;
+  return call(`${TASKS_API}/lists/${encodeURIComponent(listId)}`
+            + `/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body });
+}
+
+/** 할일 지우기. */
+export function deleteTask(listId, taskId) {
+  return call(`${TASKS_API}/lists/${encodeURIComponent(listId)}`
+            + `/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}

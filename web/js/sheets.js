@@ -173,6 +173,32 @@ export async function readMent(sheetId, tab, row) {
   }
 }
 
+// ---------------------------------------------------------------- 고객ID (U열)
+// 메모·이력을 붙들어 두는 열쇠. 순번이나 이름을 고쳐도 끊기지 않는다(PC 와 같은 열).
+export const COL_UID = 20;            // U
+
+/** 그 줄의 고객ID와 고객명(B열) — 고객명은 '같은 고객인지' 확인용. */
+export async function readUid(sheetId, tab, row) {
+  const [b, u] = await batch(sheetId, tab, [`B${row}:B${row}`, `U${row}:U${row}`]);
+  return { name: String(((b || [])[0] || [])[0] || "").trim(),
+           uid: String(((u || [])[0] || [])[0] || "").trim() };
+}
+
+/** 고객ID를 새로 적는다(그 칸이 비어 있을 때만 부른다). */
+export async function writeUid(sheetId, tab, row, uid) {
+  await call(`${SHEETS_API}/${sheetId}/values:batchUpdate`, {
+    valueInputOption: "RAW",
+    data: [{ range: `'${tab}'!U${row}`, values: [[uid]] }],
+  });
+}
+
+/** PC 의 sheets.new_uid 와 같은 모양(16글자 16진수). */
+export function newUid() {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return [...a].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 /** 이 스프레드시트에 실제로 있는 탭 이름들. 탭 이름이 틀렸을 때 골라 쓰게 한다. */
 export async function tabNames(sheetId) {
   const j = await call(`${SHEETS_API}/${sheetId}`

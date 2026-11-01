@@ -15,6 +15,8 @@ import * as agenda from "./ui/agenda.js";
 import * as calc from "./ui/calc.js";
 import * as weeklyui from "./ui/weekly.js";
 import * as about from "./ui/about.js";
+import * as boardui from "./ui/board.js";
+import * as push from "./push.js";
 
 const BUILD_CHECK_MS = 5 * 60 * 1000;
 let _lastCheck = 0;
@@ -64,6 +66,7 @@ router.on(/^\/agenda$/, () => agenda.screen());
 router.on(/^\/calc$/, () => calc.screen());
 router.on(/^\/customers\/settings$/, () => cust.settingsScreen());
 router.on(/^\/customers\/week$/, () => weeklyui.screen());
+router.on(/^\/customers\/board$/, () => boardui.screen());
 router.on(/^\/customers\/(\d+)\/edit$/, (m) => cust.editScreen(m));
 router.on(/^\/customers\/(\d+)$/, (m) => cust.screen(m));
 router.on(/^\/customers$/, () => cust.screen(null));
@@ -113,6 +116,7 @@ router.on(/^\/docs$/, () => docs.screen(null));
     // 동의 화면에서 빠진 항목이 있으면 알려 준다
     await auth.preload();
     paintState();
+    push.touch();                       // 알림을 켜 둔 폰이면 하루 한 번 로그인을 새로 맡긴다
     if (auth.missing().length && !_authFlag) tellAuth("partial");
   }, 0);
 

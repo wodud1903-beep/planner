@@ -1036,6 +1036,7 @@ console.log("\n[14] 일정 / 할일");
     return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
   const patched = [];
   const posted = [];
+  const deleted = [];
   await ctx8.route("**/accounts.google.com/**", (r) => r.abort());
   await ctx8.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
   await ctx8.route("**/www.googleapis.com/calendar/v3/**", (r) => {
@@ -1056,6 +1057,7 @@ console.log("\n[14] 일정 / 할일");
   await ctx8.route("**/tasks.googleapis.com/**", (r) => {
     const u = decodeURIComponent(r.request().url());
     if (r.request().method() === "PATCH") { patched.push(u); return r.fulfill({ json: {} }); }
+    if (r.request().method() === "DELETE") { deleted.push(u); return r.fulfill({ status: 204, body: "" }); }
     if (r.request().method() === "POST") {
       posted.push({ url: u, body: r.request().postDataJSON() });
       return r.fulfill({ json: { id: "t9", title: "서류 챙기기" } });
@@ -1120,6 +1122,26 @@ console.log("\n[14] 일정 / 할일");
      && posted[0].body.title === "서류 챙기기" && posted[0].body.due === d(2) + "T00:00:00.000Z",
      JSON.stringify(posted));
   ok("넣고 나면 칸이 닫힌다", await p9.locator("#agform").isHidden());
+
+  // 할일을 누르면 그 자리에서 고친다 · 지운다(플로우처럼)
+  const nPatch = patched.length;
+  await p9.locator("#agtasks .taskbody[data-edit]").first().click();
+  await p9.waitForSelector("#agedit", { timeout: 4000 });
+  ok("할일을 누르면 그 자리에서 고치는 칸", (await p9.locator("#etitle").inputValue()).length > 0);
+  await p9.fill("#etitle", "기한없는 할일 — 고침");
+  await p9.fill("#edue", d(3));
+  await p9.click("#esave2");
+  await p9.waitForTimeout(500);
+  ok("고친 제목·기한을 구글에 보낸다", patched.length === nPatch + 1, patched.length - nPatch);
+  ok("화면에 바로 반영", (await p9.locator("#agtasks .taskbody .t").allTextContents())
+     .includes("기한없는 할일 — 고침"));
+  await p9.locator("#agtasks .taskbody[data-edit]").first().click();
+  await p9.waitForSelector("#edel");
+  p9.once("dialog", (dl) => dl.accept());
+  await p9.click("#edel");
+  await p9.waitForTimeout(500);
+  ok("지우기는 구글에서 지운다(DELETE)", deleted.length === 1, deleted.join(" "));
+  ok("목록에서 바로 빠진다", !(await p9.locator("#agedit").count()));
 
   // 껐다 켜도 캐시로 뜬다
   await ctx8.route("**/www.googleapis.com/calendar/v3/**", (r) => r.abort());
@@ -1717,6 +1739,274 @@ console.log("\n[21] 폰에서 고객 고치기 — 시트를 망가뜨리지 않
      (await pG.locator("#emsg").textContent()).includes("새로 불러온 뒤"),
      await pG.locator("#emsg").textContent());
   await ctxG.close();
+}
+
+console.log("\n[23] 고객 피드 — 폰에서 메모를 남기면 PC 고객 이력에도(같은 동기화 묶음)");
+{
+  const ctxH = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await seed(ctxH, { account: "me@example.com", sheet: { id: "FDSHEET", tab: "미출고차량" } });
+  await ctxH.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  const SHEET = [HDR,
+    ["1", "김상현", "우리금융캐피탈", "쏘나타", "", "", "", "500,000", "", "2026. 8. 1",
+     "2026. 8. 20", "출고완료", "60개월", "", "", "", ""],
+    ["2", "박영희", "KB캐피탈", "아이오닉5", "", "", "", "", "", "2026. 9. 1", "", "심사중",
+     "", "", "", "", ""]];
+  const UIDS = { 2: "uid0000000000001", 3: "" };
+  const uidWrites = [];
+  await ctxH.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxH.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxH.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (r.request().method() === "POST" && u.includes("values:batchUpdate")) {
+      const b = JSON.parse(r.request().postData() || "{}");
+      uidWrites.push(b);
+      for (const d of b.data || []) {
+        const m = d.range.match(/!U(\d+)$/);
+        if (m) UIDS[m[1]] = d.values[0][0];
+      }
+      return r.fulfill({ json: {} });
+    }
+    const one = u.match(/!B(\d+):B\d+/);
+    if (u.includes("batchGet") && one) {
+      const row = Number(one[1]);
+      return r.fulfill({ json: { valueRanges: [
+        { values: [[SHEET[row - 1][1]]] }, { values: UIDS[row] ? [[UIDS[row]]] : [] }] } });
+    }
+    if (u.includes("batchGet")) {
+      return r.fulfill({ json: { valueRanges: [
+        { values: SHEET.map((x) => x.slice(0, 17)) }, { values: SHEET.map(() => []) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  // 드라이브 앱 폴더 — PC 가 올려 둔 동기화 묶음
+  let bundle = { updatedAt: "2026-10-30T01:00:00Z",
+    files: { "customer_notes.json": JSON.stringify({ uid0000000000001: [
+      { date: "2026-10-20", text: "PC에서 남긴 메모" },
+      { date: "2026-10-21", text: "지운 메모" },
+      { date: "2026-10-21", text: "지운 메모", del: 1 }] }),
+      "todos.json": "[{\"title\":\"PC 할일\"}]" },
+    times: { "customer_notes.json": "2026-10-30T01:00:00Z", "todos.json": "2026-10-30T01:00:00Z" } };
+  const uploads = [];
+  await ctxH.route("**/www.googleapis.com/drive/v3/files**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("SYNC1") && u.includes("alt=media")) return r.fulfill({ json: bundle });
+    if (u.includes("planner_sync.json")) return r.fulfill({ json: { files: [{ id: "SYNC1" }] } });
+    return r.fulfill({ json: { files: [] } });
+  });
+  await ctxH.route("**/upload/drive/v3/files/**", (r) => {
+    uploads.push(r.request().url());
+    bundle = JSON.parse(r.request().postData());
+    return r.fulfill({ json: { id: "SYNC1" } });
+  });
+  const pH = await page(ctxH);
+  await pH.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pH.waitForSelector("#clist button.row", { timeout: 10000 });
+  await pH.locator("#clist button.row").first().click();
+  await pH.waitForFunction(() => document.querySelector("#flist")
+    && document.querySelector("#flist").textContent.includes("PC에서"), null, { timeout: 8000 }).catch(() => {});
+  const feed = () => pH.locator("#flist").innerText();
+  ok("PC 에서 남긴 메모가 폰 피드에 보인다", (await feed()).includes("PC에서 남긴 메모"), await feed());
+  ok("지운 메모(표식)는 안 보인다", !(await feed()).includes("지운 메모"));
+  ok("시트가 아는 이력도 같이(계약 · 출고)", (await feed()).includes("계약(발주)")
+     && (await feed()).includes("차량 출고"));
+  ok("만기는 맨 아래(앞날이라)", (await pH.locator("#flist .ftag").last().textContent()) === "만기");
+  await pH.fill("#fnote", "통화함 — 보증금 문의");
+  await pH.click("#fsave");
+  await pH.waitForTimeout(700);
+  const nm = JSON.parse(bundle.files["customer_notes.json"]).uid0000000000001;
+  const mine = nm.find((n) => n.text === "통화함 — 보증금 문의");
+  ok("남긴 메모가 PC 묶음의 customer_notes.json 에(📱 표시용 via:web)", mine && mine.via === "web"
+     && /^\d{4}-\d\d-\d\d$/.test(mine.date), JSON.stringify(mine));
+  ok("그 파일 시각을 지금으로 — PC 가 '원격이 최신' 으로 보고 합친다",
+     bundle.times["customer_notes.json"] > "2026-10-30T01:00:00Z", bundle.times["customer_notes.json"]);
+  ok("묶음의 다른 파일은 그대로", bundle.files["todos.json"] === "[{\"title\":\"PC 할일\"}]"
+     && bundle.times["todos.json"] === "2026-10-30T01:00:00Z");
+  ok("피드 맨 위에 바로 뜬다", (await pH.locator("#flist .ftext").first().textContent()) === "통화함 — 보증금 문의");
+  pH.once("dialog", (dl) => dl.accept());
+  await pH.locator("#flist .fdel").first().click();
+  await pH.waitForTimeout(700);
+  const nm2 = JSON.parse(bundle.files["customer_notes.json"]).uid0000000000001;
+  ok("지우면 표식을 남긴다(동기화가 합쳐도 되살아나지 않게)",
+     nm2.some((n) => n.del && n.text === "통화함 — 보증금 문의"));
+  ok("피드에서도 사라진다", !(await feed()).includes("보증금 문의"));
+
+  // 고객ID 가 아직 없는 고객 — 처음 메모를 남길 때 만들어 시트 U열에 적는다
+  await pH.evaluate(() => { location.hash = "#/customers"; });
+  await pH.waitForSelector("#clist button.row");
+  await pH.locator("#clist button.row").nth(1).click();
+  await pH.waitForSelector("#fnote");
+  await pH.waitForTimeout(400);
+  await pH.fill("#fnote", "첫 메모");
+  await pH.click("#fsave");
+  await pH.waitForTimeout(700);
+  const wroteU = uidWrites.find((b) => (b.data || []).some((d) => /!U3$/.test(d.range)));
+  ok("고객ID 를 새로 만들어 그 줄의 U열에(RAW)", wroteU && wroteU.valueInputOption === "RAW"
+     && /^[0-9a-f]{16}$/.test(UIDS[3]), JSON.stringify(wroteU));
+  ok("그 ID 로 메모가 붙는다", (JSON.parse(bundle.files["customer_notes.json"])[UIDS[3]] || [])
+     .some((n) => n.text === "첫 메모"));
+  await ctxH.close();
+}
+
+console.log("\n[24] 진행 보드 — 진행현황별 칸 · [옮기기] 로 시트 L열만");
+{
+  const ctxB = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await seed(ctxB, { account: "me@example.com", sheet: { id: "BDSHEET", tab: "미출고차량" } });
+  await ctxB.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  const now = new Date();
+  const f = (n) => { const d = new Date(now); d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`; };
+  const SHEET = [HDR,
+    ["1", "김상현", "KB캐피탈", "쏘나타", "", "", "", "", "", f(-40), "", "발주", "", "", "", "", ""],
+    ["2", "박영희", "KB캐피탈", "아이오닉5", "", "", "", "", "", f(-3), "", "발주", "", "", "", "", ""],
+    ["3", "최민수", "BNK캐피탈", "쏘렌토", "", "", "", "", "", f(-50), f(-4), "출고", "", "", "", "", ""],
+    ["4", "정해나", "하나캐피탈", "GV80", "", "", "", "", "", f(-60), "", "진행보류", "", "", "", "", ""],
+    ["5", "한지민", "IM캐피탈", "G70", "", "", "", "", "", f(-9), "", "취소", "", "", "", "", ""]];
+  const writes = [];
+  await ctxB.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxB.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (r.request().method() === "POST" && u.includes("values:batchUpdate")) {
+      writes.push(JSON.parse(r.request().postData() || "{}"));
+      return r.fulfill({ json: {} });
+    }
+    const one = u.match(/!A(\d+):Q\d+/);
+    if (u.includes("batchGet")) {
+      const rows = one ? [SHEET[Number(one[1]) - 1]] : SHEET;
+      return r.fulfill({ json: { valueRanges: [
+        { values: rows.map((x) => x.slice(0, 17)) }, { values: rows.map(() => []) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  const pB = await page(ctxB);
+  await pB.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pB.waitForSelector("#clist button.row", { timeout: 10000 });
+  await pB.click("#cboard");
+  await pB.waitForSelector(".bcol", { timeout: 6000 });
+  const cols = await pB.locator(".bcol .bhead b").allTextContents();
+  ok("칸 = 시트의 진행현황(흐름 순서), 취소는 숨김", JSON.stringify(cols) === '["발주","출고","진행보류"]',
+     cols.join(" | "));
+  const first = await pB.locator('.bcol[data-status="발주"] .bcard .t').allTextContents();
+  ok("오래 묵은 건이 위로", JSON.stringify(first) === '["김상현","박영희"]', first.join(","));
+  ok("40일째는 빨강", (await pB.locator('.bcol[data-status="발주"] .bchip.red').first().textContent())
+     === "계약 40일째");
+  await pB.check("#bcancel");
+  ok("취소·부결 보기", (await pB.locator(".bcol .bhead b").allTextContents()).includes("취소"));
+  await pB.uncheck("#bcancel");
+  // [옮기기] → 진행보류
+  await pB.locator('.bcol[data-status="발주"] .bmove').nth(1).click();
+  await pB.waitForSelector("#bsheet:not([hidden]) .bto");
+  const opts = await pB.locator("#bsheet .bto").allTextContents();
+  ok("옮길 곳 = 다른 칸들(지금 칸 빼고, 숨긴 취소도)", !opts.includes("발주") && opts.includes("진행보류")
+     && opts.includes("취소"), opts.join(","));
+  await pB.locator('#bsheet .bto[data-to="진행보류"]').click();
+  await pB.waitForTimeout(800);
+  const wr = writes.at(-1) || {};
+  ok("시트에는 그 고객 줄의 L열(진행현황)만", wr.data && wr.data.length === 1
+     && wr.data[0].range === "'미출고차량'!L3" && wr.data[0].values[0][0] === "진행보류",
+     JSON.stringify(wr.data));
+  ok("보드에서 바로 옮겨 간다", (await pB.locator('.bcol[data-status="진행보류"] .bcard .t').allTextContents())
+     .includes("박영희"));
+  // 카드를 누르면 상세
+  await pB.locator('.bcol[data-status="발주"] .bopen').first().click();
+  await pB.waitForTimeout(500);
+  ok("카드를 누르면 고객 상세", (await pB.evaluate(() => location.hash)) === "#/customers/2");
+  // 그 사이 그 줄에 다른 고객이 오면 쓰지 않는다
+  await pB.goto(s.url + "#/customers/board", { waitUntil: "networkidle" });
+  await pB.waitForSelector(".bcol");
+  SHEET[1] = ["1", "다른고객", "", "", "", "", "", "", "", "", "", "발주", "", "", "", "", ""];
+  const n0 = writes.length;
+  await pB.locator('.bcol[data-status="발주"] .bmove').first().click();
+  await pB.locator('#bsheet .bto[data-to="출고"]').click();
+  await pB.waitForTimeout(800);
+  ok("줄이 바뀌었으면 쓰지 않고 알린다", writes.length === n0
+     && (await pB.locator("#toast").textContent()).includes("줄이 달라졌습니다"),
+     await pB.locator("#toast").textContent());
+  if (process.env.SHOT_DIR) await pB.screenshot({ path: join(process.env.SHOT_DIR, "board_web.png") });
+  await ctxB.close();
+}
+
+console.log("\n[25] 아침 브리핑 알림 — [정보] 에서 켜기 · 받아 보기 · 끄기");
+{
+  const cP = await browser.newContext({ viewport: { width: 412, height: 900 },
+                                        permissions: ["notifications"] });
+  // 진짜 푸시 서비스(FCM)는 검사 브라우저에 없다 — 구독 창구만 가짜로
+  await cP.addInitScript(() => {
+    let sub = null;
+    const fake = {
+      async getSubscription() { return sub; },
+      async subscribe(o) {
+        window.__appKeyLen = o.applicationServerKey.length;
+        sub = { endpoint: "https://fcm.googleapis.com/fcm/send/TEST",
+                toJSON() { return { endpoint: this.endpoint, keys: { p256dh: "P", auth: "A" } }; },
+                async unsubscribe() { sub = null; return true; } };
+        return sub;
+      },
+    };
+    Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", { get: () => fake });
+  });
+  const calls = [];
+  await cP.route("**/api/auth/token", (r) => r.fulfill({ json: { access_token: "srv", expires_in: 3600,
+                                                                   email: "me@example.com", missing: [] } }));
+  await cP.route("**/api/push/**", (r) => {
+    const u = r.request().url();
+    calls.push([u.split("/api/push/")[1], r.request().method(), r.request().postData() || ""]);
+    if (u.endsWith("/key")) {
+      return r.fulfill({ json: { publicKey: "BOrK3xQ2b0Rj1oP5Q0Z5w7oGQm9-0Ck5c4uEo2f9k0sXqxvQe4aKq3x8M3pYd0gq1Y2Wc9q7h6d5n4m3l2k1j0i" } });
+    }
+    if (u.endsWith("/test")) return r.fulfill({ json: { ok: true, title: "☀️ 오늘 브리핑", body: "일정 1" } });
+    return r.fulfill({ json: { ok: true } });
+  });
+  await cP.route("**/accounts.google.com/**", (r) => r.abort());
+  const pP = await page(cP);
+  await pP.goto(s.url + "#/about", { waitUntil: "networkidle" });
+  await pP.waitForSelector("#pushon", { timeout: 6000 });
+  ok("꺼져 있으면 [알림 켜기]", await pP.locator("#pushon").isVisible());
+  await pP.click("#pushon");
+  await pP.waitForSelector("#pushtest", { timeout: 6000 });
+  const sc = calls.find((c) => c[0] === "subscribe");
+  ok("켜면 서버에 이 폰의 알림 주소를 맡긴다", sc && sc[1] === "POST"
+     && JSON.parse(sc[2]).subscription.endpoint.endsWith("/TEST"), sc && sc[2]);
+  ok("서명 공개키(65바이트)로 구독한다", (await pP.evaluate(() => window.__appKeyLen)) === 65);
+  ok("켜졌다고 알려 준다", (await pP.locator("#pushmsg").textContent()).includes("켰어요"));
+  await pP.click("#pushtest");
+  await pP.waitForTimeout(400);
+  ok("[지금 한 번 받아 보기] 는 서버에 보내 달라고 한다", calls.some((c) => c[0] === "test"
+     && JSON.parse(c[2]).endpoint.endsWith("/TEST")));
+  ok("보냈다고 알려 준다", (await pP.locator("#pushmsg").textContent()).includes("보냈어요"));
+  await pP.click("#pushoff");
+  await pP.waitForSelector("#pushon", { timeout: 6000 });
+  ok("[알림 끄기] — 서버 기록도 지운다", calls.some((c) => c[0] === "unsubscribe"));
+  // 서비스워커 — 서버가 보낸 것을 알림으로(헤드리스는 알림 권한이 없어 띄우는 함수만 가로챈다)
+  const sw = cP.serviceWorkers()[0] || await cP.waitForEvent("serviceworker");
+  const shown = await sw.evaluate(async () => {
+    const got = [];
+    self.registration.showNotification = async (t, o) => { got.push([t, o.body, o.tag, o.data.url]); };
+    const ev = new PushEvent("push", { data: JSON.stringify({
+      title: "☀️ 11/2(월) 오늘 브리핑", body: "일정 1", tag: "brief-2026-11-02", url: "./#/agenda" }) });
+    const w = [];
+    ev.waitUntil = (pr) => w.push(pr);
+    self.dispatchEvent(ev);
+    await Promise.all(w);
+    return got;
+  });
+  ok("서비스워커가 받은 브리핑을 알림으로(같은 날은 같은 꼬리표)",
+     JSON.stringify(shown) === JSON.stringify([["☀️ 11/2(월) 오늘 브리핑", "일정 1", "brief-2026-11-02", "./#/agenda"]]),
+     JSON.stringify(shown));
+  await cP.close();
 }
 
 console.log("\n[22] 옛 주소(github.io) → 새 주소로 옮긴다 · 첫 로딩 미리 받기");

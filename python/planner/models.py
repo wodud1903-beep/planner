@@ -296,6 +296,8 @@ class AppSettings:
     side_collapsed: bool = False
     # 오늘의 뉴스 — 구글 문서 주소(또는 id)
     news_doc: str = config.DEF_NEWS_DOC
+    # 고객관리 탭을 목록으로 볼지 보드로 볼지
+    cust_view: str = "list"
 
     def to_json(self) -> dict:
         return {
@@ -337,6 +339,7 @@ class AppSettings:
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
+            "custView": self.cust_view,
         }
 
     @classmethod
@@ -406,6 +409,7 @@ class AppSettings:
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")
+        s.cust_view = "board" if o.get("custView") == "board" else "list"
         return s
 
     def save(self, path: Path) -> None:

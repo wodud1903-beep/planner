@@ -11,6 +11,7 @@ import * as C from "../js/customers.js";
 import * as D from "../js/drive.js";
 import * as CM from "../js/commission.js";
 import * as WK from "../js/weekly.js";
+import * as BD from "../js/board.js";
 import * as SH from "../js/sheets.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -125,7 +126,7 @@ console.log(`  현대 ${V.default_rates.hyundai.length}종 · 기아 ${V.default
 
 console.log("\n[13] 주간 요약 (weekly.sections)");
 // 고객 줄을 파이썬이 만든 그대로 되살린다 (CustomerRow 흉내)
-const wrows = V.weekly_rows.map((r) => ({ total: r.total, values: r.values }));
+const wrows = V.weekly_rows.map((r) => ({ row: r.row, total: r.total, values: r.values }));
 for (const [day, title, want] of V.weekly_sections) {
   const today = new Date(day + "T00:00:00");
   eq(`titleLine(${day})`, WK.titleLine(today), title);
@@ -144,6 +145,14 @@ for (const [day, want] of V.weekly_text) {
   eq(`renderText(${day})`, WK.renderText(WK.titleLine(today), WK.sections(wrows, today)), want);
 }
 console.log(`  다음 주 ${V.weekly_next.length}일 · 복사 글 ${V.weekly_text.length}일 대조`);
+
+console.log("\n[13-2] 고객 진행 보드 (board.columns)");
+for (const [st, want] of V.board_stage) eq(`stage(${st})`, BD.stage(st), want);
+for (const [day, show, want] of V.board_columns) {
+  eq(`columns(${day}, 취소 ${show ? "보임" : "숨김"})`,
+     BD.columns(wrows, new Date(day + "T00:00:00"), show), want);
+}
+console.log(`  단계 ${V.board_stage.length}개 · 보드 ${V.board_columns.length}가지 대조`);
 
 console.log("\n[14] 시트에 적을 날짜 서식 (sheets.fmt_date)");
 // ⚠️ 0 을 안 채운다. "2026. 8. 14" 이지 "2026. 08. 14" 가 아니다.

@@ -7,6 +7,7 @@ import * as auth from "../auth.js";
 import * as theme from "../theme.js";
 import * as store from "../store.js";
 import { icon } from "./icons.js";
+import * as push from "../push.js";
 
 let _secs = null;
 
@@ -58,6 +59,12 @@ export async function screen() {
         <p class="s"><a href="./privacy.html">개인정보처리방침</a> ·
            <a href="./terms.html">서비스 약관</a></p>
       </section>
+      <section class="card" id="pushcard">
+        <h3 class="cardtitle">아침 브리핑 알림</h3>
+        <p class="s">매일 아침(8:50~10시 사이) 오늘 일정 · 할일 · 출고 · 뉴스를 이 폰으로 알려 드려요.</p>
+        <p class="btnrow" id="pushbtns"></p>
+        <p class="s" id="pushmsg"></p>
+      </section>
       <section class="card">
         <h3 class="cardtitle">테마</h3>
         <div class="cats" id="themes">${raw(theme.THEMES.map(([k, t]) => html`
@@ -89,6 +96,7 @@ export async function screen() {
       location.reload();
     };
   }
+  paintPush();
   $("#diag").onclick = () => {
     // 폴드7의 실제 CSS 크기를 확인할 때 쓴다 — 짐작하지 않으려고 둔다
     render($("#diagout"), html`화면 ${innerWidth} × ${innerHeight} ·
@@ -111,6 +119,42 @@ export async function screen() {
       </summary>
       ${raw(bodyToHtml(s.body))}
     </details>`).join(""));
+}
+
+// 아침 브리핑 알림 — 켜기/끄기/지금 받아 보기
+async function paintPush() {
+  const btns = $("#pushbtns");
+  const msg = $("#pushmsg");
+  if (!btns) return;
+  const why = push.support();
+  if (why) { render(msg, why); return; }
+  const on = !!(await push.current());
+  render(btns, on
+    ? '<button class="chip" id="pushtest">지금 한 번 받아 보기</button>'
+      + '<button class="chip bad" id="pushoff">알림 끄기</button>'
+    : '<button class="primary" id="pushon">알림 켜기</button>');
+  render(msg, on ? "켜져 있어요. 이 폰으로 매일 아침 한 번 옵니다." : "");
+  const say = (t) => render(msg, html`${t}`);
+  const b1 = $("#pushon");
+  if (b1) b1.onclick = async () => {
+    b1.disabled = true;
+    say("켜는 중…");
+    let err = "";
+    try { err = await push.enable(); } catch (e) { err = "알림을 켜지 못했어요."; }
+    if (err) { b1.disabled = false; say(err); return; }
+    await paintPush();
+    say("켰어요! 내일 아침부터 옵니다. [지금 한 번 받아 보기] 로 확인해 보세요.");
+  };
+  const b2 = $("#pushoff");
+  if (b2) b2.onclick = async () => { await push.disable(); await paintPush(); say("껐어요."); };
+  const b3 = $("#pushtest");
+  if (b3) b3.onclick = async () => {
+    b3.disabled = true;
+    say("오늘 브리핑을 만드는 중…");
+    const r = await push.test().catch(() => ({ error: "보내지 못했어요." }));
+    b3.disabled = false;
+    say(r.error || "보냈어요. 알림이 곧 뜹니다.");
+  };
 }
 
 export async function version() {
