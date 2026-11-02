@@ -357,6 +357,86 @@ d = KbEditDialog(ADMIN, None)
 ok("관리자는 이 PC 에서 고친 게 없으면 그 묶음을 안 보인다", d.cmb_src.findData(kb.SRC_LOCAL) < 0)
 d.reject()
 
+print("[10] 크게 보기 — 같은 자료의 다음 첨부로 바로 (단추 · ← →)")
+import threading as _th  # noqa: E402
+from PySide6.QtCore import QTimer as _QT  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+_two = (_HERE.parents[1] / "web" / "verify" / "fixtures" / "two.pdf").read_bytes()
+NA = {"id": "NAV_A", "name": "가.png", "mime": "image/png", "size": 1}
+NP = {"id": "NAV_P", "name": "나.pdf", "mime": "application/pdf", "size": len(_two)}
+NC = {"id": "NAV_C", "name": "다.png", "mime": "image/png", "size": 1}
+kb_files._store(NA, png_bytes("#AA0000", 300, 200))
+kb_files._store(NP, _two)
+gate = _th.Event()
+_real_fetch = kb_files.fetch
+
+
+def _slow_fetch(auth, att):                 # 세 번째 첨부는 아직 받는 중인 것으로
+    gate.wait(10)
+    return kb_files._store(att, png_bytes("#00AA00", 200, 200))
+
+
+kb_files.fetch = _slow_fetch
+kb.save_shared([{"category": "캐피탈", "title": "넘기기 자료", "body": "b", "files": [NA, NP, NC]}])
+kb.save_mine([])
+vn = KbView()
+vn.show()
+pump(20)
+vn.ed_find.setText("넘기기")
+vn.flush_search()
+pump(20)
+R = {}
+
+
+def _drive():
+    d = vn._viewer
+    d.activateWindow()
+    pump(5)
+    R["start"] = (d.index, d.lbl_count.text(), d.windowTitle(), d.btn_prev_att.isEnabled())
+    QTest.keyClick(d, Qt.Key_Right)
+    pump(5)
+    R["pdf1"] = (d.index, d.preview.page_count, d.preview._page, d.preview._doc is not None)
+    QTest.keyClick(d, Qt.Key_Right)
+    pump(5)
+    R["pdf2"] = (d.index, d.preview._page)
+    QTest.keyClick(d, Qt.Key_Right)
+    pump(5)
+    R["wait"] = (d.index, d.preview.view.text(), d.preview._doc is None)
+    gate.set()
+    for _ in range(200):
+        pump(2)
+        if d.preview._src is not None:
+            break
+    R["got"] = (d.preview._src is not None, d.btn_next_att.isEnabled(), d.lbl_count.text())
+    QTest.keyClick(d, Qt.Key_Right)
+    pump(5)
+    R["end"] = d.index
+    d.btn_prev_att.click()
+    pump(5)
+    R["back"] = (d.index, d.preview._page)
+    QTest.keyClick(d, Qt.Key_Left)
+    pump(5)
+    R["left"] = (d.index, d.windowTitle())
+    d.accept()
+
+
+_QT.singleShot(80, _drive)
+vn.open_attachment(NA)
+ok("첫 첨부 · '1 / 3' · 앞으로는 못 감", R.get("start") == (0, "1 / 3", "가.png", False), R.get("start"))
+ok("→ 를 누르면 다음 첨부(PDF) 첫 장", R.get("pdf1") == (1, 2, 0, True), R.get("pdf1"))
+ok("→ 를 또 누르면 그 PDF 의 다음 장", R.get("pdf2") == (1, 1), R.get("pdf2"))
+ok("마지막 장에서 → 는 다음 첨부 — 아직 안 받았으면 '받는 중' (앞 PDF 는 놓는다)",
+   R.get("wait", (0, ""))[0] == 2 and "받는 중" in R["wait"][1] and R["wait"][2], R.get("wait"))
+ok("다 받으면 저절로 보인다 · 마지막이라 [다음 첨부] 꺼짐", R.get("got") == (True, False, "3 / 3"), R.get("got"))
+ok("마지막에서 → 는 그대로", R.get("end") == 2)
+ok("[◀ 이전 첨부] 단추", R.get("back") == (1, 0), R.get("back"))
+ok("첫 장에서 ← 는 앞 첨부", R.get("left") == (0, "가.png"), R.get("left"))
+ok("창을 닫으면 놓는다", vn._viewer is None)
+kb_files.fetch = _real_fetch
+av1 = AttachViewer(NA, png_bytes("#AA0000", 30, 20), parent=vn)
+ok("첨부가 하나면 넘기기 단추를 숨긴다", not av1.btn_next_att.isVisibleTo(av1) and not av1.lbl_count.isVisibleTo(av1))
+av1.done(0)
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

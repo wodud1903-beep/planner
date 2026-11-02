@@ -19,7 +19,7 @@ from PySide6.QtGui import (
     QColor, QDrag, QFont, QIcon, QImageReader, QKeySequence, QPainter, QPixmap,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QHBoxLayout, QListView, QListWidget,
+    QAbstractItemView, QDialog, QHBoxLayout, QLabel, QListView, QListWidget,
     QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
 )
 
@@ -388,43 +388,132 @@ class AttachList(QListWidget):
 # 크게 보기
 # ---------------------------------------------------------------------------
 class AttachViewer(QDialog):
-    """첨부 하나를 크게 — 돌리기·확대·PDF 장 넘기기 + [카톡으로 보내기].
+    """첨부를 크게 — 돌리기·확대·PDF 장 넘기기 + [카톡으로 보내기].
 
     창 위 막대에 **최대화** 단추가 있고, [전체 화면](F11)으로 화면 가득 볼 수 있다.
     전체 화면에서는 Esc 나 F11 로 돌아온다(Esc 를 한 번 더 누르면 닫힌다).
     ⚠️ QDialog 는 윈도에서 기본으로 최대화 단추가 없다 — 창 모양을 직접 정해 준다.
+
+    **같은 자료의 다른 첨부로 바로 넘어간다**(업무자료검색 — 예전엔 닫았다가 다시 열어야 했다):
+      [◀ 이전 첨부] [다음 첨부 ▶] 단추, 키보드 ← → .
+      ← → 는 여러 장짜리(PDF·TIFF)면 먼저 그 안의 장을 넘기고, 끝에 닿으면 옆 첨부로 간다.
+      atts  : 그 자료의 첨부 전부(att 가 그 안에 있다)
+      load  : 첨부 → 내용(bytes). 아직 안 받았으면 None — 받기를 시작하고 on_fetched 를 기다린다
+      send_for : 첨부 → [카톡으로 보내기] 때 할 일
     """
 
-    def __init__(self, att: dict, data: bytes, on_send=None, parent=None):
+    def __init__(self, att: dict, data: bytes, on_send=None, parent=None,
+                 atts: list | None = None, load=None, send_for=None):
         super().__init__(parent)
+        from PySide6.QtGui import QShortcut
         from .file_preview import FilePreview
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
                             | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         # ⚠️ 닫으면 **없앤다.** 예전엔 닫아도 창이 원본 그림·PDF 를 든 채 남아,
         #    열 때마다 메모리가 쌓여 끝내 프로그램이 꺼졌다.
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setWindowTitle(att.get("name", "첨부"))
         self.resize(920, 760)
+        self.atts = [dict(a) for a in (atts or [att])]
+        self._i = next((k for k, a in enumerate(self.atts)
+                        if (a.get("id") or a.get("name")) == (att.get("id") or att.get("name"))), 0)
+        self._load = load
+        self._send_for = send_for
+        self._waiting = ""              # 받기를 기다리는 첨부 id
         v = QVBoxLayout(self)
         self.preview = FilePreview(self, on_send=on_send)
         v.addWidget(self.preview, 1)
-        key = att.get("id") or att.get("name", "")
-        if kb_files.is_pdf(att):
-            shown = self.preview.show_pdf(data, key, att.get("name", ""))
-        else:
-            shown = self.preview.show_image(data, key, att.get("name", ""))
-        if not shown:
-            self.preview.show_message("이 파일을 보여 줄 수 없습니다.", att.get("name", ""))
         row = QHBoxLayout()
         self.btn_full = QPushButton("전체 화면 (F11)")
         self.btn_full.setToolTip("화면 가득 보기 — Esc 나 F11 로 돌아옵니다")
         self.btn_full.clicked.connect(self.toggle_full)
         row.addWidget(self.btn_full)
         row.addStretch()
+        self.btn_prev_att = QPushButton("◀ 이전 첨부")
+        self.btn_prev_att.setToolTip("같은 자료의 앞 첨부 (키보드 ←)")
+        self.btn_prev_att.clicked.connect(lambda: self.go(self._i - 1))
+        row.addWidget(self.btn_prev_att)
+        self.lbl_count = QLabel("")
+        self.lbl_count.setAlignment(Qt.AlignCenter)
+        self.lbl_count.setMinimumWidth(56)
+        row.addWidget(self.lbl_count)
+        self.btn_next_att = QPushButton("다음 첨부 ▶")
+        self.btn_next_att.setToolTip("같은 자료의 다음 첨부 (키보드 →)")
+        self.btn_next_att.clicked.connect(lambda: self.go(self._i + 1))
+        row.addWidget(self.btn_next_att)
+        row.addStretch()
         b = QPushButton("닫기")
         b.clicked.connect(self.accept)
         row.addWidget(b)
         v.addLayout(row)
+        # ← → — 확대한 그림을 움직이는 데 먼저 쓰이지 않게 창 전체의 단축키로 둔다
+        for key, d in ((Qt.Key_Left, -1), (Qt.Key_Right, 1)):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.WindowShortcut)
+            sc.activated.connect(lambda d=d: self.step(d))
+        self._show(data)
+
+    # ---- 첨부 넘기기 ----
+    def _show(self, data) -> None:
+        att = self.atts[self._i]
+        name = att.get("name", "")
+        self.setWindowTitle(name or "첨부")
+        if self._send_for is not None:
+            self.preview.set_send_action(self._send_for(att))
+        self.preview._drop_doc()         # 앞 첨부를 먼저 놓는다(메모리)
+        self.preview._drop_img()
+        if data is None:
+            fid = att.get("id", "")
+            self._waiting = fid
+            self.preview.show_message("첨부를 받는 중입니다…", name)
+        else:
+            self._waiting = ""
+            key = att.get("id") or name
+            if kb_files.is_pdf(att):
+                shown = self.preview.show_pdf(data, key, name)
+            else:
+                shown = self.preview.show_image(data, key, name)
+            if not shown:
+                self.preview.show_message("이 파일을 보여 줄 수 없습니다.", name)
+        n = len(self.atts)
+        for w in (self.btn_prev_att, self.lbl_count, self.btn_next_att):
+            w.setVisible(n > 1)
+        self.btn_prev_att.setEnabled(self._i > 0)
+        self.btn_next_att.setEnabled(self._i < n - 1)
+        self.lbl_count.setText(f"{self._i + 1} / {n}")
+
+    def go(self, i: int) -> None:
+        """i 번째 첨부로(끝을 넘으면 그대로)."""
+        if not (0 <= i < len(self.atts)) or i == self._i:
+            return
+        self._i = i
+        data = self._load(self.atts[i]) if self._load is not None else None
+        self._show(data)
+
+    def step(self, d: int) -> None:
+        """← → — 여러 장이면 그 안에서 먼저 넘기고, 끝에 닿으면 옆 첨부로."""
+        p = self.preview
+        n = p.page_count
+        if n > 1 and 0 <= p._page + d < n:
+            p.go_page(p._page + d)
+            return
+        self.go(self._i + d)
+
+    @property
+    def index(self) -> int:
+        return self._i
+
+    def on_fetched(self, fid: str, err: str = "") -> None:
+        """기다리던 첨부를 다 받았거나(err 없음) 못 받았다 — 화면을 고친다."""
+        if not fid or fid != self._waiting:
+            return
+        att = self.atts[self._i]
+        if err:
+            self._waiting = ""
+            self.preview.show_message(f"첨부를 받지 못했습니다: {err}", att.get("name", ""))
+            return
+        data = self._load(att) if self._load is not None else None
+        if data is not None:
+            self._show(data)
 
     def done(self, r):              # 닫기·Esc·[닫기] 모두 여기를 지난다
         try:

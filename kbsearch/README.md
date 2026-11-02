@@ -147,6 +147,8 @@ kbsearch/
     settings.py · settings_dialog.py · startup.py   설정 세 가지
     icon.py
     — 일정관리기에서 그대로 복사: theme · hangul · livesearch · searchcombo · net · clipfiles ·
-      file_preview · kb_attach · kb_seed · hotkey
+      file_preview · kb_seed · hotkey
+    — 일정관리기 것에 더함: kb_attach (크게 보기 창의 [◀ 이전 첨부] [다음 첨부 ▶] · ← →,
+      v1.3.0) — 일정관리기의 kb_attach 가 고쳐지면 이 부분을 지키며 옮긴다
   verify/             검사
 ```

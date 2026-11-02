@@ -141,7 +141,8 @@ function paintList() {
 }
 
 // ------------------------------------------------------------------ 내용
-const thumb = (id) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w800`;
+const thumb = (id, w = 800) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${w}`;
+const pdfView = (id) => `https://drive.google.com/file/d/${encodeURIComponent(id)}/preview`;
 const view = (id) => `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`;
 const down = (id) => `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
 const isPdf = (f) => /\.pdf$/i.test(f.name || "") || /pdf/.test(f.mime || "");
@@ -174,13 +175,13 @@ function show(i, push) {
     <div class="actions">
       <button type="button" class="btn primary" id="copy" ${(it.body || "").trim() ? "" : "disabled"}>${COPY_ICON}<span>본문 복사</span></button>
     </div>
-    ${files.length ? `<p class="sec">첨부 <span class="n">${files.length}</span></p><div class="atts">${files.map((f) => `
+    ${files.length ? `<p class="sec">첨부 <span class="n">${files.length}</span></p><div class="atts">${files.map((f, k) => `
       <div class="att">
-        <a class="thumb" href="${view(f.id)}" target="_blank" rel="noopener" aria-label="${esc(f.name)} 크게 보기">
+        <a class="thumb" href="${view(f.id)}" data-k="${k}" target="_blank" rel="noopener" aria-label="${esc(f.name)} 크게 보기">
           ${isPdf(f) ? '<span class="pdf"><span>PDF</span></span>' : `<img src="${thumb(f.id)}" alt="${esc(f.name)}" loading="lazy" decoding="async">`}
         </a>
         <span class="name">${esc(f.name)}</span>
-        <span class="links"><a href="${view(f.id)}" target="_blank" rel="noopener">크게 보기</a>
+        <span class="links"><a href="${view(f.id)}" data-k="${k}" target="_blank" rel="noopener">크게 보기</a>
           <a href="${down(f.id)}" target="_blank" rel="noopener">내려받기</a></span>
       </div>`).join("")}</div>` : ""}`;
   $("#split").classList.add("detail");
@@ -194,8 +195,67 @@ function show(i, push) {
     setTimeout(() => { copy.classList.remove("done"); copy.innerHTML = `${COPY_ICON}<span>본문 복사</span>`; }, 1400);
   };
   $("#back").onclick = () => history.back();
+  // 크게 보기는 이 화면 안에서 — 드라이브 새 탭으로 가면 다음 첨부를 보려고 닫았다 열어야 했다
+  for (const a of $("#detail").querySelectorAll("a[data-k]")) {
+    a.onclick = (e) => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return;       // 새 탭으로 열려는 뜻이면 그대로
+      e.preventDefault();
+      openViewer(files, +a.dataset.k);
+    };
+  }
   if (push) history.pushState({ i }, "", "#" + encodeURIComponent(it.title));
 }
+
+// ------------------------------------------------------------------ 첨부 크게 보기
+// ◀ ▶ 단추 · 키보드 ← → · 폰은 옆으로 밀어서 같은 자료의 다른 첨부로 넘긴다. Esc 로 닫는다.
+const vdlg = $("#viewer");
+let vfiles = [], vk = 0;
+
+function openViewer(files, k) {
+  vfiles = files;
+  if (!vdlg.open) vdlg.showModal();
+  viewAt(k);
+}
+
+function viewAt(k) {
+  if (k < 0 || k >= vfiles.length) return;
+  vk = k;
+  const f = vfiles[k];
+  $("#v-name").textContent = f.name;
+  $("#v-count").textContent = vfiles.length > 1 ? `${k + 1} / ${vfiles.length}` : "";
+  $("#v-open").href = view(f.id);
+  $("#v-down").href = down(f.id);
+  $("#v-prev").hidden = $("#v-next").hidden = vfiles.length < 2;
+  $("#v-prev").disabled = k === 0;
+  $("#v-next").disabled = k === vfiles.length - 1;
+  const stage = $("#v-stage");
+  stage.innerHTML = isPdf(f)
+    ? `<iframe src="${pdfView(f.id)}" title="${esc(f.name)}" allow="autoplay"></iframe>`
+    : `<img src="${thumb(f.id, 2000)}" alt="${esc(f.name)}">`;
+  // 옆 그림을 미리 받아 둔다 — 넘길 때 기다리지 않게
+  for (const n of [vfiles[k + 1], vfiles[k - 1]]) {
+    if (n && !isPdf(n)) new Image().src = thumb(n.id, 2000);
+  }
+  stage.focus({ preventScroll: true });   // PDF 칸이 ← → 를 먹지 않게 창에 둔다
+}
+
+$("#v-prev").onclick = () => viewAt(vk - 1);
+$("#v-next").onclick = () => viewAt(vk + 1);
+$("#v-close").onclick = () => vdlg.close();
+vdlg.addEventListener("click", (e) => { if (e.target === vdlg) vdlg.close(); });   // 바깥을 누르면 닫기
+vdlg.addEventListener("close", () => { $("#v-stage").innerHTML = ""; });
+vdlg.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") { e.preventDefault(); viewAt(vk - 1); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); viewAt(vk + 1); }
+});
+let touchX = null;
+vdlg.addEventListener("touchstart", (e) => { touchX = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+vdlg.addEventListener("touchend", (e) => {
+  if (touchX == null) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  touchX = null;
+  if (Math.abs(dx) > 50) viewAt(vk + (dx < 0 ? 1 : -1));
+});
 
 window.addEventListener("popstate", () => {
   const want = decodeURIComponent(location.hash.slice(1));
@@ -220,7 +280,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-  if ($("#admin").open) return;
+  if ($("#admin").open || vdlg.open) return;
   e.preventDefault();
   $("#q").focus();
   $("#q").select();

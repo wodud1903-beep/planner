@@ -114,6 +114,27 @@
   </form>
 </dialog>
 
+<!-- 첨부 크게 보기 — 같은 자료의 다른 첨부로 바로 넘긴다(◀ ▶ · 키보드 ← → · 폰은 옆으로 밀기) -->
+<dialog id="viewer" class="viewer" aria-label="첨부 크게 보기">
+  <div class="vbar">
+    <span class="vname" id="v-name"></span>
+    <span class="vcount" id="v-count"></span>
+    <span class="grow"></span>
+    <a class="btn ghost small" id="v-open" target="_blank" rel="noopener">원본 열기</a>
+    <a class="btn ghost small" id="v-down" target="_blank" rel="noopener">내려받기</a>
+    <button type="button" class="vclose" id="v-close" aria-label="닫기">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div class="vstage" id="v-stage" tabindex="-1"></div>
+  <button type="button" class="vnav prev" id="v-prev" aria-label="이전 첨부 (←)">
+    <svg viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></svg>
+  </button>
+  <button type="button" class="vnav next" id="v-next" aria-label="다음 첨부 (→)">
+    <svg viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg>
+  </button>
+</dialog>
+
 <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -178,6 +178,36 @@ for (const [label, vp] of [["넓은 화면", { width: 1280, height: 800 }], ["�
     await page.locator("#list button.row").first().click();
     ok("첨부가 보인다(드라이브 공개 주소)", await page.locator(".att").count() === withFile.files.length);
   }
+  const multi = live.find((it) => (it.files || []).filter((f) => !/\.pdf$/i.test(f.name)).length >= 2);
+  if (multi) {
+    await page.fill("#q", multi.title);
+    await page.waitForTimeout(400);
+    await page.locator("#list button.row").first().click();
+    if (label === "폰") await page.waitForSelector("#detail .att");
+    const n = multi.files.length;
+    await page.locator(".att a.thumb").first().click();
+    await page.waitForSelector("#viewer[open]");
+    ok(`${label} — 첨부를 누르면 이 화면 안에서 크게(새 탭 아님)`, page.context().pages().length === 1
+       && (await page.locator("#v-count").innerText()) === `1 / ${n}`);
+    const src = await page.locator("#v-stage img, #v-stage iframe").first().getAttribute("src");
+    ok(`${label} — 큰 그림(그림은 큰 크기 · PDF 는 미리보기)`,
+       /\.pdf$/i.test(multi.files[0].name) ? /\/preview$/.test(src) : /sz=w2000/.test(src), src);
+    ok(`${label} — 처음엔 [이전] 꺼짐`, await page.locator("#v-prev").isDisabled());
+    await page.keyboard.press("ArrowRight");
+    ok(`${label} — → 로 다음 첨부`, (await page.locator("#v-count").innerText()) === `2 / ${n}`
+       && (await page.locator("#v-name").innerText()) === multi.files[1].name);
+    await page.click("#v-prev");
+    ok(`${label} — [◀] 단추로 앞 첨부`, (await page.locator("#v-count").innerText()) === `1 / ${n}`);
+    for (let k = 0; k < n + 2; k++) await page.keyboard.press("ArrowRight");
+    ok(`${label} — 끝에서 멈춘다 · [다음] 꺼짐`, (await page.locator("#v-count").innerText()) === `${n} / ${n}`
+       && await page.locator("#v-next").isDisabled());
+    await page.screenshot({ path: path.join(process.env.SHOT_DIR || "/tmp", `kbweb-viewer-${vp.width}.png`) });
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    ok(`${label} — Esc 로 닫는다`, !(await page.locator("#viewer").evaluate((d) => d.open)));
+  } else {
+    ok("첨부가 여럿인 자료가 시트에 있다", false);
+  }
   await page.screenshot({ path: path.join(process.env.SHOT_DIR || "/tmp", `kbweb-${vp.width}.png`) });
   ok(`${label} — 스크립트 오류 없음`, errs.length === 0, errs.join(" | "));
   await page.close();

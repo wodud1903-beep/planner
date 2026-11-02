@@ -8,6 +8,7 @@
 
 일정관리기와 다른 점: [자료 편집] 이 로그인 없이 된다. 새 첨부는 이 PC 에 두었다가
 [동기화] 때 드라이브로 올라간다(kb_files.store_local / sync.py).
+크게 보기 창에서 같은 자료의 다른 첨부로 바로 넘긴다(open_attachment → AttachViewer atts/load).
 관리자가 아니면 회사 공통 자료를 **이 PC 에서만** 고친다(kb.set_local) — 검색 화면에는
 '공통 · 이 PC 에서 고침' 으로 보이고, 회사가 원본을 또 고쳤으면 그 아래에 알린다.
 """
@@ -148,6 +149,7 @@ class KbView(QWidget):
         self._errs: dict = {}          # id → 받기 실패 이유
         self._want_copy: list = []     # 받기가 끝나면 복사할 첨부(Ctrl+C 를 먼저 누른 경우)
         self._want_open = None         # 받기가 끝나면 크게 볼 첨부
+        self._viewer = None            # 떠 있는 크게 보기 창(다음 첨부를 받으면 알린다)
         self._sig_fetched.connect(self._on_fetched)
 
         v = QVBoxLayout(self)
@@ -368,6 +370,8 @@ class KbView(QWidget):
         if err:
             self._errs[fid] = err
         self.lst_att.refresh(fid, err)
+        if self._viewer is not None:
+            self._viewer.on_fetched(fid, err)
         if self._want_copy and not any(a.get("id") in self._inflight for a in self._want_copy):
             want, self._want_copy = self._want_copy, []
             # ⚠️ 하나라도 못 받았으면 여기서 멈춘다. 다시 copy_attachments 를 부르면
@@ -439,9 +443,13 @@ class KbView(QWidget):
             self.lbl_status.setText("첨부를 열지 못했습니다: " + str(e))
             return
         crashlog.note(f"크게 보기 {att.get('name', '')} ({kb_files.size_text(len(data))})")
+        # 같은 자료의 첨부 전부 — 창 안에서 [다음 첨부] · ← → 로 넘긴다(닫았다 열지 않게)
+        atts = self.lst_att.atts() or [att]
         dlg = AttachViewer(att, data, on_send=lambda a=att: self.copy_attachments([a]),
-                           parent=self)
+                           parent=self, atts=atts, load=self._viewer_load,
+                           send_for=lambda a: (lambda a=a: self.copy_attachments([a])))
         del data
+        self._viewer = dlg
         # ⚠️ exec() 로 띄운 창에 WA_DeleteOnClose 를 두면 Qt 가 exec() **안에서** 창을 바로
         #    지운다(파이썬이 아직 그 창을 쥐고 있는 채로). 대신 닫은 뒤 deleteLater —
         #    이벤트가 다 끝난 다음에 없앤다. 닫을 때 그림·PDF 는 done() 이 먼저 놓는다.
@@ -449,7 +457,22 @@ class KbView(QWidget):
         try:
             dlg.exec()
         finally:
+            self._viewer = None
             dlg.deleteLater()
+
+    def _viewer_load(self, att: dict):
+        """크게 보기 창이 옆 첨부로 넘길 때 — 받아 둔 내용, 아직이면 받기를 시작하고 None."""
+        p = kb_files.cached(att)
+        if p:
+            try:
+                data = p.read_bytes()
+                crashlog.note(f"크게 보기 {att.get('name', '')} ({kb_files.size_text(len(data))})")
+                return data
+            except OSError:
+                return None
+        self._errs.pop(att.get("id"), None)
+        self._fetch_async(att)
+        return None
 
     def save_attachment_as(self, att: dict) -> None:
         """오른쪽 단추 [다른 이름으로 저장] — 바탕화면 등에 파일로 꺼내 둔다."""
