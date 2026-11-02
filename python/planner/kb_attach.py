@@ -14,12 +14,12 @@ from __future__ import annotations
 import os
 from collections import OrderedDict
 
-from PySide6.QtCore import QBuffer, QByteArray, QItemSelectionModel, QRect, QSize, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QEvent, QItemSelectionModel, QRect, QSize, Qt
 from PySide6.QtGui import (
-    QColor, QDrag, QFont, QIcon, QImageReader, QKeySequence, QPainter, QPixmap,
+    QColor, QDrag, QFont, QIcon, QImageReader, QKeySequence, QPainter, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QHBoxLayout, QListView, QListWidget,
+    QAbstractItemView, QDialog, QHBoxLayout, QLabel, QListView, QListWidget,
     QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
 )
 
@@ -388,14 +388,22 @@ class AttachList(QListWidget):
 # 크게 보기
 # ---------------------------------------------------------------------------
 class AttachViewer(QDialog):
-    """첨부 하나를 크게 — 돌리기·확대·PDF 장 넘기기 + [카톡으로 보내기].
+    """첨부를 크게 — 돌리기·확대·PDF 장 넘기기 + [카톡으로 보내기].
+
+    한 자료에 첨부가 여럿이면 **창을 닫지 않고** 옆 첨부로 넘어간다(v1.25.1 요청):
+      · 아래 [◀ 이전 첨부] / [다음 첨부 ▶]
+      · 키보드 ← / → (PageUp / PageDown 도) — 여러 장(PDF·TIFF)이면 장부터 넘기고,
+        마지막 장에서 한 번 더 누르면 다음 첨부로 간다.
+    아직 안 받은 첨부는 '받는 중' 을 띄우고 받기를 시작한다 — 다 받으면 그 자리에 뜬다
+    (loaded). 옆 첨부는 미리 받아 둔다.
 
     창 위 막대에 **최대화** 단추가 있고, [전체 화면](F11)으로 화면 가득 볼 수 있다.
     전체 화면에서는 Esc 나 F11 로 돌아온다(Esc 를 한 번 더 누르면 닫힌다).
     ⚠️ QDialog 는 윈도에서 기본으로 최대화 단추가 없다 — 창 모양을 직접 정해 준다.
     """
 
-    def __init__(self, att: dict, data: bytes, on_send=None, parent=None):
+    def __init__(self, att: dict, data: bytes, on_send=None, parent=None,
+                 atts: list | None = None, fetch=None, on_send_att=None):
         super().__init__(parent)
         from .file_preview import FilePreview
         self.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
@@ -403,28 +411,142 @@ class AttachViewer(QDialog):
         # ⚠️ 닫으면 **없앤다.** 예전엔 닫아도 창이 원본 그림·PDF 를 든 채 남아,
         #    열 때마다 메모리가 쌓여 끝내 프로그램이 꺼졌다.
         self.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.setWindowTitle(att.get("name", "첨부"))
         self.resize(920, 760)
+        # 넘겨 볼 첨부들 — 없으면 이 하나만
+        self._atts = [a for a in (atts or []) if isinstance(a, dict)] or [att]
+        ids = [a.get("id") for a in self._atts]
+        self._i = ids.index(att.get("id")) if att.get("id") in ids else 0
+        self._fetch = fetch
+        self._waiting = ""             # 받기를 기다리는 첨부 id
+        send = None
+        if on_send_att is not None:
+            send = lambda: on_send_att(self.current())       # noqa: E731 — 보고 있는 것을 보낸다
+        elif on_send is not None:
+            send = on_send
         v = QVBoxLayout(self)
-        self.preview = FilePreview(self, on_send=on_send)
+        self.preview = FilePreview(self, on_send=send)
         v.addWidget(self.preview, 1)
-        key = att.get("id") or att.get("name", "")
-        if kb_files.is_pdf(att):
-            shown = self.preview.show_pdf(data, key, att.get("name", ""))
-        else:
-            shown = self.preview.show_image(data, key, att.get("name", ""))
-        if not shown:
-            self.preview.show_message("이 파일을 보여 줄 수 없습니다.", att.get("name", ""))
         row = QHBoxLayout()
+        self.btn_prev_att = QPushButton("◀ 이전 첨부")
+        self.btn_prev_att.setToolTip("앞 첨부 보기 (키보드 ←)")
+        self.btn_prev_att.clicked.connect(lambda: self.go(self._i - 1))
+        row.addWidget(self.btn_prev_att)
+        self.lbl_pos = QLabel("")
+        self.lbl_pos.setAlignment(Qt.AlignCenter)
+        self.lbl_pos.setMinimumWidth(70)
+        row.addWidget(self.lbl_pos)
+        self.btn_next_att = QPushButton("다음 첨부 ▶")
+        self.btn_next_att.setToolTip("다음 첨부 보기 (키보드 →)")
+        self.btn_next_att.clicked.connect(lambda: self.go(self._i + 1))
+        row.addWidget(self.btn_next_att)
+        multi = len(self._atts) > 1
+        for w in (self.btn_prev_att, self.lbl_pos, self.btn_next_att):
+            w.setVisible(multi)
+        row.addStretch()
         self.btn_full = QPushButton("전체 화면 (F11)")
         self.btn_full.setToolTip("화면 가득 보기 — Esc 나 F11 로 돌아옵니다")
         self.btn_full.clicked.connect(self.toggle_full)
         row.addWidget(self.btn_full)
-        row.addStretch()
         b = QPushButton("닫기")
         b.clicked.connect(self.accept)
         row.addWidget(b)
         v.addLayout(row)
+        # ← → 는 그림 칸(스크롤)이 먼저 먹어 버린다 — 창 단위 단축키로 받고,
+        # 창이 앞에 없을 때(단축키가 안 걸릴 때)를 위해 그림 칸에서도 직접 받는다
+        for key, d in self._NAV_KEYS.items():
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.WindowShortcut)
+            sc.activated.connect(lambda d=d: self.step(d))
+        for w in (self.preview.scroll, self.preview.scroll.viewport(), self.preview.view):
+            w.installEventFilter(self)
+        # 넘기기 단추는 누른 뒤에도 화살표가 그림을 넘기게 초점을 가져가지 않는다
+        for b in (self.btn_prev_att, self.btn_next_att):
+            b.setFocusPolicy(Qt.NoFocus)
+        self._show(data)
+
+    _NAV_KEYS = {Qt.Key_Left: -1, Qt.Key_Right: 1, Qt.Key_PageUp: -1, Qt.Key_PageDown: 1}
+
+    def eventFilter(self, obj, ev):     # noqa: N802 — Qt 이름
+        if ev.type() == QEvent.KeyPress and ev.key() in self._NAV_KEYS \
+                and not ev.modifiers() & (Qt.ControlModifier | Qt.AltModifier):
+            self.step(self._NAV_KEYS[ev.key()])
+            return True
+        return super().eventFilter(obj, ev)
+
+    # ---- 넘기기 ----
+    def current(self) -> dict:
+        return self._atts[self._i]
+
+    def _show(self, data: bytes | None) -> None:
+        att = self.current()
+        name = att.get("name", "첨부")
+        n = len(self._atts)
+        self.setWindowTitle(name + (f"  ({self._i + 1}/{n})" if n > 1 else ""))
+        self.lbl_pos.setText(f"{self._i + 1} / {n}")
+        self.btn_prev_att.setEnabled(self._i > 0)
+        self.btn_next_att.setEnabled(self._i < n - 1)
+        if data is None:
+            # 아직 안 받았다 — 앞 것을 놓고(메모리) '받는 중' 을 띄운 뒤 받기를 시작한다
+            self.preview._drop_doc()
+            self.preview._drop_img()
+            self._waiting = att.get("id", "")
+            self.preview.show_message("첨부를 받는 중입니다…", name)
+            if callable(self._fetch):
+                self._fetch(att)
+            return
+        self._waiting = ""
+        key = att.get("id") or name
+        if kb_files.is_pdf(att):
+            shown = self.preview.show_pdf(data, key, name)
+        else:
+            shown = self.preview.show_image(data, key, name)
+        if not shown:
+            self.preview.show_message("이 파일을 보여 줄 수 없습니다.", name)
+        self._prefetch()
+
+    def _read(self, att: dict) -> bytes | None:
+        p = kb_files.cached(att)
+        if not p:
+            return None
+        try:
+            return p.read_bytes()
+        except OSError:
+            return None
+
+    def _prefetch(self) -> None:
+        """옆 첨부를 미리 받아 둔다 — 넘길 때 기다리지 않게."""
+        if not callable(self._fetch):
+            return
+        for j in (self._i + 1, self._i - 1):
+            if 0 <= j < len(self._atts) and not kb_files.cached(self._atts[j]):
+                self._fetch(self._atts[j])
+
+    def go(self, i: int) -> None:
+        if not (0 <= i < len(self._atts)) or i == self._i:
+            return
+        self._i = i
+        data = self._read(self.current())
+        self._show(data)
+        del data
+
+    def step(self, d: int) -> None:
+        """← → — 여러 장이면 장부터, 끝 장에서 한 번 더 누르면 옆 첨부로."""
+        n, p = self.preview.page_count, self.preview._page
+        if n > 1 and 0 <= p + d < n:
+            self.preview.go_page(p + d)
+            return
+        self.go(self._i + d)
+
+    def loaded(self, att_id: str, err: str = "") -> None:
+        """받기가 끝났다(kb_tab 이 알린다) — 지금 기다리던 그 첨부면 바로 보여 준다."""
+        if not att_id or att_id != self._waiting or self.current().get("id") != att_id:
+            return
+        if err:
+            self.preview.show_message("첨부를 받지 못했습니다: " + err, self.current().get("name", ""))
+            return
+        data = self._read(self.current())
+        self._show(data)
+        del data
 
     def done(self, r):              # 닫기·Esc·[닫기] 모두 여기를 지난다
         try:

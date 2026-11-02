@@ -473,6 +473,96 @@ pump()
 ok("Esc 로 돌아오고 창은 그대로", not (av.windowState() & Qt.WindowFullScreen) and av.isVisible())
 av.close()
 
+print("\n[12-2] 크게 보기에서 옆 첨부로 — 닫았다 열지 않고(← → · 이전/다음 단추)")
+from PySide6.QtGui import QPainter, QPdfWriter, QPageSize  # noqa: E402
+_pdf_path = os.path.join(tmp, "세장.pdf")
+_w = QPdfWriter(_pdf_path)
+_w.setPageSize(QPageSize(QPageSize.A4))
+_pp = QPainter(_w)
+for _k in range(3):
+    if _k:
+        _w.newPage()
+    _pp.drawText(600, 1200, f"{_k + 1} 장")
+_pp.end()
+N1 = {"id": "NAV1", "name": "신분증 앞.png", "mime": "image/png"}
+N2 = {"id": "NAV2", "name": "약정서.pdf", "mime": "application/pdf"}
+N3 = {"id": "NAV3", "name": "등본.png", "mime": "image/png"}     # 아직 안 받은 것
+kb_files._store(N1, png_bytes("#2563EB"))
+kb_files._store(N2, open(_pdf_path, "rb").read())
+fetched = []
+sent = []
+nav = AttachViewer(N1, png_bytes("#2563EB"), atts=[N1, N2, N3], fetch=lambda a: fetched.append(a["id"]),
+                   on_send_att=lambda a: sent.append(a["id"]))
+nav.show()
+pump()
+ok("첨부가 여럿이면 [이전]·[다음] 단추와 몇 번째인지", nav.btn_next_att.isVisible()
+   and nav.lbl_pos.text() == "1 / 3" and not nav.btn_prev_att.isEnabled())
+
+
+from PySide6.QtTest import QTest  # noqa: E402
+nav.preview.scroll.setFocus()
+QTest.keyClick(nav.preview.scroll, Qt.Key_Right)
+pump()
+ok("→ 를 누르면 다음 첨부(창을 닫지 않고)", nav.current()["id"] == "NAV2" and nav.lbl_pos.text() == "2 / 3"
+   and nav.windowTitle().startswith("약정서.pdf"), nav.windowTitle())
+from planner.file_preview import HAVE_PDF  # noqa: E402
+if HAVE_PDF:
+    ok("PDF 는 여러 장", nav.preview.page_count == 3)
+    QTest.keyClick(nav.preview.scroll, Qt.Key_Right)
+    pump()
+    ok("여러 장이면 → 가 장부터 넘긴다", nav.current()["id"] == "NAV2" and nav.preview._page == 1)
+    QTest.keyClick(nav.preview.scroll, Qt.Key_Right)
+    QTest.keyClick(nav.preview.scroll, Qt.Key_Right)
+    pump()
+else:
+    QTest.keyClick(nav.preview.scroll, Qt.Key_Right)
+    pump()
+ok("마지막 장에서 → 는 다음 첨부로", nav.current()["id"] == "NAV3", nav.current())
+ok("아직 안 받은 첨부는 '받는 중' + 받기 시작", "NAV3" in fetched
+   and "받는 중" in nav.preview.view.text(), nav.preview.view.text())
+ok("마지막이면 [다음] 이 꺼진다", not nav.btn_next_att.isEnabled())
+kb_files._store(N3, png_bytes("#16A34A"))
+nav.loaded("NAV3")
+pump()
+ok("다 받으면 그 자리에 뜬다", nav.preview._src is not None)
+nav.preview._send()
+ok("[카톡으로 보내기] 는 지금 보고 있는 첨부", sent == ["NAV3"], sent)
+nav.btn_prev_att.click()
+pump()
+ok("[◀ 이전 첨부] 단추", nav.current()["id"] == "NAV2")
+QTest.keyClick(nav.preview.scroll, Qt.Key_Left)
+pump()
+ok("← 도 된다 — 첫 장에서는 앞 첨부로", nav.current()["id"] == "NAV1", nav.current())
+ok("앞 PDF 를 놓고(메모리) 그림으로", nav.preview._doc is None and nav.preview._src is not None)
+ok("첫 첨부면 [이전] 이 꺼진다", not nav.btn_prev_att.isEnabled())
+one = AttachViewer({"id": "x", "name": "그림.png"}, png_bytes(), on_send=lambda: None)
+ok("첨부가 하나면 단추를 안 보인다", not one.btn_next_att.isVisible() and not one.lbl_pos.isVisible())
+one.close()
+nav.close()
+# 자료검색 탭 — 크게 보기 창에 이 자료의 첨부를 다 넘기고, 다 받으면 알린다
+_seen = {}
+_orig_exec = AttachViewer.exec
+
+
+def _fake_exec(self):
+    _seen["atts"] = [a["id"] for a in self._atts]
+    _seen["i"] = self._i
+    got = []
+    self.loaded = lambda fid, err="": got.append(fid)
+    tab.view._on_fetched("NAV3", "", "")     # 창이 떠 있는 동안 받기가 끝났다
+    _seen["told"] = got
+    return 0
+
+
+AttachViewer.exec = _fake_exec
+tab.view.lst_att.fill([N1, N2, N3])
+tab.view.open_attachment(N2)
+AttachViewer.exec = _orig_exec
+ok("자료검색 탭은 그 자료의 첨부를 다 넘긴다(고른 것부터)", _seen.get("atts") == ["NAV1", "NAV2", "NAV3"]
+   and _seen.get("i") == 1, _seen)
+ok("창이 떠 있는 동안 받기가 끝나면 창에 알린다", _seen.get("told") == ["NAV3"], _seen)
+ok("창을 닫으면 붙잡고 있던 창을 놓는다", tab.view._viewer is None)
+
 print("\n[13] 자료검색 — 첨부 위에서 오른쪽 단추 → [복사하기] → 카톡에 붙여넣기")
 kb.save_shared(shared)
 v3 = KbView()
