@@ -37,6 +37,10 @@ class NewsError(Exception):
     pass
 
 
+class NoAccess(NewsError):
+    """그 계정으로는 문서를 열 수 없다(없음·공유 안 됨) — 기본 문서를 쓰는 직원 PC 등."""
+
+
 def doc_id_from(s: str) -> str:
     """문서 주소(…/document/d/<id>/edit…) 또는 id 그대로 → id."""
     s = (s or "").strip()
@@ -68,8 +72,8 @@ def _google_error(r, what: str) -> Exception:
         return NewsError("구글 클라우드 프로젝트에서 'Google Docs API' 가 꺼져 있습니다.\n"
                          "콘솔 → API 및 서비스 → 라이브러리에서 Google Docs API 를 사용 설정하세요.")
     if r.status_code in (403, 404):
-        return NewsError("뉴스 문서를 열 수 없습니다. 지금 로그인한 구글 계정에\n"
-                         "그 문서가 있는지(또는 공유됐는지) 확인해 주세요.")
+        return NoAccess("뉴스 문서를 열 수 없습니다. 지금 로그인한 구글 계정에\n"
+                        "그 문서가 있는지(또는 공유됐는지) 확인해 주세요.")
     return NewsError(f"{what} 실패 (HTTP {r.status_code}) {msg}".strip())
 
 

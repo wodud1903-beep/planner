@@ -264,6 +264,20 @@ if os.environ.get("SHOT_DIR"):
     dlg.show_news({"blocks": B, "at": "2026-10-28T08:52:00"})
     dlg.grab().save(os.path.join(os.environ["SHOT_DIR"], "news.png"))
 dlg.close()
+
+print("[9] 기본 문서를 이 계정이 못 열면(직원 PC) [오늘의 뉴스] 를 숨긴다 — v1.26")
+w.settings.news_doc = config.DEF_NEWS_DOC
+ok("기본 문서를 쓰는 중", w._news_default())
+w._on_news(None, w.NEWS_NOACCESS + "뉴스 문서를 열 수 없습니다.", False)
+ok("못 열면 단추를 숨긴다", not w.btn_news.isVisibleTo(w))
+ok("다음에 켤 때도 바로 숨긴다(계정 폴더에 적어 둔다)",
+   w._news_hidden_doc() == w._news_doc_id())
+w._on_news({"blocks": B, "at": "2026-10-28T08:52:00"}, "", False)
+ok("열리게 되면(공유받으면) 다시 보인다", w.btn_news.isVisibleTo(w) and not w._news_hidden_doc())
+w.settings.news_doc = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd"
+w._on_news(None, w.NEWS_NOACCESS + "x", False)
+ok("직접 정한 문서는 못 열어도 숨기지 않는다(주소를 고치라고 알린다)", w.btn_news.isVisibleTo(w))
+w.settings.news_doc = config.DEF_NEWS_DOC
 w.hide()
 
 print()

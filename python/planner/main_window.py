@@ -340,6 +340,7 @@ class MainWindow(QMainWindow):
         self._last_seen_mtime = self._data_mtime()
         # 고객 목록 저장본 — 켜자마자 지난번 목록을 그린다(새로 읽으면 바꾼다, v1.26)
         self._show_sheet_cache()
+        self._apply_news_button()        # 기본 뉴스 문서를 못 여는 계정이면 단추를 숨긴다
 
         # 시작 시 자동 백업 + 연결 시 계정확인→동기화→불러오기
         self._startup_brief_pending = True
@@ -658,6 +659,7 @@ class MainWindow(QMainWindow):
         self.chk_autofetch.blockSignals(False)
         self.apply_theme()
         self._apply_hotkeys()
+        self._apply_news_button()
         self._last_seen_mtime = self._data_mtime()
 
     def _touch_sync(self):
@@ -2772,6 +2774,7 @@ class MainWindow(QMainWindow):
         if accepted:
             self._save_settings()
             self._apply_hotkeys()
+            self._apply_news_button()              # 뉴스 문서를 바꿨을 수 있다
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
             now_theme = (getattr(self.settings, "theme", "")
                          or ("dark" if self.settings.dark_mode else "light"))
@@ -2892,15 +2895,51 @@ class MainWindow(QMainWindow):
                 self.sig_news.emit(n, "", False)
             except news.NeedScope as e:
                 self.sig_news.emit(None, str(e), True)
+            except news.NoAccess as e:
+                self.sig_news.emit(None, self.NEWS_NOACCESS + str(e), False)
             except Exception as e:
                 self.sig_news.emit(None, str(e) or "뉴스를 받지 못했습니다.", False)
 
         threading.Thread(target=worker, daemon=True).start()
 
+    NEWS_NOACCESS = "\x00noaccess\x00"   # (일꾼 → 화면) 이 계정으로는 열 수 없는 문서
+    NEWS_STATE = "news_state.json"       # 계정 폴더 — 열 수 없던 기본 문서(동기화 안 함)
+
+    def _news_default(self) -> bool:
+        """설정에서 문서를 따로 정하지 않고 기본(지점장) 문서를 쓰는가."""
+        return self._news_doc_id() == news.doc_id_from(config.DEF_NEWS_DOC)
+
+    def _news_hidden_doc(self) -> str:
+        try:
+            return str(json.loads(config.data_file(self.NEWS_STATE).read_text(encoding="utf-8"))
+                       .get("hidden") or "")
+        except Exception:
+            return ""
+
+    def _set_news_hidden(self, doc_id: str) -> None:
+        try:
+            config.atomic_write(config.data_file(self.NEWS_STATE), json.dumps({"hidden": doc_id}))
+        except OSError:
+            pass
+
+    def _apply_news_button(self) -> None:
+        """기본 문서를 이 계정이 열 수 없으면(직원 PC) [오늘의 뉴스] 를 숨긴다(v1.26).
+        예전엔 직원 PC 에서 눌러도 '문서를 열 수 없습니다' 만 떴다."""
+        if hasattr(self, "btn_news"):
+            hide = self._news_default() and self._news_hidden_doc() == self._news_doc_id()
+            self.btn_news.setVisible(not hide)
+
     def _on_news(self, n, err: str, need_scope: bool):
         self._news_busy = False
+        noaccess = err.startswith(self.NEWS_NOACCESS)
+        err = err.replace(self.NEWS_NOACCESS, "")
         if n:
             self._news = n
+            if self._news_hidden_doc():
+                self._set_news_hidden("")        # 이제 열린다 — 다시 보인다
+        elif noaccess and self._news_default():
+            self._set_news_hidden(self._news_doc_id())
+        self._apply_news_button()
         dlg = getattr(self, "_news_dlg", None)
         if dlg is None or not dlg.isVisible():
             return

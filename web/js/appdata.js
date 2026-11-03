@@ -6,7 +6,7 @@
 // PC 앱이 이미 같은 폴더에 planner_sync.json 으로 설정을 올리고 있다.
 // 그래서 **처음 폰에서 로그인하면 PC 에 넣어 둔 값을 그대로 물려받는다** —
 // 폰에서 따로 입력할 일이 없다.
-import { token, setOffline } from "./auth.js";
+import { token, setOffline, down, reached } from "./auth.js";
 import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 
 const FILES = "https://www.googleapis.com/drive/v3/files";
@@ -36,6 +36,12 @@ async function call(url, { method = "GET", body = null, raw = null, type = null 
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   if (r.status === 403) {
     let m = "";
     try { m = ((await r.clone().json()).error || {}).message || ""; } catch (x) {}

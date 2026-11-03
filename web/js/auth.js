@@ -95,13 +95,42 @@ async function fromServer(timeoutMs = 8000) {
     };
     save(t);
     setState(STATE.AUTHED);
+    reached();
     if (t.email && t.email !== had) tellEmail(t.email);
     return t;
   }
   if (r.status === 401) { _mode = "server"; return null; }
-  // 404(서버 없음 — 옛 주소) · 503(비밀 설정 전) · 403(미리보기 주소) · 405 → 예전 방식
-  if ([403, 404, 405, 503].includes(r.status)) _mode = "legacy";
+  // 503 은 둘이다 — 우리 서버가 '비밀 설정 전' 이라고 답한 것(→ 예전 방식)과, 서버·구글이
+  // 잠깐 탈난 것(→ 잠시 뒤 다시). 예전엔 둘 다 예전 방식으로 넘어가 팝업이 막히고 빈 화면이었다.
+  let why = "";
+  if (r.status === 503) { try { why = ((await r.json()) || {}).error || ""; } catch (e) { why = ""; } }
+  // 404(서버 없음 — 옛 주소) · 503 not_configured(비밀 설정 전) · 403(미리보기 주소) · 405 → 예전 방식
+  if ([403, 404, 405].includes(r.status) || (r.status === 503 && why === "not_configured")) {
+    _mode = "legacy";
+    return undefined;
+  }
+  if (r.status >= 500) down("login");     // 502(구글이 토큰을 안 줌) · 500 · 504 …
   return undefined;
+}
+
+// ---------------------------------------------------------------- 닿음 · 탈남
+// '오프라인' 은 통신이 실패할 때 켜지는데, 예전엔 끄는 곳이 토큰을 새로 받을 때뿐이라
+// 잠깐 끊겼다 붙어도 최대 1시간 '오프라인' 이 남고 그동안 설정 동기화도 건너뛰었다.
+// 이제 구글에 한 번이라도 닿으면 바로 끈다. 구글·로그인 서버가 5xx 로 답하면(잠깐 탈남)
+// 'planner:busy' 를 알려 화면이 안내하고 조금 뒤 다시 받게 한다(boot.js).
+let _down = false;
+/** 구글(또는 로그인 서버)에 닿았다. */
+export function reached() {
+  if (_state === STATE.OFFLINE) setState(STATE.AUTHED);
+  if (_down) {
+    _down = false;
+    try { dispatchEvent(new CustomEvent("planner:reachable")); } catch (e) { /* 옛 브라우저 */ }
+  }
+}
+/** 구글·로그인 서버가 잠깐 탈났다(5xx). */
+export function down(where) {
+  _down = true;
+  try { dispatchEvent(new CustomEvent("planner:busy", { detail: where || "" })); } catch (e) {}
 }
 
 // ---------------------------------------------------------------- 예전 GIS 방식

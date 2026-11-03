@@ -1,6 +1,6 @@
 // 일정(캘린더)과 할일(Tasks) — planner/google_client.py 의 조회 부분을 옮긴 것.
 import { CALENDAR_API, TASKS_API } from "./config.js";
-import { token, setOffline } from "./auth.js";
+import { token, setOffline, down, reached } from "./auth.js";
 import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 
 async function call(url, { method = "GET", body = null } = {}) {
@@ -21,6 +21,12 @@ async function call(url, { method = "GET", body = null } = {}) {
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   if (r.status === 403) {
     let m = "";
     try { m = ((await r.clone().json()).error || {}).message || ""; } catch (x) {}

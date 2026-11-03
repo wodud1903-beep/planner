@@ -1,7 +1,7 @@
 // 구글 드라이브 읽기 — planner/google_client.py 의 drive_* 함수들을 옮긴 것.
 // 고객 서류 폴더는 **내 드라이브** 에 있다(공유 드라이브가 아니라서 driveId 류
 // 매개변수가 필요 없다 — 나중에 공유 드라이브로 옮기면 여기를 고쳐야 한다).
-import { token, setOffline } from "./auth.js";
+import { token, setOffline, down, reached } from "./auth.js";
 import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 
 const FILES = "https://www.googleapis.com/drive/v3/files";
@@ -18,6 +18,12 @@ async function call(url, { raw = false } = {}) {
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   if (r.status === 403) {
     let m = "";
     try { m = ((await r.clone().json()).error || {}).message || ""; } catch (x) {}

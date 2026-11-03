@@ -59,6 +59,38 @@ addEventListener("planner:reauthed", async () => {
   }
 });
 
+// 구글·로그인 서버가 잠깐 탈났다(5xx) — 빈 화면 대신 알리고 조금 뒤 저절로 다시 받는다(v1.26).
+// 예전엔 화면이 빈 채로 아무 말이 없었다.
+const MODS = () => [kbui, cust, docs, agenda, calc];
+let _busyTimer = 0, _busyTries = 0, _busyLast = 0;
+async function retryLoads() {
+  clearTimeout(_busyTimer);
+  _busyTimer = 0;
+  await auth.token();
+  paintState();
+  for (const m of MODS()) {
+    try { m.load(); } catch (e) { /* 하나가 탈나도 나머지는 받는다 */ }
+  }
+}
+addEventListener("planner:busy", () => {
+  if (_busyTimer) return;                       // 이미 다시 받기로 했다
+  if (Date.now() - _busyLast > 30 * 60 * 1000) _busyTries = 0;   // 한참 지났으면 새로 센다
+  _busyLast = Date.now();
+  if (_busyTries >= 4) return;                  // 계속 탈나면 더 조르지 않는다(끝없이 알리지 않게)
+  _busyTries += 1;
+  const wait = 15 * _busyTries;                 // 15초 · 30초 · 45초 · 60초
+  toast(`구글 서버가 잠시 응답하지 않아요. ${wait}초 뒤 다시 불러옵니다.`,
+        { action: "지금 다시", onAction: retryLoads, tone: "bad" });
+  _busyTimer = setTimeout(retryLoads, wait * 1000);
+});
+// 통신이 다시 붙었다 — '오프라인' 표시를 걷고 보던 화면의 자료를 다시 받는다
+addEventListener("online", () => {
+  if (auth.state() !== auth.STATE.OFFLINE) return;
+  auth.reached();
+  paintState();
+  retryLoads();
+});
+
 router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
 router.on(/^\/kb$/, () => kbui.screen(null));
 router.on(/^\/about$/, () => about.screen());

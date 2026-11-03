@@ -2074,6 +2074,62 @@ console.log("\n[25] 아침 브리핑 알림 — [정보] 에서 켜기 · 받아
   await cP.close();
 }
 
+console.log("\n[26] 통신이 잠깐 끊겼다 붙으면 '오프라인' 이 걷힌다 · 구글이 잠깐 탈나면 알리고 다시 받는다");
+{
+  const cO = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await cO.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const mode = { v: "abort" };
+  let sheetCalls = 0;
+  await cO.route("**/accounts.google.com/**", (r) => r.abort());
+  await cO.route("**/sheets.googleapis.com/**", (r) => {
+    sheetCalls += 1;
+    if (mode.v === "abort") return r.abort();
+    if (mode.v === "503") return r.fulfill({ status: 503, json: { error: { message: "backend" } } });
+    return r.fulfill({ json: { values: [["카테고리", "금융사", "제목", "태그", "본문"],
+                                        ["캐피탈", "KB", "KB 연락처", "", "1588"]] } });
+  });
+  await cO.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [], items: [] } }));
+  await cO.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  const pO = await page(cO);
+  await pO.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pO.waitForTimeout(600);
+  const chip = async () => pO.evaluate(() => {
+    const e = document.querySelector("#statechip");
+    return e && !e.hidden ? e.textContent.trim() : "";
+  });
+  ok("통신이 끊기면 '오프라인'", (await chip()) === "오프라인", await chip());
+  // 다시 붙었다 — 브라우저가 online 을 알린다(예전엔 토큰이 바뀔 때까지 최대 1시간 남았다)
+  mode.v = "ok";
+  await pO.evaluate(() => dispatchEvent(new Event("online")));
+  await pO.waitForTimeout(800);
+  ok("다시 붙으면 바로 걷힌다", (await chip()) === "", await chip());
+  ok("붙자마자 보던 화면의 자료를 다시 받는다",
+     (await pO.locator("#kblist button.row").allTextContents()).some((t) => t.includes("KB 연락처")));
+  // 구글이 잠깐 탈났다(503) — 빈 화면 대신 알리고 조금 뒤 다시
+  mode.v = "503";
+  await pO.evaluate(async () => {
+    const m = await import("./js/sheets.js");
+    try { await m.values("X", "업무자료", "A1:A2"); } catch (e) { window.__err = e.message; }
+  });
+  await pO.waitForTimeout(300);
+  const tmsg = await pO.evaluate(() => {
+    const t = document.querySelector("#toast");
+    return t && !t.hidden ? t.textContent : "";
+  });
+  ok("구글이 5xx 면 알린다(잠시 뒤 다시)", tmsg.includes("구글 서버가 잠시 응답하지 않아요"), tmsg);
+  ok("'오프라인' 으로 잘못 알리지 않는다", (await chip()) === "", await chip());
+  ok("[지금 다시] 단추", tmsg.includes("지금 다시"));
+  mode.v = "ok";
+  const before = sheetCalls;
+  await pO.locator("#toast .act").click();
+  await pO.waitForTimeout(800);
+  ok("[지금 다시] 로 다시 받는다", sheetCalls > before, `${before} → ${sheetCalls}`);
+  await cO.close();
+}
+
 console.log("\n[22] 옛 주소(github.io) → 새 주소로 옮긴다 · 첫 로딩 미리 받기");
 {
   const tmp = join(WEB, "..", ".verify_build");

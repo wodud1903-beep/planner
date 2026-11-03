@@ -1,6 +1,6 @@
 // 구글 시트 읽기 — planner/sheets.py 의 읽기 부분만 옮긴 것.
 import { SHEETS_API } from "./config.js";
-import { token, setOffline, STATE } from "./auth.js";
+import { token, setOffline, down, reached, STATE } from "./auth.js";
 import { digitsOnly } from "./fmt.js";
 
 export class NeedSignIn extends Error {}
@@ -56,6 +56,12 @@ async function call(url, body = null) {
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   // 403 은 토큰 문제가 아니라 '이 계정으로는 못 연다' 는 뜻이다. 다시 로그인해도 소용없다.
   if (r.status === 403) {
     const m = await detail(r);

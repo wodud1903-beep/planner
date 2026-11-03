@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 
-from . import config, hangul
+from . import config, hangul, tombs
 from .kb_seed import DEFAULTS
 
 SHARED_FILE = "kb_shared.json"
@@ -92,6 +92,8 @@ def _clean(o) -> dict | None:
     files = clean_files(o.get("files"))
     if files:                       # 첨부가 없는 자료는 예전 모양 그대로 둔다
         out["files"] = files
+    if o.get("at"):                 # 내 메모를 고친 시각 — 지운 표식과 견준다(tombs, v1.26)
+        out["at"] = str(o["at"])
     return out
 
 
@@ -129,7 +131,11 @@ def load_mine() -> list:
 
 
 def save_mine(items: list) -> None:
-    _save_file(MINE_FILE, items)
+    """내 메모를 저장한다. 지운(제목을 바꾼) 메모는 표식을 남기고, 새로 만들거나 고친
+    메모에는 시각을 붙인다 — 다른 PC·업무자료검색에 남은 옛 메모가 동기화로 되살아나지
+    않게(v1.26, tombs)."""
+    new = [x for x in (_clean(o) for o in (items or [])) if x]
+    _save_file(MINE_FILE, tombs.stamp(MINE_FILE, load_mine(), new))
 
 
 def load_all() -> list:

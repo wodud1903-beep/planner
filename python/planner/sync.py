@@ -24,21 +24,23 @@ import datetime
 import json
 import os
 
-from . import config, google_client
+from . import config, google_client, tombs
 
 SYNC_FILE = "planner_sync.json"
 _FILES = ["todos.json", "pcalarms.json", "taskalarms.json", "plan_cfg.json",
           "followups.json", "ment_copied.json", "customer_notes.json",
           "terms_presets.json", "commission_rates.json", "greetings.json",
           "kb_shared.json", "kb_mine.json", "customer_docs.json",
-          "deliver_events.json"]
+          "deliver_events.json", tombs.FILE]
 
 # 항목 단위로 합치는 파일 → (모양, 열쇠)
 #   list    : [{...}]        열쇠 값이 같으면 한 건으로 본다
 #   dictlist: {키: [...]}    키별로 목록을 합친다
 #   set     : [문자열]       합집합 (지워지면 안 되는 기록)
+#   tomb    : 지운 표식 {파일: {열쇠: 시각}} — 합집합, 같은 열쇠면 늦은 시각(tombs.py)
 # 여기 없는 파일은 파일 단위로 최신인 쪽을 그대로 쓴다.
 # 할일·서류체크를 넣지 않은 이유: 완료·삭제가 정상 동작이라 합치면 지운 것이 되살아난다.
+# list 로 합치는 인사말·내 메모는 지운 표식(deleted.json)으로 지운 것을 빼고 남긴다(v1.26).
 _MERGE = {
     "greetings.json": ("list", "name"),
     "kb_mine.json": ("list", "title"),
@@ -46,6 +48,7 @@ _MERGE = {
     "customer_notes.json": ("dictlist", None),
     "ment_copied.json": ("set", None),
     "followups.json": ("set", None),
+    tombs.FILE: ("tomb", None),
 }
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -227,11 +230,35 @@ def merge_text(name: str, new_txt: str, old_txt: str) -> str:
             got = _merge_list(new, old, key)
         elif kind == "dictlist":
             got = _merge_dictlist(new, old)
+        elif kind == "tomb":
+            got = tombs.merge(new, old)
         else:
             got = _merge_set(new, old)
         return json.dumps(got, ensure_ascii=False, indent=2)
     except Exception:
         return new_txt
+
+
+def _drop_dead(files: dict) -> dict:
+    """지운 표식(deleted.json)보다 나중에 고치지 않은 항목을 목록 파일에서 뺀다.
+    files = {파일 이름: 글} — 바뀐 파일만 새 글로 돌려준다."""
+    try:
+        t = tombs._clean(json.loads(files.get(tombs.FILE) or "{}"))
+    except Exception:
+        return {}
+    out = {}
+    for n in tombs.KEYS:
+        txt = files.get(n)
+        if not t.get(n) or not (txt or "").strip():
+            continue
+        try:
+            items = json.loads(txt)
+        except Exception:
+            continue
+        kept = tombs.keep(n, items, t)
+        if isinstance(items, list) and len(kept) != len(items):
+            out[n] = json.dumps(kept, ensure_ascii=False, indent=2)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +324,11 @@ def apply_remote(b: dict) -> bool:
         if text != cur:
             _write(n, text, stamp)
             changed = True
+    # 지운 표식을 받았으면(또는 합쳐서 되살아난 것이 있으면) 이 PC 의 목록에서도 뺀다
+    local = {n: _read(n) for n in list(tombs.KEYS) + [tombs.FILE]}
+    for n, text in _drop_dead(local).items():
+        _write(n, text, file_stamp(n) or _now())
+        changed = True
     return changed
 
 
@@ -318,6 +350,8 @@ def merged_bundle(b) -> dict:
             out["times"][n] = rt
         elif _MERGE.get(n):              # 내가 더 최신이라도 목록은 합쳐 둔다
             out["files"][n] = merge_text(n, out["files"].get(n, ""), content)
+    # 합치다 되살아난 '지운 항목' 을 뺀다(인사말·내 메모 — tombs)
+    out["files"].update(_drop_dead(out["files"]))
     return out
 
 
