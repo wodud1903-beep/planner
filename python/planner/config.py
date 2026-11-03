@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -197,6 +198,43 @@ _current_account: str = ""
 def set_account(email: str) -> None:
     global _current_account
     _current_account = (email or "").strip().lower()
+
+
+def current_account() -> str:
+    return _current_account
+
+
+# 지난번에 확인한 계정 — 켜자마자 그 계정 폴더를 연다(v1.26).
+# 예전엔 켤 때마다 인터넷으로 계정을 확인한 뒤에야 폴더를 정해서, 확인이 늦으면 그동안
+# 공용 폴더(대개 빈)를 보여 줬고, PC 를 켠 직후처럼 인터넷이 늦게 붙으면 하루 종일
+# 공용 폴더로 지냈다. 이 기록은 **보여 주기·자동 불러오기에만** 쓴다 — 동기화(올리기)는
+# 인터넷으로 계정을 다시 확인한 다음에만 한다(main_window._account_verified).
+_LAST_ACCOUNT = "last_account.json"
+
+
+def last_account() -> str:
+    try:
+        d = json.loads((base_dir() / _LAST_ACCOUNT).read_text(encoding="utf-8"))
+        return str(d.get("email") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def remember_account(email: str) -> None:
+    email = (email or "").strip().lower()
+    if not email or email == last_account():
+        return
+    try:
+        atomic_write(base_dir() / _LAST_ACCOUNT, json.dumps({"email": email}, ensure_ascii=False))
+    except OSError:
+        pass
+
+
+def forget_account() -> None:
+    try:
+        (base_dir() / _LAST_ACCOUNT).unlink()
+    except OSError:
+        pass
 
 
 def _safe(email: str) -> str:

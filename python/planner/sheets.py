@@ -302,7 +302,20 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     ranges = (r.json() or {}).get("valueRanges", [])
     left = (ranges[0].get("values", []) if len(ranges) > 0 else [])    # A~Q
     right = (ranges[1].get("values", []) if len(ranges) > 1 else [])   # S~T
+    # 받은 그대로를 잠깐 들고 있는다 — 고객 목록 저장본(sheet_cache)이 가져간다
+    with _RAW_LOCK:
+        _LAST_RAW[(sheet_id, sheet_name)] = (left, right)
     return parse_rows(left, right, sheet_name)
+
+
+_LAST_RAW: dict = {}
+_RAW_LOCK = threading.Lock()
+
+
+def take_raw(sheet_id: str, sheet_name: str):
+    """read_rows 가 마지막으로 받은 (A~Q, S~T) 값 — 한 번 가져가면 비운다. 없으면 None."""
+    with _RAW_LOCK:
+        return _LAST_RAW.pop((sheet_id, sheet_name), None)
 
 
 def parse_rows(left: list, right: list, sheet_name: str = ""):
