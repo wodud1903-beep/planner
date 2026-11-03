@@ -28,11 +28,14 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, backup_dialog, board_view, changelog, config, contacts, crashlog, customer_docs,
+    alarm_window, auto_rules, backup_dialog, board_view, changelog, config, contacts, crashlog,
+    customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
     google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheet_cache, sheets, sync,
     theme, updater, weekly,
 )
+from .auto_rules_dialog import AutoRulesDialog
+from .monthly_dialog import MonthlyDialog
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
 from .commission_tab import CommissionTab
@@ -144,6 +147,8 @@ class MainWindow(QMainWindow):
     # 방금 만든 출고 일정 (CalEvent) — 재조회 없이 목록에 얹는다
     sig_deliver_new = Signal(object)
     sig_account = Signal(str, str)     # 로그인 계정 이메일 확인됨 (이메일, 실패 이유 "auth"|"net")
+    sig_sheet_done = Signal(int)       # 시트 읽기가 고객ID 까지 다 끝났다(그때의 epoch) — 자동 규칙
+    sig_monthly = Signal(str, str, bool)   # 월 마감 시트 쓰기 끝 (YYYY-MM, 오류, 저절로였나)
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
@@ -281,6 +286,8 @@ class MainWindow(QMainWindow):
         self._notes: dict = self._load_notes()
         # 고객ID → {template, items[]} — 심사서류 체크리스트
         self._docs: dict = self._load_docs()
+        # 만기 재계약 상태(v1.26) — {고객열쇠|만기일: {s, at}}
+        self._renewals: dict = renewals.load()
 
         # 저장된 테마 반영
         theme.set_theme(getattr(self.settings, 'theme', '')
@@ -309,6 +316,8 @@ class MainWindow(QMainWindow):
         self.sig_sheet_uids.connect(self._on_sheet_uids)
         self.sig_sheet_rates.connect(self._on_sheet_rates)
         self.sig_sheet_kb.connect(self._on_sheet_kb)
+        self.sig_sheet_done.connect(self._on_sheet_done)
+        self.sig_monthly.connect(self._on_monthly_written)
         self.sig_sync_done.connect(self._on_sync_done)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
@@ -643,6 +652,7 @@ class MainWindow(QMainWindow):
         self._ment_copied = self._load_ment_log()
         self._notes = self._load_notes()
         self._docs = self._load_docs()
+        self._renewals = renewals.load()
         if hasattr(self, "tab_greet"):
             self.tab_greet.reload()      # 계정이 바뀌면 그 계정의 문구로
         if hasattr(self, "tab_kb"):
@@ -1125,6 +1135,12 @@ class MainWindow(QMainWindow):
         self.btn_news.setToolTip("매일 아침 새로 쓰이는 뉴스 문서를 봅니다([설정] 에서 문서를 바꿀 수 있습니다)")
         self.btn_news.clicked.connect(self.show_news)
         row.addWidget(self.btn_news)
+        # 월 마감 리포트(v1.26) — 금융사별·차종별 출고·수수료, 지난달 대비
+        self.btn_month = QPushButton("월 마감")
+        self.btn_month.setToolTip("한 달 출고·수수료를 금융사별·차종별로, 지난달과 견줘서 — [복사] 로 보고, "
+                                  "시트 '월마감' 탭에도 적습니다(매달 지난달 것은 저절로)")
+        self.btn_month.clicked.connect(self.open_monthly)
+        row.addWidget(self.btn_month)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
@@ -1346,19 +1362,28 @@ class MainWindow(QMainWindow):
         # 놓고, 끌어 옮기면 시트 진행현황이 바뀐다(board_view)
         self.btn_view_list = QPushButton("목록")
         self.btn_view_board = QPushButton("보드")
+        self.btn_view_renew = QPushButton("재계약")
         self._cust_view_group = QButtonGroup(self)
-        for b in (self.btn_view_list, self.btn_view_board):
+        for b in (self.btn_view_list, self.btn_view_board, self.btn_view_renew):
             b.setCheckable(True)
             self._cust_view_group.addButton(b)
             row.addWidget(b)
         self.btn_view_board.setToolTip("진행현황별 칸에 고객 카드 — 끌어 옮기면 시트 진행현황이 바뀝니다")
-        for b in (self.btn_view_list, self.btn_view_board):
+        self.btn_view_renew.setToolTip("만기가 다가오는 고객 — 상태(연락함·상담중·재계약…)와 안내 멘트 복사")
+        # [자동 규칙] — 진행현황·출고일·만기일이 되면 [내 할일] 이 저절로(v1.26)
+        self.btn_auto_rules = QPushButton("자동 규칙")
+        self.btn_auto_rules.setToolTip("'가결' 이 되면 승인 안내, 출고 전날 준비, 출고 다음 날 감사 인사, "
+                                       "만기 90·30일 전 재계약 안내 — 할일이 저절로 생깁니다")
+        self.btn_auto_rules.clicked.connect(self._open_auto_rules)
+        row.addWidget(self.btn_auto_rules)
+        for b in (self.btn_view_list, self.btn_view_board, self.btn_view_renew):
             # 지금 보고 있는 쪽이 눌린 모양으로(왼쪽 메뉴의 고른 칸과 같은 색)
             b.setStyleSheet(f"QPushButton:checked {{ background:{theme.c('select_bg')};"
                             f" color:{theme.c('nav_sel_text')}; border-color:{theme.c('accent')};"
                             " font-weight:bold; }")
         self.btn_view_list.clicked.connect(lambda: self._set_cust_view("list"))
         self.btn_view_board.clicked.connect(lambda: self._set_cust_view("board"))
+        self.btn_view_renew.clicked.connect(lambda: self._set_cust_view("renew"))
         # [주간 요약] 은 [대시보드] 의 [새로고침] 옆으로 옮겼다.
         # 브리핑과 한 화면이 되었으니 하루를 여는 자리에 있는 편이 맞다.
         row.addStretch()
@@ -1415,18 +1440,31 @@ class MainWindow(QMainWindow):
         self.board.moved.connect(self._move_customer_status)
         self.board.opened.connect(self._open_customer_from_board)
         self.cust_stack.addWidget(self.board)
+        self.renew = renewal_view.RenewalView()
+        self.renew.set_months(getattr(self.settings, "renew_months", 4))
+        self.renew.status_changed.connect(self._on_renew_status)
+        self.renew.copy_requested.connect(self._on_renew_copy)
+        self.renew.opened.connect(self._open_customer_from_board)
+        self.renew.months_changed.connect(self._on_renew_months)
+        self.cust_stack.addWidget(self.renew)
         v.addWidget(self.cust_stack)
         self._set_cust_view(getattr(self.settings, "cust_view", "list"), save=False)
         return w
 
     # ---- 고객 진행 보드 ----
     def _set_cust_view(self, view: str, save: bool = True):
+        if view not in ("list", "board", "renew"):
+            view = "list"
         board_on = view == "board"
         self.btn_view_board.setChecked(board_on)
-        self.btn_view_list.setChecked(not board_on)
-        self.cust_stack.setCurrentWidget(self.board if board_on else self.tbl_cust)
+        self.btn_view_renew.setChecked(view == "renew")
+        self.btn_view_list.setChecked(view == "list")
+        self.cust_stack.setCurrentWidget(
+            self.board if board_on else self.renew if view == "renew" else self.tbl_cust)
         if board_on:
             self.board.set_rows(getattr(self, "_cust_shown", self.sheet_rows))
+        if view == "renew":
+            self._paint_renewals()
         if save and getattr(self.settings, "cust_view", "list") != view:
             self.settings.cust_view = view
             self._save_settings_quiet()
@@ -1436,6 +1474,205 @@ class MainWindow(QMainWindow):
             self.settings.save(self.cfg_file)
         except Exception:
             pass
+
+    # ---- 만기 재계약 목록(v1.26, renewals.py · renewal_view.py) ----
+    def _paint_renewals(self):
+        if hasattr(self, "renew"):
+            self.renew.set_data(self.sheet_rows, self._renewals, date.today())
+
+    def _save_renewals(self) -> bool:
+        try:
+            renewals.save(self._renewals)
+        except OSError as e:
+            QMessageBox.warning(self, config.APP_NAME, "재계약 상태를 저장하지 못했습니다:\n" + str(e))
+            return False
+        self._touch_sync()               # 다른 PC · 폰 알림(이번 달 만기)에도 반영
+        return True
+
+    def _on_renew_status(self, cr, d, s: str):
+        renewals.set_status(self._renewals, cr, d, s)
+        self._save_renewals()
+        # ⚠️ 상태 칸(콤보)의 신호 안에서 표를 다시 그리면 그 콤보를 지우게 된다 — 한 박자 뒤에
+        QTimer.singleShot(0, self._paint_renewals)
+        if s in renewals.CLOSED:
+            QTimer.singleShot(0, self._run_auto_rules)   # 남은 만기 할일(D-30 등)을 거둔다
+
+    def _renew_template(self) -> str:
+        """[멘트 복사] 의 글 — 자동 규칙의 첫 만기 규칙 멘트(고쳐 쓰셨으면 그것)."""
+        for r in auto_rules.rules_of(self.settings):
+            if r["kind"] == "expiry" and (r.get("ment") or "").strip():
+                return r["ment"]
+        return auto_rules.RENEW_MENT
+
+    def _on_renew_copy(self, cr, d):
+        QApplication.clipboard().setText(renewals.ment(cr, d, self._renew_template()))
+        if renewals.status(self._renewals, cr, d) == "미연락":
+            renewals.set_status(self._renewals, cr, d, "연락함")
+            self._save_renewals()
+            QTimer.singleShot(0, self._paint_renewals)
+        self.sig_toast.emit(config.APP_NAME, f"{auto_rules.short_name(cr)} 고객님 재계약 안내 멘트를 "
+                                             "복사했습니다 — 카카오톡에 붙여 넣으세요.")
+
+    def _on_renew_months(self, months: int):
+        self.settings.renew_months = int(months)
+        self._save_settings_quiet()
+        self._paint_renewals()
+
+    # ---- 진행현황 자동 규칙(v1.26, auto_rules.py) ----
+    def _on_sheet_done(self, epoch: int):
+        if epoch == self._sheet_epoch:
+            self._run_auto_rules()
+            self._maybe_auto_monthly()
+
+    # ---- 월 마감 리포트(v1.26, monthly.py) ----
+    def open_monthly(self):
+        dlg = MonthlyDialog(self.sheet_rows, date.today(),
+                            on_write=(lambda y, m: self._write_monthly_async(y, m, auto=False))
+                            if self.gauth.is_connected() and self.settings.sheet_on else None,
+                            parent=self)
+        self._monthly_dlg = dlg
+        try:
+            dlg.exec()
+        finally:
+            self._monthly_dlg = None
+
+    def _write_monthly_async(self, y: int, m: int, auto: bool = False):
+        sid = (self.settings.sheet_id or "").strip()
+        sname = (self.settings.sheet_name or "").strip()
+        if not sid or not self.gauth.is_connected():
+            return
+        rep = monthly.report(list(self.sheet_rows), y, m)
+        values = monthly.sheet_values(rep, date.today(), sname)
+        ym = f"{y}-{m:02d}"
+
+        def worker():
+            err = ""
+            try:
+                sheets.write_tab(self.gauth, sid, monthly.TAB, values, guard="마감 리포트")
+            except Exception as e:
+                err = str(e).splitlines()[0][:160] if str(e) else "알 수 없는 오류"
+            self.sig_monthly.emit(ym, err, auto)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _maybe_auto_monthly(self):
+        """매달 1일 이후 처음 새로 읽은 시트로 지난달 마감을 '월마감' 탭에 적는다(한 달에 한 번)."""
+        if not getattr(self.settings, "monthly_on", True) or not self._sheet_loaded or not self.sheet_rows:
+            return
+        if not (self.settings.sheet_on and self._account_verified and self.gauth.is_connected()):
+            return                      # 계정을 확인하기 전에는 남의 시트에 쓰지 않는다
+        t = date.today()
+        y, m = monthly.prev_month(t.year, t.month)
+        ym = f"{y}-{m:02d}"
+        if (self.settings.monthly_last or "") >= ym or getattr(self, "_monthly_busy", "") == ym:
+            return
+        self._monthly_busy = ym
+        self._write_monthly_async(y, m, auto=True)
+
+    def _on_monthly_written(self, ym: str, err: str, auto: bool):
+        self._monthly_busy = ""
+        dlg = getattr(self, "_monthly_dlg", None)
+        if dlg is not None:
+            dlg.written(err)
+        if err:
+            if auto:
+                crashlog.note(f"월 마감 자동 작성 실패({ym}): {err}")
+            return
+        if auto:
+            self.settings.monthly_last = ym
+            self._save_settings()
+            y, m = ym.split("-")
+            self.sig_toast.emit("월 마감", f"{int(y)}년 {int(m)}월 마감 리포트를 시트 '{monthly.TAB}' 탭에 "
+                                         "적었습니다 — 대시보드 [월 마감] 에서 복사할 수 있습니다.")
+
+    def _run_auto_rules(self) -> int:
+        """새로 읽은 시트로 규칙을 돌려 [내 할일] 을 만든다·옮긴다·거둔다. 바꾼 개수를 돌려준다.
+
+        ⚠️ 저장해 둔 목록(sheet_cache)으로는 돌리지 않는다 — 어제 것을 보고 할일을 만들면 안 된다.
+        """
+        if not getattr(self.settings, "auto_on", True) or not self._sheet_loaded or not self.sheet_rows:
+            return 0
+        try:
+            done = auto_rules.load_done()
+            seen = auto_rules.load_seen()
+            acts, seen2 = auto_rules.plan(
+                self.sheet_rows, auto_rules.rules_of(self.settings), done, seen, date.today(),
+                closed=lambda cr, d: renewals.closed(self._renewals, cr, d))
+            auto_rules.save_seen(seen2)
+        except Exception as e:                       # 규칙이 탈나도 앱은 계속
+            crashlog.note(f"자동 규칙 계산 실패: {e}")
+            return 0
+        if not acts:
+            return 0
+        ts = auto_rules.now_stamp()
+
+        def find(old):
+            old = old or {}
+            title = old.get("title") or ""
+            if not title:
+                return None
+            same = [t for t in self.todos if not t.done and t.title == title]
+            for t in same:
+                if t.run_date.isoformat() == old.get("date"):
+                    return t
+            return same[0] if same else None       # 날짜를 손으로 바꿨어도 같은 할일
+
+        added, moved, removed = [], 0, 0
+        for a in acts:
+            op, key = a["op"], a["key"]
+            if op == "mark":
+                done[key] = {"skip": 1, "date": a["date"].isoformat(), "base": a.get("base", ""), "at": ts}
+                continue
+            if op == "remove":
+                t = find(a.get("old"))
+                if t is not None:
+                    self.todos.remove(t)
+                    removed += 1
+                rec = dict(a.get("old") or {})
+                rec.update({"gone": 1, "at": ts})
+                if not a.get("keep"):
+                    rec["base"] = ""                # 출고일을 다시 정하면 새로 만든다
+                done[key] = rec
+                continue
+            t = find(a.get("old")) if op == "move" else None
+            if t is not None:
+                t.run_date, t.title, t.ment = a["date"], a["title"], a["ment"]
+                t.last_alarm = None
+                moved += 1
+            else:
+                t = TodoItem(title=a["title"], run_date=a["date"], run_time=self.settings.follow_time,
+                             has_time=True, alarm=self.settings.follow_alarm, repeats=False,
+                             ment=a["ment"])
+                self.todos.append(t)
+                added.append(t)
+            done[key] = {"title": a["title"], "date": a["date"].isoformat(),
+                         "base": a.get("base", ""), "at": ts}
+        try:
+            auto_rules.save_done(done)
+        except OSError:
+            pass
+        if added or moved or removed:
+            self._save_todos()
+            self.refresh_todo()
+            parts = []
+            if added:
+                parts.append(f"{len(added)}건 추가(" + ", ".join(t.title for t in added[:3])
+                             + (" …" if len(added) > 3 else "") + ")")
+            if moved:
+                parts.append(f"{moved}건 날짜 옮김")
+            if removed:
+                parts.append(f"{removed}건 거둠")
+            self.sig_toast.emit("자동 규칙", "[내 할일] " + " · ".join(parts))
+        self._touch_sync()
+        return len(added) + moved + removed
+
+    def _open_auto_rules(self):
+        got = AutoRulesDialog.run(auto_rules.rules_of(self.settings),
+                                  getattr(self.settings, "auto_on", True), self)
+        if got is None:
+            return
+        self.settings.auto_rules, self.settings.auto_on = got
+        self._save_settings()
+        self._run_auto_rules()
 
     def _open_customer_from_board(self, rownum: int):
         """보드 카드를 두 번 누르면 — 표에서 그 고객을 골라 [수정] 을 연다."""
@@ -1792,6 +2029,9 @@ class MainWindow(QMainWindow):
                 # 5) 다음에 켤 때 바로 보이게 받은 그대로 둔다(v1.26 — sheet_cache)
                 if raw and live():
                     sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs)
+                # 6) 고객ID 까지 다 왔다 — 자동 규칙은 이때 본다(ID 가 오기 전엔 고객 열쇠가 다르다)
+                if live():
+                    self.sig_sheet_done.emit(epoch)
             except Exception as e:
                 if live():
                     self.sig_sheet_rows.emit(None, 0, str(e))
@@ -2149,6 +2389,8 @@ class MainWindow(QMainWindow):
         self._cust_shown = [c for c in shown_rows if c not in self._sheet_pending]
         if hasattr(self, "board") and self.cust_stack.currentWidget() is self.board:
             self.board.set_rows(self._cust_shown)
+        if hasattr(self, "renew") and self.cust_stack.currentWidget() is self.renew:
+            self._paint_renewals()
         total = len(rows)
         cached = getattr(self, "_sheet_cached_at", "") if not self._sheet_loaded else ""
         self.lbl_cust.setText(
@@ -3801,6 +4043,8 @@ class MainWindow(QMainWindow):
         if getattr(self, "_today_shown", None) != today:     # 자정이 지나면 제목줄 날짜도
             self._today_shown = today
             self._paint_today()
+            # 날짜 규칙(출고 전날·만기 D-30 …)은 날이 바뀌면 다시 본다(v1.26)
+            QTimer.singleShot(0, self._run_auto_rules)
             self.refresh_dashboard()        # 오늘·이번 주·다음 주가 바뀐다
         self._paint_page_title()            # 인사말은 시간대 따라(바뀔 때만 다시 쓴다)
         if self.last_backup != today and self._tick_backup_ok():

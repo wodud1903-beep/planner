@@ -31,13 +31,15 @@ _FILES = ["todos.json", "pcalarms.json", "taskalarms.json", "plan_cfg.json",
           "followups.json", "ment_copied.json", "customer_notes.json",
           "terms_presets.json", "commission_rates.json", "greetings.json",
           "kb_shared.json", "kb_mine.json", "customer_docs.json",
-          "deliver_events.json", tombs.FILE]
+          "deliver_events.json", tombs.FILE, "auto_done.json", "renewals.json"]
 
 # 항목 단위로 합치는 파일 → (모양, 열쇠)
 #   list    : [{...}]        열쇠 값이 같으면 한 건으로 본다
 #   dictlist: {키: [...]}    키별로 목록을 합친다
 #   set     : [문자열]       합집합 (지워지면 안 되는 기록)
 #   tomb    : 지운 표식 {파일: {열쇠: 시각}} — 합집합, 같은 열쇠면 늦은 시각(tombs.py)
+#   keyed   : {열쇠: {..., "at": 시각}} — 합집합, 같은 열쇠면 at 이 늦은 쪽(자동 규칙 기록 ·
+#             만기 재계약 상태, v1.26)
 # 여기 없는 파일은 파일 단위로 최신인 쪽을 그대로 쓴다.
 # 할일·서류체크를 넣지 않은 이유: 완료·삭제가 정상 동작이라 합치면 지운 것이 되살아난다.
 # list 로 합치는 인사말·내 메모는 지운 표식(deleted.json)으로 지운 것을 빼고 남긴다(v1.26).
@@ -49,6 +51,8 @@ _MERGE = {
     "ment_copied.json": ("set", None),
     "followups.json": ("set", None),
     tombs.FILE: ("tomb", None),
+    "auto_done.json": ("keyed", None),
+    "renewals.json": ("keyed", None),
 }
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
@@ -204,6 +208,23 @@ def _merge_dictlist(new, old):
     return out
 
 
+def _merge_keyed(new, old):
+    """{열쇠: {..., at}} — 양쪽 열쇠를 다 남기고, 같은 열쇠면 at 이 늦은 쪽(같으면 최신 파일 쪽)."""
+    if not isinstance(new, dict) or not isinstance(old, dict):
+        return new if isinstance(new, dict) else old
+    out = dict(new)
+    for k, ov in old.items():
+        nv = out.get(k)
+        if nv is None:
+            out[k] = ov
+            continue
+        na = str(nv.get("at") or "") if isinstance(nv, dict) else ""
+        oa = str(ov.get("at") or "") if isinstance(ov, dict) else ""
+        if oa > na:
+            out[k] = ov
+    return out
+
+
 def _merge_set(new, old):
     """[문자열] — 합집합. 순서를 고정해 두 PC 가 같은 파일을 갖게 한다."""
     if not isinstance(new, list) or not isinstance(old, list):
@@ -232,6 +253,8 @@ def merge_text(name: str, new_txt: str, old_txt: str) -> str:
             got = _merge_dictlist(new, old)
         elif kind == "tomb":
             got = tombs.merge(new, old)
+        elif kind == "keyed":
+            got = _merge_keyed(new, old)
         else:
             got = _merge_set(new, old)
         return json.dumps(got, ensure_ascii=False, indent=2)

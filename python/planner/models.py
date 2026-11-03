@@ -296,8 +296,16 @@ class AppSettings:
     side_collapsed: bool = False
     # 오늘의 뉴스 — 구글 문서 주소(또는 id)
     news_doc: str = config.DEF_NEWS_DOC
-    # 고객관리 탭을 목록으로 볼지 보드로 볼지
+    # 고객관리 탭을 목록으로 볼지 보드로 볼지(재계약 목록도 — v1.26)
     cust_view: str = "list"
+    # 진행현황 자동 규칙(v1.26) — 끄기 스위치 · 규칙표(비어 있으면 기본 규칙)
+    auto_on: bool = True
+    auto_rules: list = field(default_factory=list)
+    # 만기 재계약 목록 — 몇 달 앞까지 볼지
+    renew_months: int = 4
+    # 월 마감 리포트(v1.26) — 매달 지난달 것을 시트 '월마감' 탭에 저절로 · 마지막으로 적은 달
+    monthly_on: bool = True
+    monthly_last: str = ""
 
     def to_json(self) -> dict:
         return {
@@ -340,6 +348,11 @@ class AppSettings:
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
             "custView": self.cust_view,
+            "autoOn": bool(self.auto_on),
+            "autoRules": list(self.auto_rules or []),
+            "renewMonths": int(self.renew_months or 4),
+            "monthlyOn": bool(self.monthly_on),
+            "monthlyLast": self.monthly_last or "",
         }
 
     @classmethod
@@ -409,7 +422,17 @@ class AppSettings:
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")
-        s.cust_view = "board" if o.get("custView") == "board" else "list"
+        cv = o.get("custView")
+        s.cust_view = cv if cv in ("board", "renew") else "list"
+        s.auto_on = bool(o.get("autoOn", True))
+        ar = o.get("autoRules")
+        s.auto_rules = [x for x in ar if isinstance(x, dict)] if isinstance(ar, list) else []
+        try:
+            s.renew_months = max(1, min(24, int(o.get("renewMonths", 4) or 4)))
+        except (TypeError, ValueError):
+            s.renew_months = 4
+        s.monthly_on = bool(o.get("monthlyOn", True))
+        s.monthly_last = str(o.get("monthlyLast") or "")
         return s
 
     def save(self, path: Path) -> None:
