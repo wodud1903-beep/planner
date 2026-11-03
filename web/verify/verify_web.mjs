@@ -728,6 +728,7 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   // 좁은 화면에서는 보는 동안 목록을 감춘다 — 412px 에 둘을 나란히 두면 둘 다 못 쓴다
   ok("좁은 화면에서는 보는 동안 목록을 감춘다",
      !(await p6.locator("#dlist").isVisible()));
+  ok("서류 보기에는 첨부 넘기기(◀ ▶)가 없다 — 자료검색 첨부에만", (await p6.locator(".vnav").count()) === 0);
   await p6.click("#vclose");
   await p6.waitForTimeout(300);
   ok("닫으면 목록으로 돌아온다", await p6.locator("#dlist").isVisible());
@@ -810,6 +811,70 @@ console.log("\n[11-2] 자료 첨부(그림·PDF) — 보이고, 크게 보고, �
   await pK.locator('#kbatt .attcard[data-k="0"] button.chip[data-act="open"]').click();
   await pK.waitForSelector("#kbview .vhead", { timeout: 5000 }).catch(() => {});
   ok("[크게] 는 확대 보기", (await pK.locator("#kbview .vhead").count()) === 1);
+  // 같은 자료의 다른 첨부로 닫지 않고 넘긴다(PC v1.25.1 · 업무자료검색과 같게)
+  const vName = async () => (await pK.locator("#kbview .vhead b").innerText()).trim();
+  const vPos = async () => (await pK.locator("#vpos").innerText()).trim();
+  ok("첨부가 둘이면 '1 / 2' · ◀ 는 꺼짐",
+     (await vPos()) === "1 / 2" && (await pK.locator("#vprev").isDisabled())
+     && !(await pK.locator("#vnext").isDisabled()), await vPos());
+  if (process.env.SHOT_DIR) {
+    await pK.locator("#kbview").scrollIntoViewIfNeeded();
+    await pK.screenshot({ path: join(process.env.SHOT_DIR, "kb_viewer_nav.png") });
+  }
+  await pK.locator("#vnext").click();
+  await pK.waitForFunction(() => (document.querySelector("#vpos") || {}).textContent === "2 / 2",
+    null, { timeout: 5000 }).catch(() => {});
+  ok("[▶] 로 다음 첨부(PDF) — 창을 닫지 않는다",
+     (await vName()) === "약정 안내.pdf" && (await vPos()) === "2 / 2"
+     && (await pK.locator("#vnext").isDisabled()), `${await vName()} ${await vPos()}`);
+  await pK.evaluate(() => document.activeElement && document.activeElement.blur());
+  await pK.keyboard.press("ArrowLeft");
+  await pK.waitForTimeout(300);
+  ok("키보드 ← 로 앞 첨부", (await vName()) === "링크 화면.png" && (await vPos()) === "1 / 2",
+     `${await vName()} ${await vPos()}`);
+  await pK.keyboard.press("ArrowRight");
+  await pK.waitForTimeout(300);
+  ok("키보드 → 로 다음 첨부", (await vPos()) === "2 / 2", await vPos());
+  await pK.keyboard.press("ArrowRight");
+  await pK.waitForTimeout(200);
+  ok("마지막에서 → 는 그대로", (await vPos()) === "2 / 2", await vPos());
+  // 좁은 화면은 보는 동안 검색 칸이 감춰진다 — 보이는 글 칸을 하나 두고 그 안에서 친다
+  await pK.evaluate(() => {
+    const t = document.createElement("input");
+    t.id = "__typing";
+    t.value = "글자";
+    document.querySelector("#kbview").before(t);
+    t.focus();
+  });
+  await pK.keyboard.press("ArrowLeft");
+  await pK.waitForTimeout(200);
+  ok("글 칸에서 ← 는 글자 옮기기 — 첨부는 그대로", (await vPos()) === "2 / 2", await vPos());
+  await pK.evaluate(() => document.querySelector("#__typing").remove());
+  // 폰 — 옆으로 밀기(오른쪽으로 밀면 앞 첨부)
+  const swiped = await pK.evaluate(() => {
+    const el = document.querySelector("#vscroll");
+    if (!el || typeof Touch !== "function") return "no-touch";
+    const t = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: 300 });
+    el.dispatchEvent(new TouchEvent("touchstart", { touches: [t(100)], changedTouches: [t(100)], bubbles: true }));
+    el.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: [t(320)], bubbles: true }));
+    return "ok";
+  });
+  await pK.waitForTimeout(300);
+  ok("폰은 옆으로 밀어서 넘긴다", swiped === "no-touch" || (await vPos()) === "1 / 2",
+     `${swiped} ${await vPos()}`);
+  await pK.locator("#vin").click();
+  await pK.evaluate(() => {
+    const el = document.querySelector("#vscroll");
+    if (!el || typeof Touch !== "function") return;
+    const t = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: 300 });
+    el.dispatchEvent(new TouchEvent("touchstart", { touches: [t(320)], changedTouches: [t(320)], bubbles: true }));
+    el.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: [t(100)], bubbles: true }));
+  });
+  await pK.waitForTimeout(300);
+  ok("확대해 둔 동안 밀기는 그림 옮기기 — 넘기지 않는다", (await vPos()) === "1 / 2", await vPos());
+  await pK.keyboard.press("Escape");
+  await pK.waitForTimeout(200);
+  ok("Esc 로 닫는다", (await pK.locator("#kbview .vhead").count()) === 0);
   // 다른 자료(제목이 다른 G 칸)는 첨부가 안 붙는다
   await pK.goto(s.url + "#/kb", { waitUntil: "networkidle" });
   await pK.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();

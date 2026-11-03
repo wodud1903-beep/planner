@@ -320,7 +320,15 @@ pre.ment {
   padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 8px;
 }
 .vhead b { flex: 1 1 100%; min-width: 0; word-break: break-all; font-size: 14px; }
+/* 제목 줄 — 이름 · [닫기](오른쪽 위). 단추 줄이 폰 폭 한 줄에 들어가게 닫기를 여기로 */
+.vtitle { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vtitle b { flex: 1 1 auto; }
 .vpct { font-size: 12px; color: var(--sub); min-width: 44px; text-align: center; }
+/* 같은 자료의 옆 첨부로 — ◀ 1 / 3 ▶ */
+.vnav { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
+.vnav .chip { min-width: 40px; }
+.vnav .chip[disabled] { opacity: .4; cursor: default; }
+.vpos { font-size: 13px; font-weight: 600; color: var(--sub); min-width: 44px; text-align: center; }
 
 /* 보는 칸. 확대하면 이 칸 안에서 가로세로로 스크롤된다.
    ⚠️ touch-action 을 pinch-zoom 으로 묶어 두면 **한 손가락 스크롤이 막힌다** —
