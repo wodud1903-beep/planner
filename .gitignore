@@ -3,5 +3,6 @@ web/CHANGELOG.md
 web/verify/.pdfjs/
 node_modules/
 .web_out/
+.verify_build/
 _site/
 python/planner/_secret.py

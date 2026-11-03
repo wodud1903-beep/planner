@@ -6,12 +6,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.23.1"
+APP_VERSION = "1.25.1"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -59,7 +60,14 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     # 견적서/계약서 이미지 업로드 — 앱이 만든 파일에만 접근하는 최소 권한
     "https://www.googleapis.com/auth/drive.file",
+    # 오늘의 뉴스 — 구글 문서 읽기(제한됨이 아니라 '민감' 등급). 드라이브 읽기 권한을
+    # 켠 사람은 그것으로 읽으므로 이 권한이 없어도 된다(news.fetch)
+    "https://www.googleapis.com/auth/documents.readonly",
 ]
+SCOPE_DOCS_READ = "https://www.googleapis.com/auth/documents.readonly"
+# 오늘의 뉴스 문서 — 제미나이가 매일 아침(8:40) 새로 쓴다. [설정] 에서 바꿀 수 있다.
+# 문서 id 만으로는 열 수 없다(그 계정에 있거나 공유된 문서만 읽힌다).
+DEF_NEWS_DOC = "1KhvgFvtETklf2wAoJjSzCJLh3iyKCYB19LaH_j03rqI"
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
@@ -190,6 +198,43 @@ _current_account: str = ""
 def set_account(email: str) -> None:
     global _current_account
     _current_account = (email or "").strip().lower()
+
+
+def current_account() -> str:
+    return _current_account
+
+
+# 지난번에 확인한 계정 — 켜자마자 그 계정 폴더를 연다(v1.26).
+# 예전엔 켤 때마다 인터넷으로 계정을 확인한 뒤에야 폴더를 정해서, 확인이 늦으면 그동안
+# 공용 폴더(대개 빈)를 보여 줬고, PC 를 켠 직후처럼 인터넷이 늦게 붙으면 하루 종일
+# 공용 폴더로 지냈다. 이 기록은 **보여 주기·자동 불러오기에만** 쓴다 — 동기화(올리기)는
+# 인터넷으로 계정을 다시 확인한 다음에만 한다(main_window._account_verified).
+_LAST_ACCOUNT = "last_account.json"
+
+
+def last_account() -> str:
+    try:
+        d = json.loads((base_dir() / _LAST_ACCOUNT).read_text(encoding="utf-8"))
+        return str(d.get("email") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def remember_account(email: str) -> None:
+    email = (email or "").strip().lower()
+    if not email or email == last_account():
+        return
+    try:
+        atomic_write(base_dir() / _LAST_ACCOUNT, json.dumps({"email": email}, ensure_ascii=False))
+    except OSError:
+        pass
+
+
+def forget_account() -> None:
+    try:
+        (base_dir() / _LAST_ACCOUNT).unlink()
+    except OSError:
+        pass
 
 
 def _safe(email: str) -> str:

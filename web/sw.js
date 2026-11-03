@@ -15,6 +15,7 @@ const CACHE = "app-" + BUILD;
 //    verify_web.mjs 의 [2] 가 web/ 의 파일과 이 목록을 대조해 막아 준다.
 const PRECACHE = [
   "./", "./index.html", "./manifest.webmanifest", "./CHANGELOG.md",
+  "./home.html", "./privacy.html", "./terms.html",
   "./css/app.css",
   "./js/boot.js", "./js/config.js", "./js/store.js", "./js/auth.js",
   "./js/sheets.js", "./js/hangul.js", "./js/fmt.js", "./js/kb.js",
@@ -24,7 +25,9 @@ const PRECACHE = [
   "./js/ui/dom.js", "./js/ui/chrome.js", "./js/ui/kb.js", "./js/ui/about.js",
   "./js/ui/customers.js", "./js/ui/docs.js",
   "./js/ui/split.js", "./js/ui/viewer.js",
-  "./js/ui/agenda.js", "./js/ui/calc.js", "./js/ui/weekly.js",
+  "./js/ui/agenda.js", "./js/ui/calc.js", "./js/ui/weekly.js", "./js/ui/icons.js",
+  "./js/notes.js", "./js/ui/feed.js", "./js/board.js", "./js/ui/board.js", "./js/push.js",
+  "./js/brief.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-512-maskable.png",
 ];
 
@@ -55,4 +58,35 @@ self.addEventListener("fetch", (e) => {
   e.respondWith(
     caches.open(CACHE).then((c) =>
       c.match(key).then((r) => r || c.match(rel) || fetch(e.request))));
+});
+
+// ---------------------------------------------------------------- 아침 브리핑 알림
+// 서버(api/push/cron)가 보낸 {title, body, url, tag} 를 알림으로 띄운다.
+// (주소를 점-빗금으로 시작하는 따옴표 글자로 쓰지 않는다 — 검사가 그 모양을 프리캐시 목록으로 읽는다)
+const HOME = "#/agenda";
+// tag 가 같으면(같은 날) 새 알림이 옛 것을 바꿔 끼운다 — 두 번 와도 하나만 남는다.
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.title || "일정관리기", {
+    body: d.body || "", tag: d.tag || "brief", icon: "./icons/icon-192.png",
+    data: { url: d.url || HOME },
+  }));
+});
+
+// 알림을 누르면 앱을 연다(이미 열려 있으면 그 창으로)
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || HOME,
+                      self.registration.scope).href;
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of all) {
+      if (c.url.startsWith(self.registration.scope)) {
+        try { await c.navigate(url); } catch (x) { /* 다른 화면이어도 그냥 앞으로 */ }
+        return c.focus();
+      }
+    }
+    return self.clients.openWindow(url);
+  })());
 });

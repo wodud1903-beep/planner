@@ -302,7 +302,20 @@ def read_rows(auth: GoogleAuth, sheet_id: str, sheet_name: str):
     ranges = (r.json() or {}).get("valueRanges", [])
     left = (ranges[0].get("values", []) if len(ranges) > 0 else [])    # A~Q
     right = (ranges[1].get("values", []) if len(ranges) > 1 else [])   # S~T
+    # 받은 그대로를 잠깐 들고 있는다 — 고객 목록 저장본(sheet_cache)이 가져간다
+    with _RAW_LOCK:
+        _LAST_RAW[(sheet_id, sheet_name)] = (left, right)
     return parse_rows(left, right, sheet_name)
+
+
+_LAST_RAW: dict = {}
+_RAW_LOCK = threading.Lock()
+
+
+def take_raw(sheet_id: str, sheet_name: str):
+    """read_rows 가 마지막으로 받은 (A~Q, S~T) 값 — 한 번 가져가면 비운다. 없으면 None."""
+    with _RAW_LOCK:
+        return _LAST_RAW.pop((sheet_id, sheet_name), None)
 
 
 def parse_rows(left: list, right: list, sheet_name: str = ""):
@@ -1150,6 +1163,45 @@ def write_rates(auth: GoogleAuth, sheet_id: str, rates: dict,
     r = _http().put(url, headers=_headers(auth), timeout=30,
                      params={"valueInputOption": "RAW"},
                      json={"values": values})
+    _check(r)
+
+
+def write_tab(auth: GoogleAuth, sheet_id: str, tab: str, values: list, guard: str = "") -> None:
+    """그 탭을 통째로 새로 적는다(없으면 만든다) — 월 마감 리포트(v1.26, monthly.py).
+
+    ⚠️ 고객 줄이 있는 탭에는 절대 쓰지 않는다 — 부르는 쪽이 전용 탭 이름만 넘긴다.
+       guard 를 주면, 그 이름의 탭이 이미 있는데 A1 에 그 말이 없을 때(사람이 만든 다른 표)
+       **덮어쓰지 않고** 멈춘다. 숫자는 숫자로(RAW) 적어 시트에서 더하고 그래프를 그릴 수 있게.
+    """
+    meta = _http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id),
+                       headers=_headers(auth), timeout=30,
+                       params={"fields": "sheets(properties(sheetId,title))"})
+    _check(meta)
+    titles = [(sh.get("properties", {}) or {}).get("title")
+              for sh in (meta.json() or {}).get("sheets", [])]
+    if tab not in titles:
+        r = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
+                         headers=_headers(auth), timeout=30,
+                         json={"requests": [{"addSheet": {"properties": {"title": tab}}}]})
+        _check(r)
+    elif guard:
+        g = _http().get(config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(tab, "A1")),
+                        headers=_headers(auth), timeout=30)
+        _check(g)
+        a1 = str((((g.json() or {}).get("values") or [[""]])[0] or [""])[0] or "")
+        if a1.strip() and guard not in a1:
+            raise GoogleError(f"'{tab}' 탭에 다른 내용이 있어 덮어쓰지 않았습니다(A1: {a1[:30]}).\n"
+                              "그 탭 이름을 바꾸거나 지운 뒤 다시 해 주세요.")
+    rc = _http().post(config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
+                      + "/values/" + _rng(tab, "A1:Z5000") + ":clear",
+                      headers=_headers(auth), timeout=30, json={})
+    _check(rc)
+    width = max([len(r) for r in values] + [1])
+    rows = [list(r) + [""] * (width - len(r)) for r in values]
+    end = chr(ord("A") + min(width, 26) - 1)
+    url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(tab, f"A1:{end}{len(rows)}"))
+    r = _http().put(url, headers=_headers(auth), timeout=30,
+                    params={"valueInputOption": "RAW"}, json={"values": rows})
     _check(r)
 
 

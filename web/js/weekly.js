@@ -69,8 +69,11 @@ export function expiryDate(cr) {
 
 const days = (a, b) => Math.round((a - b) / 86400000);
 
-/** 주간 요약의 내용. weekly.sections 와 같은 모양을 돌려준다. */
-export function sections(rows, today, expiryMonths = EXPIRY_MONTHS) {
+/** 주간 요약의 내용. weekly.sections 와 같은 모양을 돌려준다.
+ *  word — 제목에 쓰는 그 주의 이름('이번 주' / '다음 주')
+ *  weekOnly — 그 주의 출고·계약만(대시보드의 다음 주 카드 — 진행 중·만기는 주와 상관없다) */
+export function sections(rows, today, expiryMonths = EXPIRY_MONTHS,
+                         { word = "이번 주", weekOnly = false } = {}) {
   const [mon, sun] = weekRange(today);
   rows = (rows || []).filter(live);
   const secs = [];
@@ -85,10 +88,10 @@ export function sections(rows, today, expiryMonths = EXPIRY_MONTHS) {
   out.sort((a, b) => a[0] - b[0]);
   const feeSum = out.reduce((s, [, cr]) => s + fee(cr), 0);
   secs.push({
-    icon: "🚗", title: "이번 주 출고", color: "green",
+    icon: "🚗", title: `${word} 출고` + (word === "다음 주" ? " 예정" : ""), color: "green",
     items: out.map(([d, cr]) => ({ lead: label(d), text: get(cr, "customer"), sub: who(cr) })),
     note: out.length ? `수수료 합계 ${money(feeSum)}` : "",
-    empty: "이번 주 출고가 없습니다",
+    empty: `${word} 출고가 없습니다`,
   });
 
   // ---- 이번 주 계약 ----
@@ -99,10 +102,11 @@ export function sections(rows, today, expiryMonths = EXPIRY_MONTHS) {
   }
   made.sort((a, b) => a[0] - b[0]);
   secs.push({
-    icon: "📝", title: "이번 주 계약", color: "blue",
+    icon: "📝", title: `${word} 계약`, color: "blue",
     items: made.map(([d, cr]) => ({ lead: label(d), text: get(cr, "customer"), sub: who(cr) })),
-    empty: "이번 주 신규 계약이 없습니다",
+    empty: `${word} 신규 계약이 없습니다`,
   });
+  if (weekOnly) return secs;
 
   // ---- 진행 중 (발주했는데 아직 출고 안 됨) ----
   const open = [];
@@ -163,3 +167,26 @@ export function titleLine(today) {
   return `${mon.getFullYear()}년 ${p2(mon.getMonth() + 1)}월 ${p2(mon.getDate())}일`
        + ` ~ ${p2(sun.getMonth() + 1)}월 ${p2(sun.getDate())}일 주간 요약`;
 }
+
+/** 복사용 평문 — weekly.render_text 와 글자까지 같다(카톡에 붙여 넣는다). */
+export function renderText(title, secs) {
+  const lines = title ? [title, ""] : [];
+  for (const s of secs) {
+    const n = s.count !== undefined ? s.count : s.items.length;
+    lines.push(n ? `[${s.title}]  ${n}건` : `[${s.title}]`);
+    if (s.note) lines.push(`  ${s.note}`);
+    if (!s.items.length) lines.push(`  (${s.empty || "없음"})`);
+    for (const it of s.items) {
+      const lead = String(it.lead || "").trim();
+      const sub = String(it.sub || "").trim();
+      lines.push(`  · ${lead ? lead + "  " : ""}${it.text}` + (sub ? `  (${sub})` : ""));
+    }
+    if (s.more) lines.push(`  … 외 ${s.more}건`);
+    if (s.hint) lines.push(`  → ${s.hint}`);
+    lines.push("");
+  }
+  return lines.join("\n").replace(/\s+$/, "") + "\n";
+}
+
+/** "2026-09-14(월)" 꼴의 짧은 날짜 — 일정·할일을 요약 칸에 넣을 때 쓴다. */
+export { label as dayLabel };

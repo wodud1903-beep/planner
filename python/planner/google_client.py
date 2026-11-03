@@ -561,25 +561,32 @@ def granted_scopes(auth: GoogleAuth) -> list[str]:
     return ((r.json() or {}).get("scope", "") or "").split()
 
 
-def get_user_email(auth: GoogleAuth) -> str:
+def get_user_email(auth: GoogleAuth, detail: bool = False):
     """로그인 계정 이메일. 실패하면 "".
 
     이 값으로 계정별 데이터 폴더가 정해지므로, 실패하면 앱이 엉뚱한(대개 빈)
     폴더를 쓰게 된다. PC 부팅 직후에는 앱이 네트워크보다 먼저 뜨는 일이 흔하므로
     몇 초 간격으로 몇 번 더 시도한다.
+
+    detail=True 면 (이메일, 이유) — 이유는 "" 성공 · "auth" 권한 문제(기다려도 안 풀린다)
+    · "net" 인터넷·서버 문제(조금 뒤 다시 하면 된다).
     """
+    def out(email, why):
+        return (email, why) if detail else email
+
     for wait in (0, 2, 5):
         if wait:
             time.sleep(wait)
         try:
             r = _http().get(config.USERINFO_URL, headers=auth._headers(), timeout=15)
             if r.status_code == 200:
-                return (r.json().get("email") or "").strip().lower()
+                return out((r.json().get("email") or "").strip().lower(), "")
             if r.status_code in (401, 403):
-                return ""      # 권한 문제는 기다려도 안 풀린다
+                return out("", "auth")      # 권한 문제는 기다려도 안 풀린다
         except Exception:
-            pass
-    return ""
+            if not auth.is_connected():     # 갱신 토큰이 만료돼 지워졌다(invalid_grant)
+                return out("", "auth")
+    return out("", "net")
 
 
 # ---------------------------------------------------------------------------

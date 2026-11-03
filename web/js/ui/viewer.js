@@ -26,26 +26,76 @@ async function pdfjs() {
   return m;
 }
 
-/** 한 파일을 그려 넣는다. 되돌리는 함수를 돌려준다(blob 주소 정리용). */
-export function mount(box, { blob, name, isPdf, driveUrl }) {
+/** 한 파일을 그려 넣는다. 되돌리는 함수를 돌려준다(blob 주소 정리용).
+ *
+ *  nav = { pos, count, go(j) } 를 주면 같은 자료의 다른 첨부로 **닫지 않고** 넘긴다
+ *  (자료검색 첨부 — PC 일정관리기 v1.25.1 · 업무자료검색과 같게):
+ *    · ◀ ▶ 단추, 키보드 ← → (글 칸에 치는 중이면 건드리지 않는다), Esc 는 닫기
+ *    · 폰은 옆으로 밀어서 — 확대해 둔 동안은 그림을 옮기는 손짓이라 넘기지 않는다
+ *  blob 이 없으면 pending 일 때 '받는 중', 아니면 '받지 못함' 을 띄운다.
+ */
+export function mount(box, { blob, name, isPdf, driveUrl, nav, pending }) {
   const urls = [];
   const make = (b) => { const u = URL.createObjectURL(b); urls.push(u); return u; };
   let scale = 1;
+  const many = !!(nav && nav.count > 1);
 
   render(box, html`
     <div class="vhead">
-      <b>${name}</b>
+      <div class="vtitle"><b>${name}</b><button class="chip" id="vclose">닫기</button></div>
+      ${raw(many ? html`<span class="vnav">
+        <button class="chip" id="vprev" title="앞 첨부 (←)" aria-label="앞 첨부"
+          ${raw(nav.pos > 0 ? "" : "disabled")}>◀</button>
+        <span class="vpos" id="vpos">${nav.pos + 1} / ${nav.count}</span>
+        <button class="chip" id="vnext" title="다음 첨부 (→)" aria-label="다음 첨부"
+          ${raw(nav.pos < nav.count - 1 ? "" : "disabled")}>▶</button></span>` : "")}
       <button class="chip" id="vout" title="축소">−</button>
       <span class="vpct" id="vpct">100%</span>
       <button class="chip" id="vin" title="확대">＋</button>
       <a class="chip" href="${driveUrl}" target="_blank" rel="noopener">드라이브</a>
-      <button class="chip" id="vclose">닫기</button>
     </div>
     <div class="vscroll" id="vscroll"><div class="vpages" id="vpages"></div></div>`);
 
   const scroll = $("#vscroll", box);
   const pages = $("#vpages", box);
   const pct = $("#vpct", box);
+
+  // ---- 옆 첨부로 넘기기 ----
+  const go = (d) => {
+    const j = nav.pos + d;
+    if (j >= 0 && j < nav.count) nav.go(j);
+  };
+  let onKey = null;
+  if (many) {
+    $("#vprev", box).onclick = () => go(-1);
+    $("#vnext", box).onclick = () => go(1);
+    onKey = (e) => {
+      if (!box.isConnected) { document.removeEventListener("keydown", onKey); return; }
+      if (e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        go(e.key === "ArrowLeft" ? -1 : 1);
+      } else if (e.key === "Escape") {
+        const c = $("#vclose", box);
+        if (c) c.click();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    let sx = null, sy = 0;
+    scroll.addEventListener("touchstart", (e) => {
+      sx = e.touches.length === 1 && scale === 1 ? e.touches[0].clientX : null;
+      sy = e.touches.length === 1 ? e.touches[0].clientY : 0;
+    }, { passive: true });
+    scroll.addEventListener("touchend", (e) => {
+      if (sx === null || scale !== 1 || !e.changedTouches.length) { sx = null; return; }
+      const t = e.changedTouches[0];
+      const dx = t.clientX - sx, dy = t.clientY - sy;
+      sx = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
+    }, { passive: true });
+  }
 
   const applyScale = (next, anchor) => {
     const prev = scale;
@@ -84,7 +134,14 @@ export function mount(box, { blob, name, isPdf, driveUrl }) {
     step(e.deltaY < 0 ? 1 : -1, { x: e.clientX, y: e.clientY });
   }, { passive: false });
 
-  if (!isPdf) {
+  if (!blob) {
+    // 옆 첨부로 넘겼는데 아직 안 받았다(받는 중) / 받지 못했다
+    render(pages, pending
+      ? html`<p class="empty" id="vmsg">첨부를 받는 중입니다…</p>`
+      : html`<p class="empty">이 첨부를 받지 못했습니다.</p>
+        <p style="text-align:center"><a class="bigcopy" href="${driveUrl}"
+           target="_blank" rel="noopener">드라이브에서 열기</a></p>`);
+  } else if (!isPdf) {
     render(pages, html`<img class="vimg" src="${make(blob)}" alt="${name}">`);
   } else {
     render(pages, html`<p class="empty" id="vmsg">PDF 를 여는 중입니다…</p>`);
@@ -96,7 +153,10 @@ export function mount(box, { blob, name, isPdf, driveUrl }) {
   }
 
   return {
-    close() { for (const u of urls) URL.revokeObjectURL(u); },
+    close() {
+      if (onKey) document.removeEventListener("keydown", onKey);
+      for (const u of urls) URL.revokeObjectURL(u);
+    },
     onClose(fn) { $("#vclose", box).onclick = fn; },
   };
 }

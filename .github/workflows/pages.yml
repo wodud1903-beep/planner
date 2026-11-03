@@ -35,8 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 올릴 폴더 만들기 (Vercel 과 같은 스크립트)
-        run: bash tools/build_web.sh _site "$GITHUB_SHA"
+      # 옛 주소 — 새 주소(jyplanner.vercel.app)로 옮겨 주는 화면을 올린다
+      - name: 올릴 폴더 만들기 (Vercel 과 같은 스크립트 · 옛 주소용)
+        run: bash tools/build_web.sh _site "$GITHUB_SHA" pages
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

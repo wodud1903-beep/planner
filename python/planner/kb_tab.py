@@ -143,6 +143,7 @@ class KbView(QWidget):
         self._errs: dict = {}          # id → 받기 실패 이유
         self._want_copy: list = []     # 받기가 끝나면 복사할 첨부(Ctrl+C 를 먼저 누른 경우)
         self._want_open = None         # 받기가 끝나면 크게 볼 첨부
+        self._viewer = None            # 지금 열린 크게 보기 창
         self._sig_fetched.connect(self._on_fetched)
 
         v = QVBoxLayout(self)
@@ -366,6 +367,8 @@ class KbView(QWidget):
                                         + (f": {err}" if err else "."))
             else:
                 self.copy_attachments(want)
+        if getattr(self, "_viewer", None) is not None:
+            self._viewer.loaded(fid, err)    # 크게 보기 창이 그 첨부를 기다리고 있으면
         if self._want_open is not None and self._want_open.get("id") == fid:
             att, self._want_open = self._want_open, None
             if not err:
@@ -428,16 +431,20 @@ class KbView(QWidget):
             self.lbl_status.setText("첨부를 열지 못했습니다: " + str(e))
             return
         crashlog.note(f"크게 보기 {att.get('name', '')} ({kb_files.size_text(len(data))})")
-        dlg = AttachViewer(att, data, on_send=lambda a=att: self.copy_attachments([a]),
-                           parent=self)
+        # 이 자료의 첨부를 다 넘겨 준다 — 창을 닫지 않고 ← → 로 옆 첨부를 본다
+        dlg = AttachViewer(att, data, parent=self, atts=self.lst_att.atts(),
+                           fetch=self._fetch_async,
+                           on_send_att=lambda a: self.copy_attachments([a]))
         del data
         # ⚠️ exec() 로 띄운 창에 WA_DeleteOnClose 를 두면 Qt 가 exec() **안에서** 창을 바로
         #    지운다(파이썬이 아직 그 창을 쥐고 있는 채로). 대신 닫은 뒤 deleteLater —
         #    이벤트가 다 끝난 다음에 없앤다. 닫을 때 그림·PDF 는 done() 이 먼저 놓는다.
         dlg.setAttribute(Qt.WA_DeleteOnClose, False)
+        self._viewer = dlg              # 옆 첨부를 다 받으면 알려 주려고 잡아 둔다
         try:
             dlg.exec()
         finally:
+            self._viewer = None
             dlg.deleteLater()
 
     def save_attachment_as(self, att: dict) -> None:

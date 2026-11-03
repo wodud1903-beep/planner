@@ -6,7 +6,7 @@
 // PC 앱이 이미 같은 폴더에 planner_sync.json 으로 설정을 올리고 있다.
 // 그래서 **처음 폰에서 로그인하면 PC 에 넣어 둔 값을 그대로 물려받는다** —
 // 폰에서 따로 입력할 일이 없다.
-import { token, setOffline } from "./auth.js";
+import { token, setOffline, down, reached } from "./auth.js";
 import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 
 const FILES = "https://www.googleapis.com/drive/v3/files";
@@ -32,10 +32,16 @@ async function call(url, { method = "GET", body = null, raw = null, type = null 
   let r;
   try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
-    tok = await token({ interactive: false });
+    tok = await token({ fresh: true });   // 들고 있던 토큰은 버리고 새로
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   if (r.status === 403) {
     let m = "";
     try { m = ((await r.clone().json()).error || {}).message || ""; } catch (x) {}
@@ -111,5 +117,38 @@ export async function saveSettings(patch) {
   const cur = (await readJson(WEB_FILE)) || {};
   const next = { ...cur, ...patch, updatedAt: new Date().toISOString() };
   await writeJson(WEB_FILE, next);
+  return next;
+}
+
+// ---------------------------------------------------------------- PC 묶음 안의 파일
+// PC 앱의 동기화 묶음(planner_sync.json)은 {files: {이름: 글}, times: {이름: 시각}} 이다.
+// 폰에서 고객 메모를 남기면 그 안의 customer_notes.json 을 고치고 시각을 지금으로 둔다 —
+// PC 는 다음 동기화 때 '원격이 더 최신' 으로 보고 자기 것과 **합친다**(sync.py).
+// 시각 모양은 PC 와 같게: "2026-11-01T05:12:33Z" (글자로 크기를 견준다).
+const stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+/** PC 묶음 안 파일 하나(JSON). 없으면 null. */
+export async function readPcFile(name) {
+  const b = await readJson(PC_FILE);
+  const txt = b && b.files && b.files[name];
+  if (!txt) return null;
+  try { return JSON.parse(txt); } catch (e) { return null; }
+}
+
+/** PC 묶음 안 파일 하나를 고친다. fn(지금 값|null) → 새 값. 고친 값을 돌려준다.
+ *  ⚠️ 읽고 바로 쓴다(그 사이 몇백 ms). PC 가 그 틈에 올린 다른 파일을 덮지 않게
+ *     묶음은 통째로 다시 읽은 것에 이 파일만 바꿔 끼운다. */
+export async function updatePcFile(name, fn) {
+  const b = (await readJson(PC_FILE)) || {};
+  b.files = b.files && typeof b.files === "object" ? b.files : {};
+  b.times = b.times && typeof b.times === "object" ? b.times : {};
+  let cur = null;
+  try { cur = b.files[name] ? JSON.parse(b.files[name]) : null; } catch (e) { cur = null; }
+  const next = fn(cur);
+  b.files[name] = JSON.stringify(next, null, 2);
+  const now = stamp();
+  b.times[name] = now;
+  b.updatedAt = now;
+  await writeJson(PC_FILE, b);
   return next;
 }

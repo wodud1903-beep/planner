@@ -21,17 +21,21 @@ from html import escape as html_escape
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSystemTrayIcon,
-    QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout,
+    QHeaderView, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
+    QStackedWidget, QSystemTrayIcon, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from . import (
-    alarm_window, backup_dialog, changelog, config, contacts, crashlog, customer_docs,
+    alarm_window, auto_rules, backup_dialog, board_view, changelog, config, contacts, crashlog,
+    customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, navicons, searchcombo, sheets, sync, theme, updater,
-    weekly,
+    google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheet_cache, sheets, sync,
+    theme, updater, weekly,
 )
+from .auto_rules_dialog import AutoRulesDialog
+from .monthly_dialog import MonthlyDialog
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
 from .commission_tab import CommissionTab
@@ -142,10 +146,13 @@ class MainWindow(QMainWindow):
     sig_deliver_cal = Signal(str, str, str, str, str, str)
     # 방금 만든 출고 일정 (CalEvent) — 재조회 없이 목록에 얹는다
     sig_deliver_new = Signal(object)
-    sig_account = Signal(str)          # 로그인 계정 이메일 확인됨
+    sig_account = Signal(str, str)     # 로그인 계정 이메일 확인됨 (이메일, 실패 이유 "auth"|"net")
+    sig_sheet_done = Signal(int)       # 시트 읽기가 고객ID 까지 다 끝났다(그때의 epoch) — 자동 규칙
+    sig_monthly = Signal(str, str, bool)   # 월 마감 시트 쓰기 끝 (YYYY-MM, 오류, 저절로였나)
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
+    sig_news = Signal(object, str, bool)    # 오늘의 뉴스 (뉴스|None, 오류, 권한 모자람)
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
     sig_sheet_written = Signal(object, object, str)  # (임시행, 실제행번호|None, 오류)
@@ -226,6 +233,17 @@ class MainWindow(QMainWindow):
         self._want_maximized = self._saved_maximized()
         self._center_on_screen()
 
+        # 구글 연결 — 토큰은 계정 폴더가 아니라 **맨 위 폴더**에 있다(계정이 정해지기 전에 읽는다)
+        self.gauth = google_client.GoogleAuth(config.base_dir() / "google_token.json")
+        # 지난번에 확인한 계정의 폴더를 켜자마자 연다(v1.26) — 인터넷 확인을 기다리지 않고
+        # 어제 데이터·설정·시트가 바로 뜬다. 동기화는 확인이 끝난 뒤에만(_account_verified).
+        self._provisional_account = config.last_account() if self.gauth.is_connected() else ""
+        self._account_verified = False
+        self._acct_tries = 0
+        if self._provisional_account:
+            config.set_account(self._provisional_account)
+            self._account_checked = True     # 폴더는 정해졌다 — 자동 백업은 이 폴더로
+
         # 데이터
         self.todo_file = config.data_file("todos.json")
         self.alarm_file = config.data_file("pcalarms.json")
@@ -237,7 +255,6 @@ class MainWindow(QMainWindow):
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
         self.settings = AppSettings.load(self.cfg_file)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
-        self.gauth = google_client.GoogleAuth(config.data_file("google_token.json"))
         self.cal_events: list[google_client.CalEvent] = []
         self.gtasks: list[google_client.GoogleTask] = []
         self.week_dates: list[date | None] = []
@@ -261,6 +278,7 @@ class MainWindow(QMainWindow):
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
         self._summary_data: list = []    # 상단 현황 (테마 전환 시 다시 그린다)
         self._sheet_loaded = False       # 첫 시트 로딩 완료 여부(브리핑 대기용)
+        self._sheet_epoch = 0            # 계정·시트가 바뀔 때마다 +1 (늦게 온 결과 버리기)
         self._fired_cal_alarms: set = set()   # (일정, 분) — 중복 알람 방지
         # 안내멘트를 복사한 적 있는 고객 (시작 시 저장분을 읽어온다)
         self._ment_copied: set = self._load_ment_log()
@@ -268,6 +286,8 @@ class MainWindow(QMainWindow):
         self._notes: dict = self._load_notes()
         # 고객ID → {template, items[]} — 심사서류 체크리스트
         self._docs: dict = self._load_docs()
+        # 만기 재계약 상태(v1.26) — {고객열쇠|만기일: {s, at}}
+        self._renewals: dict = renewals.load()
 
         # 저장된 테마 반영
         theme.set_theme(getattr(self.settings, 'theme', '')
@@ -287,6 +307,7 @@ class MainWindow(QMainWindow):
         self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
         self.sig_update.connect(self._on_update_checked)
+        self.sig_news.connect(self._on_news)
         self.sig_write_done.connect(self._on_write_done)
         self.sig_sheet_rows.connect(self._on_sheet_rows)
         self.sig_sheet_written.connect(self._on_sheet_written)
@@ -295,6 +316,8 @@ class MainWindow(QMainWindow):
         self.sig_sheet_uids.connect(self._on_sheet_uids)
         self.sig_sheet_rates.connect(self._on_sheet_rates)
         self.sig_sheet_kb.connect(self._on_sheet_kb)
+        self.sig_sheet_done.connect(self._on_sheet_done)
+        self.sig_monthly.connect(self._on_monthly_written)
         self.sig_sync_done.connect(self._on_sync_done)
         self.sig_sheet_deleted_fail.connect(self._on_sheet_delete_fail)
 
@@ -324,6 +347,9 @@ class MainWindow(QMainWindow):
         self.update_google_status()
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
         self._last_seen_mtime = self._data_mtime()
+        # 고객 목록 저장본 — 켜자마자 지난번 목록을 그린다(새로 읽으면 바꾼다, v1.26)
+        self._show_sheet_cache()
+        self._apply_news_button()        # 기본 뉴스 문서를 못 여는 계정이면 단추를 숨긴다
 
         # 시작 시 자동 백업 + 연결 시 계정확인→동기화→불러오기
         self._startup_brief_pending = True
@@ -332,6 +358,10 @@ class MainWindow(QMainWindow):
             # 백업은 계정이 정해진 뒤에(_on_account_ready) 한다.
             # 여기서 하면 계정 폴더가 아직 안 정해져 엉뚱한 폴더를 백업한다.
             self._start_account_sync()               # 끝에서 fetch_all_async 호출
+            if self._provisional_account:
+                # 지난번 계정 폴더를 이미 열었다 — 일정·할일도 확인을 기다리지 않고 바로 받는다
+                self.lbl_account.setText(self._provisional_account)
+                QTimer.singleShot(0, self.fetch_all_async)
             # 네트워크가 아주 느려도 이 시점엔 무조건 표시
             QTimer.singleShot(15000, lambda: self._do_startup_brief(force=True))
         else:
@@ -464,33 +494,72 @@ class MainWindow(QMainWindow):
                 pass
 
     # ------------------------------------------------------------ 계정 / 동기화
-    def _start_account_sync(self):
+    # 인터넷이 늦게 붙을 때 계정 확인을 다시 하는 간격(초) — 켜 둔 동안 계속, 점점 길게
+    ACCOUNT_RETRY_SEC = (15, 30, 60, 120, 300)
+
+    def _start_account_sync(self, relogin: bool = False):
+        if relogin:
+            # 새로 로그인했다 — 새 계정을 확인하기 전에는 지금 폴더를 그 계정으로 올리면 안 된다
+            self._account_verified = False
+            self._acct_tries = 0
+        if getattr(self, "_acct_checking", False) or (self._account_verified and not relogin):
+            return
+        self._acct_checking = True
+
         def worker():
-            email = ""
+            email, why = "", "net"
             try:
-                email = google_client.get_user_email(self.gauth)
+                email, why = google_client.get_user_email(self.gauth, detail=True)
             except Exception:
-                email = ""
-            self.sig_account.emit(email)
+                email, why = "", "net"
+            self.sig_account.emit(email, why)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_account_ready(self, email: str):
+    def _on_account_ready(self, email: str, why: str = ""):
+        self._acct_checking = False
         # 계정 확인이 (성공이든 실패든) 끝났다 — 이제부터 틱 백업이 이 폴더를 본다
         self._account_checked = True
         if not email:
-            # 계정을 확인하지 못하면 어느 폴더가 이 사람 데이터인지 알 수 없다.
+            # 계정을 확인하지 못하면 어느 폴더가 이 사람 데이터인지 **확실히는** 모른다.
             # 이때 동기화를 강행하면 공용 폴더(대개 비어 있음)를 번들로 올려
-            # 다른 PC 의 데이터까지 지워버린다. 그래서 아예 건너뛴다.
-            self.lbl_account.setText("계정 확인 실패 — 동기화를 건너뜁니다")
-            self._backup(manual=False)
-            self.fetch_all_async()
+            # 다른 PC 의 데이터까지 지워버린다. 그래서 확인될 때까지 동기화하지 않는다.
+            # (지난번 계정 폴더는 이미 열어 두었다 — 보여 주기만 한다)
+            first = self._acct_tries == 0
+            if why == "net" and self.gauth.is_connected():
+                # PC 를 켠 직후처럼 인터넷이 아직 — 조금 뒤 다시(켜 둔 동안 계속)
+                wait = self.ACCOUNT_RETRY_SEC[min(self._acct_tries, len(self.ACCOUNT_RETRY_SEC) - 1)]
+                self._acct_tries += 1
+                who = self._provisional_account or config.current_account()
+                self.lbl_account.setText((who + " · " if who else "")
+                                         + "인터넷 연결을 기다리는 중(동기화는 연결 뒤에)")
+                QTimer.singleShot(wait * 1000, self._start_account_sync)
+            else:
+                self.lbl_account.setText("계정 확인 실패 — 동기화를 건너뜁니다")
+            if first:
+                self._backup(manual=False)
+                self.fetch_all_async()
             return
+        before = config.current_account()
+        self._acct_tries = 0
+        self._account_verified = True
         self.account_email = email
         config.set_account(email)
+        config.remember_account(email)
+        self._provisional_account = email
         self.lbl_account.setText(email)
         sync.migrate_legacy()
-        self.reload_data()   # 계정 폴더 기준으로 다시 로드
+        if before != email:
+            # 지난번 계정과 다르다(또는 처음) — 이 계정 폴더로 다시 읽는다.
+            # 들고 있던 시트 줄은 다른 계정 시트의 것일 수 있다 → 비우고 새로 읽는다.
+            if before:
+                self._reset_sheet_cache()
+                self._auto_load_started = False
+            self.reload_data()   # 계정 폴더 기준으로 다시 로드
+            self._show_sheet_cache()      # 그 계정의 저장해 둔 목록부터
+        elif hasattr(self, "tab_kb"):
+            self.tab_kb.set_account(email)   # 같은 폴더라 다시 읽지 않는다 — 계정만 알린다
         # 이제야 이 계정의 시트 설정을 알 수 있다 → 바로 불러오기 시도
+        # (지난번 계정 폴더로 켰으면 이미 불러오는 중이거나 다 읽었다 — 그대로 둔다)
         self._auto_load_sheet()
         self.fetch_rates_async()      # 공유 수당율(전용 시트)도 함께 받아온다
         self.fetch_kb_async()         # 공유 업무자료도 같은 시트에서 받아온다
@@ -514,6 +583,17 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self, config.APP_NAME,
                     "구글에 연결되어 있지 않습니다.\n[설정] 에서 Google 로그인을 먼저 해 주세요.")
+            return
+        if not self._account_verified:
+            # ⚠️ 계정을 아직 인터넷으로 확인하지 못했다 — 어느 계정 묶음에 올릴지 확실하지 않다.
+            #    예전엔 확인에 실패해도 10분마다 여기로 와서 공용 폴더를 올렸다.
+            if manual:
+                QMessageBox.information(
+                    self, config.APP_NAME,
+                    "아직 구글 계정을 확인하지 못했습니다(인터넷 연결을 기다리는 중).\n"
+                    "연결되면 저절로 동기화합니다.")
+            if not getattr(self, "_acct_checking", False):
+                self._start_account_sync()
             return
         if getattr(self, "_syncing", False):
             return                      # 앞의 동기화가 아직 도는 중
@@ -572,6 +652,7 @@ class MainWindow(QMainWindow):
         self._ment_copied = self._load_ment_log()
         self._notes = self._load_notes()
         self._docs = self._load_docs()
+        self._renewals = renewals.load()
         if hasattr(self, "tab_greet"):
             self.tab_greet.reload()      # 계정이 바뀌면 그 계정의 문구로
         if hasattr(self, "tab_kb"):
@@ -588,6 +669,7 @@ class MainWindow(QMainWindow):
         self.chk_autofetch.blockSignals(False)
         self.apply_theme()
         self._apply_hotkeys()
+        self._apply_news_button()
         self._last_seen_mtime = self._data_mtime()
 
     def _touch_sync(self):
@@ -631,6 +713,8 @@ class MainWindow(QMainWindow):
     def _do_sync_push(self):
         if not self.gauth.is_connected():
             return
+        if not self._account_verified:
+            return          # 확인되면 _on_synced 가 한 번 올린다(고친 시각은 이미 남겼다)
         def worker():
             try:
                 sync.push(self.gauth)
@@ -1046,6 +1130,17 @@ class MainWindow(QMainWindow):
             "오늘 브리핑과 이번 주 요약을 한 화면으로 — 켤 때 나오는 그 화면입니다")
         self.btn_weekly.clicked.connect(self.show_startup_screen)
         row.addWidget(self.btn_weekly)
+        # 제미나이가 매일 아침 구글 문서에 써 두는 뉴스 — 켤 때 받아 두므로 누르면 바로 뜬다
+        self.btn_news = QPushButton("오늘의 뉴스")
+        self.btn_news.setToolTip("매일 아침 새로 쓰이는 뉴스 문서를 봅니다([설정] 에서 문서를 바꿀 수 있습니다)")
+        self.btn_news.clicked.connect(self.show_news)
+        row.addWidget(self.btn_news)
+        # 월 마감 리포트(v1.26) — 금융사별·차종별 출고·수수료, 지난달 대비
+        self.btn_month = QPushButton("월 마감")
+        self.btn_month.setToolTip("한 달 출고·수수료를 금융사별·차종별로, 지난달과 견줘서 — [복사] 로 보고, "
+                                  "시트 '월마감' 탭에도 적습니다(매달 지난달 것은 저절로)")
+        self.btn_month.clicked.connect(self.open_monthly)
+        row.addWidget(self.btn_month)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
@@ -1263,6 +1358,32 @@ class MainWindow(QMainWindow):
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
+        # [목록] / [보드] — 보드는 플로우의 '업무 상태' 처럼 진행현황별 칸에 고객 카드를
+        # 놓고, 끌어 옮기면 시트 진행현황이 바뀐다(board_view)
+        self.btn_view_list = QPushButton("목록")
+        self.btn_view_board = QPushButton("보드")
+        self.btn_view_renew = QPushButton("재계약")
+        self._cust_view_group = QButtonGroup(self)
+        for b in (self.btn_view_list, self.btn_view_board, self.btn_view_renew):
+            b.setCheckable(True)
+            self._cust_view_group.addButton(b)
+            row.addWidget(b)
+        self.btn_view_board.setToolTip("진행현황별 칸에 고객 카드 — 끌어 옮기면 시트 진행현황이 바뀝니다")
+        self.btn_view_renew.setToolTip("만기가 다가오는 고객 — 상태(연락함·상담중·재계약…)와 안내 멘트 복사")
+        # [자동 규칙] — 진행현황·출고일·만기일이 되면 [내 할일] 이 저절로(v1.26)
+        self.btn_auto_rules = QPushButton("자동 규칙")
+        self.btn_auto_rules.setToolTip("'가결' 이 되면 승인 안내, 출고 전날 준비, 출고 다음 날 감사 인사, "
+                                       "만기 90·30일 전 재계약 안내 — 할일이 저절로 생깁니다")
+        self.btn_auto_rules.clicked.connect(self._open_auto_rules)
+        row.addWidget(self.btn_auto_rules)
+        for b in (self.btn_view_list, self.btn_view_board, self.btn_view_renew):
+            # 지금 보고 있는 쪽이 눌린 모양으로(왼쪽 메뉴의 고른 칸과 같은 색)
+            b.setStyleSheet(f"QPushButton:checked {{ background:{theme.c('select_bg')};"
+                            f" color:{theme.c('nav_sel_text')}; border-color:{theme.c('accent')};"
+                            " font-weight:bold; }")
+        self.btn_view_list.clicked.connect(lambda: self._set_cust_view("list"))
+        self.btn_view_board.clicked.connect(lambda: self._set_cust_view("board"))
+        self.btn_view_renew.clicked.connect(lambda: self._set_cust_view("renew"))
         # [주간 요약] 은 [대시보드] 의 [새로고침] 옆으로 옮겼다.
         # 브리핑과 한 화면이 되었으니 하루를 여는 자리에 있는 편이 맞다.
         row.addStretch()
@@ -1313,8 +1434,281 @@ class MainWindow(QMainWindow):
         # 표가 실제 크기를 갖는 시점은 탭을 처음 열 때다. 그 전에 계산한 폭은
         # 화면과 안 맞아 오른쪽에 흰 칸이 남는다 → 크기가 바뀔 때마다 다시 맞춘다.
         self.tbl_cust.viewport().installEventFilter(self)
-        v.addWidget(self.tbl_cust)
+        self.cust_stack = QStackedWidget()
+        self.cust_stack.addWidget(self.tbl_cust)
+        self.board = board_view.BoardView()
+        self.board.moved.connect(self._move_customer_status)
+        self.board.opened.connect(self._open_customer_from_board)
+        self.cust_stack.addWidget(self.board)
+        self.renew = renewal_view.RenewalView()
+        self.renew.set_months(getattr(self.settings, "renew_months", 4))
+        self.renew.status_changed.connect(self._on_renew_status)
+        self.renew.copy_requested.connect(self._on_renew_copy)
+        self.renew.opened.connect(self._open_customer_from_board)
+        self.renew.months_changed.connect(self._on_renew_months)
+        self.cust_stack.addWidget(self.renew)
+        v.addWidget(self.cust_stack)
+        self._set_cust_view(getattr(self.settings, "cust_view", "list"), save=False)
         return w
+
+    # ---- 고객 진행 보드 ----
+    def _set_cust_view(self, view: str, save: bool = True):
+        if view not in ("list", "board", "renew"):
+            view = "list"
+        board_on = view == "board"
+        self.btn_view_board.setChecked(board_on)
+        self.btn_view_renew.setChecked(view == "renew")
+        self.btn_view_list.setChecked(view == "list")
+        self.cust_stack.setCurrentWidget(
+            self.board if board_on else self.renew if view == "renew" else self.tbl_cust)
+        if board_on:
+            self.board.set_rows(getattr(self, "_cust_shown", self.sheet_rows))
+        if view == "renew":
+            self._paint_renewals()
+        if save and getattr(self.settings, "cust_view", "list") != view:
+            self.settings.cust_view = view
+            self._save_settings_quiet()
+
+    def _save_settings_quiet(self):
+        try:
+            self.settings.save(self.cfg_file)
+        except Exception:
+            pass
+
+    # ---- 만기 재계약 목록(v1.26, renewals.py · renewal_view.py) ----
+    def _paint_renewals(self):
+        if hasattr(self, "renew"):
+            self.renew.set_data(self.sheet_rows, self._renewals, date.today())
+
+    def _save_renewals(self) -> bool:
+        try:
+            renewals.save(self._renewals)
+        except OSError as e:
+            QMessageBox.warning(self, config.APP_NAME, "재계약 상태를 저장하지 못했습니다:\n" + str(e))
+            return False
+        self._touch_sync()               # 다른 PC · 폰 알림(이번 달 만기)에도 반영
+        return True
+
+    def _on_renew_status(self, cr, d, s: str):
+        renewals.set_status(self._renewals, cr, d, s)
+        self._save_renewals()
+        # ⚠️ 상태 칸(콤보)의 신호 안에서 표를 다시 그리면 그 콤보를 지우게 된다 — 한 박자 뒤에
+        QTimer.singleShot(0, self._paint_renewals)
+        if s in renewals.CLOSED:
+            QTimer.singleShot(0, self._run_auto_rules)   # 남은 만기 할일(D-30 등)을 거둔다
+
+    def _renew_template(self) -> str:
+        """[멘트 복사] 의 글 — 자동 규칙의 첫 만기 규칙 멘트(고쳐 쓰셨으면 그것)."""
+        for r in auto_rules.rules_of(self.settings):
+            if r["kind"] == "expiry" and (r.get("ment") or "").strip():
+                return r["ment"]
+        return auto_rules.RENEW_MENT
+
+    def _on_renew_copy(self, cr, d):
+        QApplication.clipboard().setText(renewals.ment(cr, d, self._renew_template()))
+        if renewals.status(self._renewals, cr, d) == "미연락":
+            renewals.set_status(self._renewals, cr, d, "연락함")
+            self._save_renewals()
+            QTimer.singleShot(0, self._paint_renewals)
+        self.sig_toast.emit(config.APP_NAME, f"{auto_rules.short_name(cr)} 고객님 재계약 안내 멘트를 "
+                                             "복사했습니다 — 카카오톡에 붙여 넣으세요.")
+
+    def _on_renew_months(self, months: int):
+        self.settings.renew_months = int(months)
+        self._save_settings_quiet()
+        self._paint_renewals()
+
+    # ---- 진행현황 자동 규칙(v1.26, auto_rules.py) ----
+    def _on_sheet_done(self, epoch: int):
+        if epoch == self._sheet_epoch:
+            self._run_auto_rules()
+            self._maybe_auto_monthly()
+
+    # ---- 월 마감 리포트(v1.26, monthly.py) ----
+    def open_monthly(self):
+        dlg = MonthlyDialog(self.sheet_rows, date.today(),
+                            on_write=(lambda y, m: self._write_monthly_async(y, m, auto=False))
+                            if self.gauth.is_connected() and self.settings.sheet_on else None,
+                            parent=self)
+        self._monthly_dlg = dlg
+        try:
+            dlg.exec()
+        finally:
+            self._monthly_dlg = None
+
+    def _write_monthly_async(self, y: int, m: int, auto: bool = False):
+        sid = (self.settings.sheet_id or "").strip()
+        sname = (self.settings.sheet_name or "").strip()
+        if not sid or not self.gauth.is_connected():
+            return
+        rep = monthly.report(list(self.sheet_rows), y, m)
+        values = monthly.sheet_values(rep, date.today(), sname)
+        ym = f"{y}-{m:02d}"
+
+        def worker():
+            err = ""
+            try:
+                sheets.write_tab(self.gauth, sid, monthly.TAB, values, guard="마감 리포트")
+            except Exception as e:
+                err = str(e).splitlines()[0][:160] if str(e) else "알 수 없는 오류"
+            self.sig_monthly.emit(ym, err, auto)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _maybe_auto_monthly(self):
+        """매달 1일 이후 처음 새로 읽은 시트로 지난달 마감을 '월마감' 탭에 적는다(한 달에 한 번)."""
+        if not getattr(self.settings, "monthly_on", True) or not self._sheet_loaded or not self.sheet_rows:
+            return
+        if not (self.settings.sheet_on and self._account_verified and self.gauth.is_connected()):
+            return                      # 계정을 확인하기 전에는 남의 시트에 쓰지 않는다
+        t = date.today()
+        y, m = monthly.prev_month(t.year, t.month)
+        ym = f"{y}-{m:02d}"
+        if (self.settings.monthly_last or "") >= ym or getattr(self, "_monthly_busy", "") == ym:
+            return
+        self._monthly_busy = ym
+        self._write_monthly_async(y, m, auto=True)
+
+    def _on_monthly_written(self, ym: str, err: str, auto: bool):
+        self._monthly_busy = ""
+        dlg = getattr(self, "_monthly_dlg", None)
+        if dlg is not None:
+            dlg.written(err)
+        if err:
+            if auto:
+                crashlog.note(f"월 마감 자동 작성 실패({ym}): {err}")
+            return
+        if auto:
+            self.settings.monthly_last = ym
+            self._save_settings()
+            y, m = ym.split("-")
+            self.sig_toast.emit("월 마감", f"{int(y)}년 {int(m)}월 마감 리포트를 시트 '{monthly.TAB}' 탭에 "
+                                         "적었습니다 — 대시보드 [월 마감] 에서 복사할 수 있습니다.")
+
+    def _run_auto_rules(self) -> int:
+        """새로 읽은 시트로 규칙을 돌려 [내 할일] 을 만든다·옮긴다·거둔다. 바꾼 개수를 돌려준다.
+
+        ⚠️ 저장해 둔 목록(sheet_cache)으로는 돌리지 않는다 — 어제 것을 보고 할일을 만들면 안 된다.
+        """
+        if not getattr(self.settings, "auto_on", True) or not self._sheet_loaded or not self.sheet_rows:
+            return 0
+        try:
+            done = auto_rules.load_done()
+            seen = auto_rules.load_seen()
+            acts, seen2 = auto_rules.plan(
+                self.sheet_rows, auto_rules.rules_of(self.settings), done, seen, date.today(),
+                closed=lambda cr, d: renewals.closed(self._renewals, cr, d))
+            auto_rules.save_seen(seen2)
+        except Exception as e:                       # 규칙이 탈나도 앱은 계속
+            crashlog.note(f"자동 규칙 계산 실패: {e}")
+            return 0
+        if not acts:
+            return 0
+        ts = auto_rules.now_stamp()
+
+        def find(old):
+            old = old or {}
+            title = old.get("title") or ""
+            if not title:
+                return None
+            same = [t for t in self.todos if not t.done and t.title == title]
+            for t in same:
+                if t.run_date.isoformat() == old.get("date"):
+                    return t
+            return same[0] if same else None       # 날짜를 손으로 바꿨어도 같은 할일
+
+        added, moved, removed = [], 0, 0
+        for a in acts:
+            op, key = a["op"], a["key"]
+            if op == "mark":
+                done[key] = {"skip": 1, "date": a["date"].isoformat(), "base": a.get("base", ""), "at": ts}
+                continue
+            if op == "remove":
+                t = find(a.get("old"))
+                if t is not None:
+                    self.todos.remove(t)
+                    removed += 1
+                rec = dict(a.get("old") or {})
+                rec.update({"gone": 1, "at": ts})
+                if not a.get("keep"):
+                    rec["base"] = ""                # 출고일을 다시 정하면 새로 만든다
+                done[key] = rec
+                continue
+            t = find(a.get("old")) if op == "move" else None
+            if t is not None:
+                t.run_date, t.title, t.ment = a["date"], a["title"], a["ment"]
+                t.last_alarm = None
+                moved += 1
+            else:
+                t = TodoItem(title=a["title"], run_date=a["date"], run_time=self.settings.follow_time,
+                             has_time=True, alarm=self.settings.follow_alarm, repeats=False,
+                             ment=a["ment"])
+                self.todos.append(t)
+                added.append(t)
+            done[key] = {"title": a["title"], "date": a["date"].isoformat(),
+                         "base": a.get("base", ""), "at": ts}
+        try:
+            auto_rules.save_done(done)
+        except OSError:
+            pass
+        if added or moved or removed:
+            self._save_todos()
+            self.refresh_todo()
+            parts = []
+            if added:
+                parts.append(f"{len(added)}건 추가(" + ", ".join(t.title for t in added[:3])
+                             + (" …" if len(added) > 3 else "") + ")")
+            if moved:
+                parts.append(f"{moved}건 날짜 옮김")
+            if removed:
+                parts.append(f"{removed}건 거둠")
+            self.sig_toast.emit("자동 규칙", "[내 할일] " + " · ".join(parts))
+        self._touch_sync()
+        return len(added) + moved + removed
+
+    def _open_auto_rules(self):
+        got = AutoRulesDialog.run(auto_rules.rules_of(self.settings),
+                                  getattr(self.settings, "auto_on", True), self)
+        if got is None:
+            return
+        self.settings.auto_rules, self.settings.auto_on = got
+        self._save_settings()
+        self._run_auto_rules()
+
+    def _open_customer_from_board(self, rownum: int):
+        """보드 카드를 두 번 누르면 — 표에서 그 고객을 골라 [수정] 을 연다."""
+        for r in range(self.tbl_cust.rowCount()):
+            it = self.tbl_cust.item(r, 0)
+            if it is not None and it.data(Qt.UserRole) == rownum:
+                self.tbl_cust.setCurrentCell(r, 1)
+                self.on_customer_edit()
+                return
+
+    def _move_customer_status(self, rownum: int, status: str):
+        """보드에서 카드를 옮겼다 → 그 고객의 진행현황(L열)만 바꾼다.
+
+        화면 먼저 바꾸고, 시트에는 '고객 고치기' 와 같은 길로 쓴다 — 쓰기 직전에
+        그 고객이 아직 그 줄에 있는지(고객ID·이름) 확인한다. 못 쓰면 되돌린다.
+        """
+        cr = next((c for c in self.sheet_rows if c.row == rownum), None)
+        if cr is None or cr in self._sheet_pending or not self._sheet_ready():
+            return
+        old = dict(cr.values)
+        if (old.get("status") or "").strip() == status:
+            return
+        cr.values = {**old, "status": status}
+        self.refresh_customers()
+        self.refresh_dashboard()
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+
+        def worker():
+            try:
+                cr.row = sheets.update_row(self.gauth, sid, sname, cr.row, {"status": status},
+                                           name=old.get("customer", ""), uid=cr.uid)
+                self.sig_sheet_written.emit(None, cr.row, "")
+            except Exception as e:
+                cr.values = old         # 롤백 (화면은 핸들러에서 다시 그린다)
+                self.sig_sheet_written.emit(None, None, str(e))
+        threading.Thread(target=worker, daemon=True).start()
 
     def eventFilter(self, obj, ev):
         if (ev.type() == QEvent.Resize
@@ -1575,7 +1969,9 @@ class MainWindow(QMainWindow):
         # 설정에 적어 둔 이름('고객관리')이 아니라 기본값으로 조회해 오류창이 떴다.
         # 게다가 _auto_load_started 가 켜져 버려, 계정이 확인된 뒤 다시 불러오지도
         # 못했다. 구글에 연결돼 있으면 계정 확인을 기다린다.
-        if self.gauth.is_connected() and not getattr(self, "account_email", ""):
+        # (v1.26: 지난번에 확인한 계정 폴더로 켰으면 그 설정이 맞다 — 기다리지 않는다)
+        if (self.gauth.is_connected() and not getattr(self, "account_email", "")
+                and not getattr(self, "_provisional_account", "")):
             if tries < 12:
                 QTimer.singleShot(1500, lambda: self._auto_load_sheet(tries + 1))
             return
@@ -1593,24 +1989,32 @@ class MainWindow(QMainWindow):
         self.btn_cust_load.setEnabled(False)
         self.lbl_cust.setText("고객관리 시트를 불러오는 중…")
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+        # 읽는 사이 계정·시트가 바뀌면(_reset_sheet_cache) 늦게 온 결과는 버린다 —
+        # 지난번 계정 폴더로 켰다가 다른 계정으로 확인된 경우 등(v1.26)
+        epoch = self._sheet_epoch
+        live = lambda: epoch == self._sheet_epoch          # noqa: E731
 
         def worker():
             try:
                 # 1) 목록 + 요약 (요청 1회, 분량 큰 안내멘트는 제외)
                 _hdr, rows, summary = sheets.read_rows(self.gauth, sid, sname)
+                raw = sheets.take_raw(sid, sname)
                 last = rows[-1].row if rows else _hdr
-                self.sig_sheet_rows.emit((rows, summary, _hdr), last, "")
+                if not live():
+                    return
+                self.sig_sheet_rows.emit((rows, summary, _hdr, epoch), last, "")
+                ments = docs = uids = None
                 # 2) 안내멘트는 목록을 띄운 뒤 뒤이어 채운다
                 try:
                     ments = sheets.read_ments(self.gauth, sid, sname)
-                    if ments:
+                    if ments and live():
                         self.sig_sheet_ments.emit(ments)
                 except Exception:
                     pass
                 # 3) 견적서/계약서(S열)는 수식 그대로 읽어야 '이미지 있음' 을 안다
                 try:
                     docs = sheets.read_docs(self.gauth, sid, sname)
-                    if docs:
+                    if docs and live():
                         self.sig_sheet_docs.emit(docs)
                 except Exception:
                     pass
@@ -1618,13 +2022,54 @@ class MainWindow(QMainWindow):
                 #    목록 조회에 묶으면 U열 없는 시트에서 목록까지 통째로 실패한다.
                 try:
                     uids = sheets.read_uids(self.gauth, sid, sname)
-                    if uids:
+                    if uids and live():
                         self.sig_sheet_uids.emit(uids)
                 except Exception:
                     pass
+                # 5) 다음에 켤 때 바로 보이게 받은 그대로 둔다(v1.26 — sheet_cache)
+                if raw and live():
+                    sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs)
+                # 6) 고객ID 까지 다 왔다 — 자동 규칙은 이때 본다(ID 가 오기 전엔 고객 열쇠가 다르다)
+                if live():
+                    self.sig_sheet_done.emit(epoch)
             except Exception as e:
-                self.sig_sheet_rows.emit(None, 0, str(e))
+                if live():
+                    self.sig_sheet_rows.emit(None, 0, str(e))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_sheet_cache(self) -> bool:
+        """저장해 둔 고객 목록을 바로 그린다(새로 읽기 전까지). 그렸으면 True."""
+        if self._sheet_loaded or self.sheet_rows or not self.settings.sheet_on:
+            return False
+        sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
+        if not sid:
+            return False
+        c = sheet_cache.load(sid, sname)
+        if not c:
+            return False
+        try:
+            hdr, rows, summary = sheets.parse_rows(c["left"], c["right"], sname)
+        except Exception:
+            return False
+        if not rows:
+            return False
+        self.sheet_rows = rows
+        self._sheet_last_row = rows[-1].row
+        self._sheet_header_row = hdr
+        self.sheet_choices = sheets.choices(rows)
+        self._sheet_cached_at = c.get("saved", "")
+        for cr in rows:                      # 늦게 오던 칸들도 같이 둔 것을 채운다
+            if c["ments"].get(cr.row):
+                cr.ment = c["ments"][cr.row]
+            if c["docs"].get(cr.row):
+                cr.values["doc"] = c["docs"][cr.row]
+            if c["uids"].get(cr.row):
+                cr.uid = c["uids"][cr.row]
+        self._sheet_cache_note = "새로 불러오는 중…"
+        self._show_summary(summary)
+        self.refresh_customers()
+        self.refresh_dashboard()
+        return True
 
     def _on_sheet_ments(self, ments: dict):
         """안내멘트가 뒤늦게 도착 → 해당 행에 채우고 복사 버튼을 살린다."""
@@ -1639,6 +2084,8 @@ class MainWindow(QMainWindow):
 
     def _reset_sheet_cache(self):
         """다른 시트/탭으로 바뀌었을 때 — 캐시한 행 정보를 모두 버린다."""
+        self._sheet_epoch += 1          # 읽는 중이던 앞 시트의 결과는 버린다
+        self.btn_cust_load.setEnabled(True)   # (버린 결과는 단추를 되살리지 않는다)
         self.sheet_rows = []
         self._sheet_pending = []
         self._sheet_last_row = 0
@@ -1758,10 +2205,21 @@ class MainWindow(QMainWindow):
     def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
         if payload is None:
+            if getattr(self, "_sheet_cached_at", "") and not self._sheet_loaded:
+                # 저장해 둔 목록을 보여 주는 중 — 창을 띄우지 않고 조금 뒤 다시 읽는다
+                # (PC 를 켠 직후 인터넷이 늦게 붙는 일이 흔하다)
+                self._sheet_cache_note = "시트를 읽지 못해 잠시 뒤 다시 읽습니다"
+                self.refresh_customers()
+                QTimer.singleShot(90 * 1000, lambda: (not self._sheet_loaded)
+                                  and self.load_sheet_async(manual=False))
+                return
             self.lbl_cust.setText("불러오기 실패")
             QMessageBox.warning(self, config.APP_NAME, "시트를 불러오지 못했습니다:\n" + err)
             return
-        rows, summary, hdr = payload
+        if len(payload) > 3 and payload[3] != self._sheet_epoch:
+            return                      # 읽는 사이 계정·시트가 바뀌었다 — 앞 시트의 결과
+        rows, summary, hdr = payload[:3]
+        self._sheet_cached_at = ""       # 이제 새로 읽은 것
         self.sheet_rows = rows
         self._sheet_last_row = last_row
         self._sheet_header_row = hdr
@@ -1847,12 +2305,14 @@ class MainWindow(QMainWindow):
         self.tbl_cust.setRowCount(0)
         rows = self._visible_sheet_rows()
         shown = 0
+        shown_rows = []
         for cr in rows:
             if q:
                 hay = " ".join([cr.get("customer"), cr.get("model"),
                                 cr.get("finance")]).lower()
                 if q not in hay:
                     continue
+            shown_rows.append(cr)
             r = self.tbl_cust.rowCount()
             self.tbl_cust.insertRow(r)
             pend = cr in self._sheet_pending
@@ -1925,10 +2385,19 @@ class MainWindow(QMainWindow):
                         cell.setForeground(fg)
             shown += 1
         self._fit_cust_columns()
+        # 보드도 같은 고객(검색 결과)으로 — 등록 중인 줄은 아직 옮길 수 없어 뺀다
+        self._cust_shown = [c for c in shown_rows if c not in self._sheet_pending]
+        if hasattr(self, "board") and self.cust_stack.currentWidget() is self.board:
+            self.board.set_rows(self._cust_shown)
+        if hasattr(self, "renew") and self.cust_stack.currentWidget() is self.renew:
+            self._paint_renewals()
         total = len(rows)
+        cached = getattr(self, "_sheet_cached_at", "") if not self._sheet_loaded else ""
         self.lbl_cust.setText(
             f"고객 {total}건" + (f" · 검색 {shown}건" if q else "")
-            + f"   (시트: {self.settings.sheet_name})")
+            + f"   (시트: {self.settings.sheet_name})"
+            + (f"   · 저장해 둔 목록({cached}) — "
+               + getattr(self, "_sheet_cache_note", "새로 불러오는 중…") if cached else ""))
 
     # '내용' 열은 창 폭에 따라 늘었다 줄었다 한다. 이보다 좁아지면 아무 글자도
     # 안 보여 차라리 가로 스크롤이 낫다.
@@ -2524,7 +2993,8 @@ class MainWindow(QMainWindow):
         # 계정 확인 → 계정 폴더 정하기 → 동기화 → 일정/할일·고객 목록.
         # _start_account_sync 가 그 줄을 통째로 밟는다(끝에서 fetch_all_async).
         self._reset_sheet_cache()
-        self._start_account_sync()
+        self._auto_load_started = False
+        self._start_account_sync(relogin=True)
 
     def _on_autofetch_toggled(self, on: bool):
         self.settings.auto_fetch = on
@@ -2546,6 +3016,7 @@ class MainWindow(QMainWindow):
         if accepted:
             self._save_settings()
             self._apply_hotkeys()
+            self._apply_news_button()              # 뉴스 문서를 바꿨을 수 있다
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
             now_theme = (getattr(self.settings, "theme", "")
                          or ("dark" if self.settings.dark_mode else "light"))
@@ -2635,6 +3106,142 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # ------------------------------------------------------------ 오늘의 뉴스
+    NEWS_MIN_GAP_SEC = 600          # 저절로 받을 때는 10분에 한 번까지(누르면 늘 새로)
+
+    def _news_doc_id(self) -> str:
+        return news.doc_id_from(getattr(self.settings, "news_doc", "") or "")
+
+    def fetch_news_async(self, force: bool = False):
+        """뉴스 문서를 뒤에서 받는다. 끝나면 sig_news → _on_news."""
+        doc_id = self._news_doc_id()
+        if not doc_id or not self.gauth.is_connected():
+            return
+        if getattr(self, "_news_busy", False):
+            return
+        import time
+        now = time.monotonic()
+        if not force and now - getattr(self, "_news_tried", -1e9) < self.NEWS_MIN_GAP_SEC:
+            return
+        self._news_tried = now
+        self._news_busy = True
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.set_busy(True)
+
+        def worker():
+            try:
+                n = news.fetch(self.gauth, doc_id)
+                n["docId"] = doc_id
+                news.save_cache(doc_id, n)
+                self.sig_news.emit(n, "", False)
+            except news.NeedScope as e:
+                self.sig_news.emit(None, str(e), True)
+            except news.NoAccess as e:
+                self.sig_news.emit(None, self.NEWS_NOACCESS + str(e), False)
+            except Exception as e:
+                self.sig_news.emit(None, str(e) or "뉴스를 받지 못했습니다.", False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    NEWS_NOACCESS = "\x00noaccess\x00"   # (일꾼 → 화면) 이 계정으로는 열 수 없는 문서
+    NEWS_STATE = "news_state.json"       # 계정 폴더 — 열 수 없던 기본 문서(동기화 안 함)
+
+    def _news_default(self) -> bool:
+        """설정에서 문서를 따로 정하지 않고 기본(지점장) 문서를 쓰는가."""
+        return self._news_doc_id() == news.doc_id_from(config.DEF_NEWS_DOC)
+
+    def _news_hidden_doc(self) -> str:
+        try:
+            return str(json.loads(config.data_file(self.NEWS_STATE).read_text(encoding="utf-8"))
+                       .get("hidden") or "")
+        except Exception:
+            return ""
+
+    def _set_news_hidden(self, doc_id: str) -> None:
+        try:
+            config.atomic_write(config.data_file(self.NEWS_STATE), json.dumps({"hidden": doc_id}))
+        except OSError:
+            pass
+
+    def _apply_news_button(self) -> None:
+        """기본 문서를 이 계정이 열 수 없으면(직원 PC) [오늘의 뉴스] 를 숨긴다(v1.26).
+        예전엔 직원 PC 에서 눌러도 '문서를 열 수 없습니다' 만 떴다."""
+        if hasattr(self, "btn_news"):
+            hide = self._news_default() and self._news_hidden_doc() == self._news_doc_id()
+            self.btn_news.setVisible(not hide)
+
+    def _on_news(self, n, err: str, need_scope: bool):
+        self._news_busy = False
+        noaccess = err.startswith(self.NEWS_NOACCESS)
+        err = err.replace(self.NEWS_NOACCESS, "")
+        if n:
+            self._news = n
+            if self._news_hidden_doc():
+                self._set_news_hidden("")        # 이제 열린다 — 다시 보인다
+        elif noaccess and self._news_default():
+            self._set_news_hidden(self._news_doc_id())
+        self._apply_news_button()
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is None or not dlg.isVisible():
+            return
+        dlg.set_busy(False)
+        if n:
+            dlg.show_news(n)
+        else:
+            dlg.set_error(err, need_scope)
+
+    def show_news(self):
+        """[오늘의 뉴스] — 받아 둔 것을 바로 띄우고, 새로 받아 바꿔 끼운다."""
+        doc_id = self._news_doc_id()
+        if not doc_id:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "[설정] → '오늘의 뉴스' 에 구글 문서 주소를 넣어 주세요.")
+            return
+        cached = getattr(self, "_news", None)
+        if not cached or cached.get("docId") != doc_id:
+            cached = news.load_cache(doc_id)
+            if cached:
+                cached["docId"] = doc_id
+            self._news = cached
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is None or dlg._doc_id != doc_id:
+            if dlg is not None:
+                dlg.deleteLater()
+            dlg = news_dialog.NewsDialog(doc_id, self)
+            dlg.refresh_requested.connect(lambda: self.fetch_news_async(force=True))
+            dlg.relogin_requested.connect(self._relogin_for_news)
+            self._news_dlg = dlg
+        dlg.show_news(cached)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        if not self.gauth.is_connected():
+            dlg.set_error("먼저 [Google 로그인] 을 해 주세요.")
+            return
+        self.fetch_news_async(force=True)
+        if getattr(self, "_news_busy", False):
+            dlg.set_busy(True)
+
+    def _relogin_for_news(self):
+        """뉴스 문서 권한이 모자랄 때 — 기본 권한(문서 읽기 포함)으로 다시 로그인."""
+        dlg = getattr(self, "_news_dlg", None)
+        if dlg is not None:
+            dlg.set_busy(True)
+            dlg.lbl_state.setText("브라우저에서 로그인해 주세요…")
+        extra = ([config.SCOPE_DRIVE_READ]
+                 if getattr(self.settings, "drive_api_on", True) else [])
+        self._news_tried = -1e9          # 로그인 뒤 새로고침이 끝나면 바로 받는다
+
+        def worker():
+            try:
+                self.gauth.authorize(extra_scopes=extra)
+                self.sig_google_login.emit(True, "")
+            except Exception as e:
+                self.sig_google_login.emit(False, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def fetch_tasks_async(self):
         """'할일'만 다시 받아온다(캘린더 조회 없이).
 
@@ -2659,6 +3266,7 @@ class MainWindow(QMainWindow):
     def _on_fetch_done(self):
         # 캘린더 조회가 실패해도 새로고침 버튼이 잠긴 채 남지 않도록 여기서도 푼다
         self.btn_fetch.setEnabled(True)
+        self.fetch_news_async()             # 오늘의 뉴스도 미리 받아 둔다(누르면 바로 뜨게)
         # 시작 브리핑이 대기 중이면 데이터가 채워진 지금 표시
         self._do_startup_brief()
 
@@ -3435,6 +4043,8 @@ class MainWindow(QMainWindow):
         if getattr(self, "_today_shown", None) != today:     # 자정이 지나면 제목줄 날짜도
             self._today_shown = today
             self._paint_today()
+            # 날짜 규칙(출고 전날·만기 D-30 …)은 날이 바뀌면 다시 본다(v1.26)
+            QTimer.singleShot(0, self._run_auto_rules)
             self.refresh_dashboard()        # 오늘·이번 주·다음 주가 바뀐다
         self._paint_page_title()            # 인사말은 시간대 따라(바뀔 때만 다시 쓴다)
         if self.last_backup != today and self._tick_backup_ok():

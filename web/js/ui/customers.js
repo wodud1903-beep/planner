@@ -16,6 +16,7 @@ import * as viewer from "./viewer.js";
 import * as weeklyui from "./weekly.js";
 import { DEF_SHEET_ID, DEF_SHEET_NAME } from "../config.js";
 import { setBody, markTab, paintState } from "./chrome.js";
+import * as feed from "./feed.js";
 import * as router from "../router.js";
 import { attach } from "./split.js";
 
@@ -103,6 +104,8 @@ function setRows(rows, at) {
      r.values.status, r.values.note].filter(Boolean).join(" ")));
   const cur = router.current();
   if (cur && cur.path.startsWith("/customers")) { paintChips(); paintList(); }
+  // 홈(대시보드)의 이번 주·다음 주 요약도 이 줄로 계산한다
+  dispatchEvent(new CustomEvent("planner:rows"));
 }
 
 // ---------------------------------------------------------------- 화면
@@ -124,6 +127,8 @@ export async function screen(m) {
           <ul class="list" id="clist"></ul>
           <p class="synced" id="csynced"></p>
           <p class="synced">
+            <button class="linky" id="cboard">진행 보드</button>
+            <span style="color:var(--line)"> · </span>
             <button class="linky" id="cweek">주간 요약</button>
             <span style="color:var(--line)"> · </span>
             <button class="linky" id="cconf">시트 설정</button>
@@ -145,6 +150,7 @@ export async function screen(m) {
 
   $("#cconf").onclick = () => settingsScreen();
   $("#cweek").onclick = () => router.go("/customers/week");
+  $("#cboard").onclick = () => router.go("/customers/board");
 
   paintChips();
   paintList();
@@ -277,6 +283,9 @@ export async function showDetail(rowNo) {
     <p style="margin:0 0 14px">
       <button class="chip" id="cedit">고치기</button></p>
 
+    <p class="kbhead">이력 · 메모</p>
+    <div id="cfeed"></div>
+
     <p class="kbhead">견적서 / 계약서</p>
     <div id="cdoc"><p class="empty">확인 중…</p></div>
 
@@ -289,6 +298,7 @@ export async function showDetail(rowNo) {
   if (ed) ed.onclick = () => router.go(`/customers/${r.row}/edit`);
 
   loadDoc(r.row);
+  feed.paint($("#cfeed"), r, { sheetId: sheetId(), tab: sheetTab() });
 
   // 멘트는 여기서만 받는다 — 목록에 넣으면 한 건당 20줄이라 폰에서 제일 큰 낭비다.
   const key = "ment:" + sheetId() + ":" + r.row;
@@ -601,6 +611,29 @@ async function save(r, before) {
 }
 
 const MOVED = "moved";
+
+/** 진행현황만 바꾼다(진행 보드에서 카드를 옮길 때). 고치기와 같은 확인을 거친다 —
+ *  쓰기 직전에 그 줄을 다시 읽어, 다른 고객이 와 있으면 멈추고 그 사이 바뀌었으면 묻는다.
+ *  썼으면 true, 사람이 [취소] 했으면 false. */
+export async function setStatus(rowNo, status) {
+  const r = _rows.find((x) => x.row === rowNo);
+  if (!r) throw new Error("그 고객을 찾지 못했습니다. 고객 목록을 새로 불러와 주세요.");
+  const before = { ...r.values };
+  const patch = { status };
+  if (String(before.status || "").trim() === status) return true;
+  const clash = await conflicts(r, before, patch);
+  if (clash === MOVED) {
+    throw new Error("시트가 그 사이 바뀌어 이 고객의 줄이 달라졌습니다. 고객 목록을 새로 불러와 주세요.");
+  }
+  if (clash.length && !confirm("그 사이 다른 곳에서 이 고객의 진행현황을 고쳤습니다.\n덮어쓸까요?")) {
+    return false;
+  }
+  await sheets.writeCells(sheetId(), sheetTab(), r.row, patch, WRITABLE, MONEY_KEYS);
+  r.values = { ...r.values, ...patch };
+  await store.put("data", "customers", { rows: _rows, at: _syncedAt });
+  setRows(_rows, _syncedAt);
+  return true;
+}
 
 /** 내가 고치려는 칸 중, 불러온 뒤 시트에서 바뀐 것들.
  *  그 줄에 이제 다른 고객이 있으면(고객명이 다르면) MOVED. */

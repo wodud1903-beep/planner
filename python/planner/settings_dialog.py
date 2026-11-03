@@ -237,6 +237,18 @@ class SettingsDialog(QDialog):
         self._refresh_install_hint()
         root.addWidget(gb_files)
 
+        # ---- 오늘의 뉴스 ----
+        gb_n = QGroupBox("오늘의 뉴스 (대시보드 [오늘의 뉴스] 단추)")
+        nfl = QFormLayout(gb_n)
+        self.ed_news = QLineEdit()
+        self.ed_news.setPlaceholderText("구글 문서 주소 — https://docs.google.com/document/d/…")
+        nfl.addRow("뉴스 문서", self.ed_news)
+        lbl_n = QLabel("제미나이 등이 매일 새로 써 주는 구글 문서를 대시보드에서 바로 봅니다.\n"
+                       "켤 때 미리 받아 두고, 누르면 새로 받아 바꿔 끼웁니다.")
+        lbl_n.setStyleSheet(f"color:{theme.c('subtext')};")
+        nfl.addRow(lbl_n)
+        root.addWidget(gb_n)
+
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
         vl = QHBoxLayout(gb_v)
@@ -365,6 +377,7 @@ class SettingsDialog(QDialog):
         self.chk_files_drive.setChecked(s.drive_api_on)
         self.sp_expiry.setValue(s.expiry_months)
         self.chk_weekly.setChecked(s.weekly_on)
+        self.ed_news.setText(s.news_doc)
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
         self.cmb_theme.setCurrentIndex(i if i >= 0 else 0)
@@ -429,6 +442,7 @@ class SettingsDialog(QDialog):
         s.drive_api_on = self.chk_files_drive.isChecked()
         s.expiry_months = self.sp_expiry.value()
         s.weekly_on = self.chk_weekly.isChecked()
+        s.news_doc = self.ed_news.text().strip()
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
         s.dark_mode = theme.THEMES.get(s.theme, (None, None, False))[2]

@@ -1,0 +1,10 @@
+{
+  "name": "jyplanner",
+  "private": true,
+  "description": "일정관리기 웹앱의 서버 함수(api/) 의존성 — 웹 화면(web/)은 빌드 없이 그대로 올라간다",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@vercel/blob": "2.8.2",
+    "web-push": "3.6.7"
+  }
+}

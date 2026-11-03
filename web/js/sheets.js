@@ -1,6 +1,6 @@
 // 구글 시트 읽기 — planner/sheets.py 의 읽기 부분만 옮긴 것.
 import { SHEETS_API } from "./config.js";
-import { token, setOffline, STATE } from "./auth.js";
+import { token, setOffline, down, reached, STATE } from "./auth.js";
 import { digitsOnly } from "./fmt.js";
 
 export class NeedSignIn extends Error {}
@@ -10,8 +10,15 @@ export class Offline extends Error {}
 export class BadRange extends Error {}
 /** 토큰에 그 권한이 안 붙어 있을 때. **다시 로그인하면 풀린다** —
  *  '계정이 다르다'(WrongAccount) 와 처방이 정반대라 반드시 갈라야 한다.
- *  권한 목록을 늘리면 기존 토큰에는 새 권한이 없어서 꼭 한 번은 여기로 온다. */
-export class NeedScope extends Error {}
+ *  권한 목록을 늘리면 기존 토큰에는 새 권한이 없어서 꼭 한 번은 여기로 온다.
+ *  만들어지는 순간 화면 틀(chrome.js)에 알려 [다시 로그인] 을 띄운다 — 네 군데
+ *  (시트·드라이브·일정·앱 설정)에서 던지므로 한 곳에서 알린다. */
+export class NeedScope extends Error {
+  constructor(m) {
+    super(m);
+    try { dispatchEvent(new CustomEvent("planner:needscope")); } catch (e) { /* 검사(node) */ }
+  }
+}
 
 /** 구글이 돌려준 진짜 메시지를 뽑는다.
  *
@@ -45,10 +52,16 @@ async function call(url, body = null) {
   let r;
   try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
-    tok = await token({ interactive: false });
+    tok = await token({ fresh: true });   // 들고 있던 토큰은 버리고 새로
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   // 403 은 토큰 문제가 아니라 '이 계정으로는 못 연다' 는 뜻이다. 다시 로그인해도 소용없다.
   if (r.status === 403) {
     const m = await detail(r);
@@ -164,6 +177,32 @@ export async function readMent(sheetId, tab, row) {
     if (e instanceof NeedSignIn || e instanceof WrongAccount) throw e;
     return "";
   }
+}
+
+// ---------------------------------------------------------------- 고객ID (U열)
+// 메모·이력을 붙들어 두는 열쇠. 순번이나 이름을 고쳐도 끊기지 않는다(PC 와 같은 열).
+export const COL_UID = 20;            // U
+
+/** 그 줄의 고객ID와 고객명(B열) — 고객명은 '같은 고객인지' 확인용. */
+export async function readUid(sheetId, tab, row) {
+  const [b, u] = await batch(sheetId, tab, [`B${row}:B${row}`, `U${row}:U${row}`]);
+  return { name: String(((b || [])[0] || [])[0] || "").trim(),
+           uid: String(((u || [])[0] || [])[0] || "").trim() };
+}
+
+/** 고객ID를 새로 적는다(그 칸이 비어 있을 때만 부른다). */
+export async function writeUid(sheetId, tab, row, uid) {
+  await call(`${SHEETS_API}/${sheetId}/values:batchUpdate`, {
+    valueInputOption: "RAW",
+    data: [{ range: `'${tab}'!U${row}`, values: [[uid]] }],
+  });
+}
+
+/** PC 의 sheets.new_uid 와 같은 모양(16글자 16진수). */
+export function newUid() {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return [...a].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 /** 이 스프레드시트에 실제로 있는 탭 이름들. 탭 이름이 틀렸을 때 골라 쓰게 한다. */

@@ -24,6 +24,36 @@ from PySide6.QtWidgets import (
 from . import config, sheets, theme
 
 
+# ---------------------------------------------------------------------------
+# 메모 지우기 — '지웠다' 표식을 남긴다
+#
+# 메모 파일은 동기화 때 양쪽 목록을 **합친다**(다른 PC·폰에서 단 메모를 잃지 않게).
+# 그래서 그냥 빼면 다른 쪽에 남아 있던 같은 메모가 합쳐지며 되살아났다.
+# 지울 때는 {"date", "text", "del": 1} 표식을 더하고, 표식과 같은 메모는 안 보인다.
+# 표식도 합쳐지므로 PC·폰 어디서 지워도 모두에게서 사라진다.
+# ---------------------------------------------------------------------------
+def _same(a: dict, b: dict) -> bool:
+    return (str(a.get("date", "")) == str(b.get("date", ""))
+            and str(a.get("text", "")) == str(b.get("text", "")))
+
+
+def visible_notes(notes: list) -> list[tuple[int, dict]]:
+    """보일 메모 [(원래 자리, 메모)] — 지운 표식과 그 짝은 뺀다."""
+    notes = [n for n in (notes or []) if isinstance(n, dict)]
+    dead = [n for n in notes if n.get("del")]
+    return [(i, n) for i, n in enumerate(notes or [])
+            if isinstance(n, dict) and not n.get("del")
+            and not any(_same(n, d) for d in dead)]
+
+
+def delete_note(notes: list, idx: int) -> list:
+    """idx 의 메모를 지운 목록(표식 포함)."""
+    out = list(notes or [])
+    n = out.pop(idx)
+    out.append({"date": n.get("date", ""), "text": n.get("text", ""), "del": 1})
+    return out
+
+
 def _auto_events(cr, ment_sent: bool) -> list[tuple]:
     """시트에서 파생되는 이력. [(날짜|None, 분류, 내용)]
 
@@ -124,9 +154,11 @@ class CustomerHistoryDialog(QDialog):
         # 지나온 기록을 가리므로 목록에서 빼 두었다가 마지막 줄에 붙인다.
         expiry = [e for e in auto if e[1] == "만기"]
         items = [e for e in auto if e[1] != "만기"]
-        for i, n in enumerate(self._notes):
+        for i, n in visible_notes(self._notes):
             d = sheets.parse_date(n.get("date", "")) or None
-            items.append((d, "메모", n.get("text", ""), i))
+            # 폰에서 남긴 메모는 표시를 붙인다(밖에서 통화하고 바로 적은 것)
+            text = n.get("text", "") + ("  📱" if n.get("via") == "web" else "")
+            items.append((d, "메모", text, i))
 
         # 날짜 없는 항목은 맨 아래로
         items.sort(key=lambda t: (t[0] is not None, t[0] or date.min), reverse=True)
@@ -152,7 +184,9 @@ class CustomerHistoryDialog(QDialog):
         t = self.ed.text().strip()
         if not t:
             return
-        self._notes.append({"date": date.today().strftime("%Y-%m-%d"), "text": t})
+        from datetime import datetime
+        self._notes.append({"date": date.today().strftime("%Y-%m-%d"), "text": t,
+                            "time": datetime.now().strftime("%H:%M")})
         self.ed.clear()
         self._refresh()
 
@@ -166,7 +200,7 @@ class CustomerHistoryDialog(QDialog):
         if QMessageBox.question(self, config.APP_NAME,
                                 "이 메모를 지울까요?") != QMessageBox.Yes:
             return
-        del self._notes[idx]
+        self._notes = delete_note(self._notes, idx)
         self._refresh()
 
     def notes(self) -> list:

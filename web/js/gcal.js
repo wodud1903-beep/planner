@@ -1,6 +1,6 @@
 // 일정(캘린더)과 할일(Tasks) — planner/google_client.py 의 조회 부분을 옮긴 것.
 import { CALENDAR_API, TASKS_API } from "./config.js";
-import { token, setOffline } from "./auth.js";
+import { token, setOffline, down, reached } from "./auth.js";
 import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 
 async function call(url, { method = "GET", body = null } = {}) {
@@ -17,10 +17,16 @@ async function call(url, { method = "GET", body = null } = {}) {
   let r;
   try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   if (r.status === 401) {
-    tok = await token({ interactive: false });
+    tok = await token({ fresh: true });   // 들고 있던 토큰은 버리고 새로
     if (!tok) throw new NeedSignIn();
     try { r = await go(); } catch (e) { setOffline(true); throw new Offline(); }
   }
+  // 닿았다 — '오프라인' 을 걷는다. 5xx 는 구글이 잠깐 탈난 것 → 안내하고 조금 뒤 다시(boot.js)
+  if (r.status >= 500) {
+    down("google");
+    throw new Error(`구글 서버가 잠시 응답하지 않습니다 (HTTP ${r.status}) — 잠시 뒤 다시 불러옵니다.`);
+  }
+  reached();
   if (r.status === 403) {
     let m = "";
     try { m = ((await r.clone().json()).error || {}).message || ""; } catch (x) {}
@@ -135,4 +141,29 @@ export function completeTask(listId, taskId) {
   return call(`${TASKS_API}/lists/${encodeURIComponent(listId)}`
             + `/tasks/${encodeURIComponent(taskId)}`,
               { method: "PATCH", body: { status: "completed" } });
+}
+
+/** 할일 추가 — 구글 할일의 기본 목록에 넣는다(PC 앱의 구글 할일에도 그대로 뜬다).
+ *  due 는 Date(날짜만 본다) 또는 null. */
+export function addTask(title, due = null) {
+  const body = { title: String(title || "").trim() };
+  // 구글 할일의 기한은 날짜만 쓴다 — 시각은 버려지므로 그날 0시(UTC)로 보낸다
+  if (due) body.due = `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T00:00:00.000Z`;
+  return call(`${TASKS_API}/lists/%40default/tasks`, { method: "POST", body });
+}
+
+/** 할일 고치기 — 제목·메모·기한(Date|null). 기한을 비우면 지운다. */
+export function updateTask(listId, taskId, { title, notes = "", due = null }) {
+  const body = { title: String(title || "").trim(), notes: String(notes || "") };
+  body.due = due
+    ? `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T00:00:00.000Z`
+    : null;
+  return call(`${TASKS_API}/lists/${encodeURIComponent(listId)}`
+            + `/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body });
+}
+
+/** 할일 지우기. */
+export function deleteTask(listId, taskId) {
+  return call(`${TASKS_API}/lists/${encodeURIComponent(listId)}`
+            + `/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }

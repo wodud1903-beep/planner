@@ -195,10 +195,19 @@ const canShareFiles = () => {
 
 async function blobOf(f) {
   if (_att.blobs.has(f.id)) return _att.blobs.get(f.id);
-  let b = null;
-  try { b = await drive.download(f.id); } catch (e) { b = null; }
-  if (b) _att.blobs.set(f.id, b);
-  return b;
+  // 받는 중이면 그 받기를 같이 기다린다(작은 그림을 받는 사이 [크게] 를 눌러도 두 번 받지 않게)
+  const att = _att;
+  if (!att.wait) att.wait = new Map();
+  if (att.wait.has(f.id)) return att.wait.get(f.id);
+  const p = (async () => {
+    let b = null;
+    try { b = await drive.download(f.id); } catch (e) { b = null; }
+    if (b) att.blobs.set(f.id, b);
+    att.wait.delete(f.id);
+    return b;
+  })();
+  att.wait.set(f.id, p);
+  return p;
 }
 
 function paintAttachments(files) {
@@ -213,7 +222,9 @@ function paintAttachments(files) {
     if (!card) return;
     card.onclick = (e) => {
       const act = e.target.closest("[data-act]");
-      if (act) onAttach(f, act.dataset.act, act);
+      if (!act) return;
+      if (act.dataset.act === "open") openViewer(files, i, true);
+      else onAttach(f, act.dataset.act, act);
     };
     if (drive.isPdf(f.name)) return;
     const img = $(".attimg", card);
@@ -229,19 +240,47 @@ function paintAttachments(files) {
   });
 }
 
+// [크게] — 확대 보기. 같은 자료의 첨부가 여럿이면 그 안에서 ◀ ▶ · ← → · 밀기로 넘긴다
+// (예전엔 닫고 다음 카드의 [크게] 를 다시 눌러야 했다).
+let _navSeq = 0;
+
+function mountAt(files, i, blob, pending) {
+  const box = $("#kbview");
+  if (!box) return;
+  const f = files[i];
+  if (_att.view) _att.view.close();
+  _att.view = viewer.mount(box, {
+    blob, pending, name: f.name, isPdf: drive.isPdf(f.name), driveUrl: drive.openInDrive(f.id),
+    nav: { pos: i, count: files.length, go: (j) => openViewer(files, j, false) },
+  });
+  _att.view.onClose(() => {
+    _navSeq++;                       // 받는 중이던 것이 뒤늦게 다시 열지 않게
+    if (_att.view) _att.view.close();
+    _att.view = null;
+    render(box, "");
+  });
+}
+
+async function openViewer(files, i, first) {
+  const f = files[i];
+  if (!f || !$("#kbview")) return;
+  const seq = ++_navSeq;
+  const gen = _att;                  // 다른 자료로 옮기면 _att 가 새것이 된다
+  let b = _att.blobs.get(f.id) || null;
+  if (!b) {
+    if (!first) mountAt(files, i, null, true);      // '받는 중' — 다 받으면 그 자리에 뜬다
+    b = await blobOf(f);
+    if (seq !== _navSeq || gen !== _att) return;   // 그사이 다른 첨부·자료로 옮겼다
+  }
+  if (!b && first) { window.open(drive.openInDrive(f.id), "_blank", "noopener"); return; }
+  mountAt(files, i, b, false);
+  if (first) $("#kbview").scrollIntoView({ block: "start", behavior: "smooth" });
+  // 옆 첨부를 미리 받아 둔다(그림은 카드가 이미 받는다 — PDF 도 기다리지 않게)
+  for (const j of [i + 1, i - 1]) if (files[j]) blobOf(files[j]);
+}
+
 async function onAttach(f, act, btn) {
   const b = await blobOf(f);
-  if (act === "open") {
-    if (!b) { window.open(drive.openInDrive(f.id), "_blank", "noopener"); return; }
-    const box = $("#kbview");
-    if (!box) return;
-    if (_att.view) _att.view.close();
-    _att.view = viewer.mount(box, { blob: b, name: f.name, isPdf: drive.isPdf(f.name),
-                                    driveUrl: drive.openInDrive(f.id) });
-    _att.view.onClose(() => { _att.view.close(); _att.view = null; render(box, ""); });
-    box.scrollIntoView({ block: "start", behavior: "smooth" });
-    return;
-  }
   // 보내기 — 폰의 공유 창으로(카카오톡을 고르면 그 대화로 간다)
   if (!b) {
     btn.textContent = "받지 못함";

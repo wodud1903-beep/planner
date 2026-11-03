@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from . import config
+from . import config, tombs
 
 FILE = "greetings.json"
 
@@ -58,9 +58,12 @@ def load() -> list:
                 name = str(o.get("name", "")).strip()
                 if not name:
                     continue
-                out.append({"name": name,
-                            "after": str(o.get("after", "")),
-                            "miss": str(o.get("miss", ""))})
+                g = {"name": name,
+                     "after": str(o.get("after", "")),
+                     "miss": str(o.get("miss", ""))}
+                if o.get("at"):
+                    g["at"] = str(o["at"])     # 고친 시각 — 지운 표식과 견준다(tombs)
+                out.append(g)
             if out:
                 return out
     except Exception:
@@ -68,10 +71,23 @@ def load() -> list:
     return defaults()
 
 
+def _saved() -> list:
+    """지금 파일에 든 그대로(없으면 빈 목록 — 기본 문구는 '저장한 것' 이 아니다)."""
+    try:
+        raw = json.loads(config.data_file(FILE).read_text(encoding="utf-8"))
+        return [o for o in raw if isinstance(o, dict)] if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
 def save(items: list) -> None:
     data = [{"name": (it.get("name") or "").strip(),
              "after": it.get("after") or "",
-             "miss": it.get("miss") or ""}
+             "miss": it.get("miss") or "",
+             **({"at": it["at"]} if it.get("at") else {})}
             for it in (items or []) if (it.get("name") or "").strip()]
+    # 지운(이름을 바꾼) 채널은 표식을 남기고, 새로 생기거나 고친 채널엔 시각을 붙인다 —
+    # 다른 PC 에 남은 옛 채널이 동기화로 되살아나지 않게(v1.26)
+    data = tombs.stamp(FILE, _saved(), data)
     config.atomic_write(config.data_file(FILE),
                         json.dumps(data, ensure_ascii=False, indent=2))

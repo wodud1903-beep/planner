@@ -5,6 +5,9 @@ import { bodyToHtml } from "../kb.js";
 import { setBody, markTab } from "./chrome.js";
 import * as auth from "../auth.js";
 import * as theme from "../theme.js";
+import * as store from "../store.js";
+import { icon } from "./icons.js";
+import * as push from "../push.js";
 
 let _secs = null;
 
@@ -41,20 +44,36 @@ export async function screen() {
   markTab("/about");
   const v = await version();
   setBody(html`
-    <div class="pane">
-      <h2 style="margin:6px 0">일정관리기</h2>
-      <p style="color:var(--sub);margin:0 0 4px">
-        버전 ${v.version || "?"} · 빌드 ${(v.build || "?").slice(0, 7)}</p>
-      <p style="color:var(--sub);margin:0 0 14px" id="whoami">
-        ${auth.email() ? "로그인: " + auth.email() : "로그인하지 않음"}</p>
-      <p><button class="chip" id="relogin">계정 바꾸기</button>
-         <button class="chip" id="diag">화면 정보</button></p>
-      <p id="diagout" style="color:var(--sub);font-size:13px"></p>
-      <h3 style="margin:18px 0 6px">테마</h3>
-      <div class="cats" id="themes">${raw(theme.THEMES.map(([k, t]) => html`
-        <button data-theme-pick="${k}" aria-pressed="${String(k === theme.current())}">${t}</button>`).join(""))}</div>
-      <h3 style="margin:18px 0 6px">변경 이력</h3>
-      <div id="clog" class="empty">불러오는 중…</div>
+    <div class="pane narrow">
+      <section class="card">
+        <div class="appid">${raw(icon("logo", 34, "logo big"))}
+          <div><h2>일정관리기</h2>
+            <p class="s">버전 ${v.version || "?"} · 빌드 ${(v.build || "?").slice(0, 7)}</p></div>
+        </div>
+        <p class="s" id="whoami">
+          ${auth.email() ? "로그인: " + auth.email() : "로그인하지 않음"}</p>
+        <p class="btnrow"><button class="chip" id="relogin">계정 바꾸기</button>
+           ${raw(auth.email() ? '<button class="chip" id="signout">로그아웃</button>' : "")}
+           <button class="chip" id="diag">화면 정보</button></p>
+        <p id="diagout" class="s"></p>
+        <p class="s"><a href="./privacy.html">개인정보처리방침</a> ·
+           <a href="./terms.html">서비스 약관</a></p>
+      </section>
+      <section class="card" id="pushcard">
+        <h3 class="cardtitle">아침 브리핑 알림</h3>
+        <p class="s">매일 아침(8:50~10시 사이) 오늘 일정 · 할일 · 출고 · 뉴스와 내일 출고 · 안내멘트 안 보낸 고객 · 30일 넘게 멈춘 건 · 이번 달 만기를 이 폰으로 알려 드려요. 금요일 17시쯤에는 이번 주 실적(주간 보고)도 옵니다.</p>
+        <p class="btnrow" id="pushbtns"></p>
+        <p class="s" id="pushmsg"></p>
+      </section>
+      <section class="card">
+        <h3 class="cardtitle">테마</h3>
+        <div class="cats" id="themes">${raw(theme.THEMES.map(([k, t]) => html`
+          <button data-theme-pick="${k}" aria-pressed="${String(k === theme.current())}">${t}</button>`).join(""))}</div>
+      </section>
+      <section class="card">
+        <h3 class="cardtitle">변경 이력</h3>
+        <div id="clog" class="empty">불러오는 중…</div>
+      </section>
     </div>`);
 
   for (const b of $$("#themes button")) {
@@ -64,14 +83,25 @@ export async function screen() {
         x.setAttribute("aria-pressed", String(x === b));
     };
   }
-  // 계정 바꾸기는 계정 고르는 화면을 띄운다(그냥 다시 로그인은 같은 계정으로 바로 닫힌다)
-  $("#relogin").onclick = () =>
-    auth.signIn({ prompt: "select_account" }).then(() => location.reload());
+  // 계정 바꾸기는 지금 로그인을 지우고 계정 고르는 화면을 띄운다
+  // (그냥 다시 로그인은 같은 계정으로 바로 닫힌다)
+  $("#relogin").onclick = () => auth.switchAccount().then((t) => { if (t) location.reload(); });
+  const out = $("#signout");
+  if (out) {
+    // 남의 폰·공용 PC 에서 썼을 때 — 로그인도, 이 기기에 받아 둔 자료도 지운다
+    out.onclick = async () => {
+      if (!confirm("이 기기에서 로그아웃할까요?\n받아 둔 고객·일정 자료도 이 기기에서 지웁니다.")) return;
+      await auth.signOut();
+      try { await store.wipe(); await store.del("meta", "account"); } catch (e) { /* 그래도 나간다 */ }
+      location.reload();
+    };
+  }
+  paintPush();
   $("#diag").onclick = () => {
     // 폴드7의 실제 CSS 크기를 확인할 때 쓴다 — 짐작하지 않으려고 둔다
     render($("#diagout"), html`화면 ${innerWidth} × ${innerHeight} ·
       배율 ${devicePixelRatio} · ${matchMedia("(display-mode: standalone)").matches
-        ? "설치형으로 실행 중" : "브라우저에서 실행 중"}`);
+        ? "설치형으로 실행 중" : "브라우저에서 실행 중"} · 로그인 방식 ${auth.mode() || "?"}`);
   };
 
   const secs = await load();
@@ -83,12 +113,48 @@ export async function screen() {
   box.className = "";
   render(box, secs.map((s, i) => html`
     <details ${raw(i === 0 ? "open" : "")}>
-      <summary style="padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer">
+      <summary>
         <b>v${s.version}</b> ${s.title}
         <span style="color:var(--sub);font-size:12px">${s.date}</span>
       </summary>
       ${raw(bodyToHtml(s.body))}
     </details>`).join(""));
+}
+
+// 아침 브리핑 알림 — 켜기/끄기/지금 받아 보기
+async function paintPush() {
+  const btns = $("#pushbtns");
+  const msg = $("#pushmsg");
+  if (!btns) return;
+  const why = push.support();
+  if (why) { render(msg, why); return; }
+  const on = !!(await push.current());
+  render(btns, on
+    ? '<button class="chip" id="pushtest">지금 한 번 받아 보기</button>'
+      + '<button class="chip bad" id="pushoff">알림 끄기</button>'
+    : '<button class="primary" id="pushon">알림 켜기</button>');
+  render(msg, on ? "켜져 있어요. 이 폰으로 매일 아침 한 번 옵니다." : "");
+  const say = (t) => render(msg, html`${t}`);
+  const b1 = $("#pushon");
+  if (b1) b1.onclick = async () => {
+    b1.disabled = true;
+    say("켜는 중…");
+    let err = "";
+    try { err = await push.enable(); } catch (e) { err = "알림을 켜지 못했어요."; }
+    if (err) { b1.disabled = false; say(err); return; }
+    await paintPush();
+    say("켰어요! 내일 아침부터 옵니다. [지금 한 번 받아 보기] 로 확인해 보세요.");
+  };
+  const b2 = $("#pushoff");
+  if (b2) b2.onclick = async () => { await push.disable(); await paintPush(); say("껐어요."); };
+  const b3 = $("#pushtest");
+  if (b3) b3.onclick = async () => {
+    b3.disabled = true;
+    say("오늘 브리핑을 만드는 중…");
+    const r = await push.test().catch(() => ({ error: "보내지 못했어요." }));
+    b3.disabled = false;
+    say(r.error || "보냈어요. 알림이 곧 뜹니다.");
+  };
 }
 
 export async function version() {

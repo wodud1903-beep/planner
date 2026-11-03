@@ -8,6 +8,10 @@ import { createRequire } from "node:module";
 //    CommonJS 의 require 는 NODE_PATH 를 보므로 이 길로 부른다.
 //    (저장소에 npm 으로 깔아도 그대로 동작한다 — 그쪽이 먼저 잡힌다)
 const { chromium } = createRequire(import.meta.url)("playwright");
+// ⚠️ 검사는 늘 한국 시각으로 — 날짜를 만드는 이 검사(노드)와 브라우저의 '오늘' 이 달라지면
+//    (UTC 에서 돌리면 한국 자정~오전 9시 사이) 날짜 검사가 하루씩 어긋나 빨개졌다.
+//    브라우저는 이 프로세스의 TZ 를 물려받는다(따로 timezoneId 를 준 곳은 그대로).
+process.env.TZ = "Asia/Seoul";
 import { serve } from "./serve.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -62,6 +66,17 @@ ok("모든 파일이 프리캐시에 올라 있다", notPre.length === 0, notPre
 // ---------------------------------------------------------------- 브라우저
 const s = await serve(WEB, { port: 8123, build: "A" });
 const browser = await chromium.launch();
+// 물리지 않은 구글 API 는 빈 답(200 {})으로 — 진짜 구글로 나가면 가짜 토큰이라 401 이
+// 오고, 앱은 401 을 받으면 **토큰을 버리고** 새로 받으므로(그래야 맞다) 검사가 엉뚱하게
+// 로그아웃된다. 맨 먼저 걸어 두므로 각 절이 건 것이 늘 이긴다(나중에 건 것이 먼저).
+{
+  const open = browser.newContext.bind(browser);
+  browser.newContext = async (o) => {
+    const c = await open(o);
+    await c.route(/^https:\/\/[a-z]+\.googleapis\.com\//, (r) => r.fulfill({ json: {} }));
+    return c;
+  };
+}
 
 // 앱이 뜨기 전에 IndexedDB 에 미리 넣어 둔다(시트 주소·서류 폴더·계정).
 // 기본 시트 주소를 없앴으므로 검사도 '정해 둔 상태' 를 만들어야 한다.
@@ -101,7 +116,9 @@ ok("주소만 치면 일정 화면이다",
    (await p.locator('nav.tabs a[data-tab="/agenda"][aria-current="page"]').count()) === 1,
    await p.evaluate(() => location.hash));
 ok("제목이 나온다", (await p.locator("header h1").textContent()).includes("일정관리기"));
-const b404 = reqs.filter((u) => u.startsWith("http://localhost") && !u.includes("gsi"));
+// 로그인 서버(/api/)는 검사 서버에서 일부러 503(설정 전)으로 답한다 — 파일이 아니다
+const b404 = reqs.filter((u) => u.startsWith("http://localhost") && !u.includes("gsi")
+                              && !u.includes("/api/"));
 const statuses = await Promise.all(b404.map(async (u) => (await p.request.get(u)).status()));
 ok("불러온 파일이 전부 200 이다",
    statuses.every((x) => x === 200), statuses.filter((x) => x !== 200).join(","));
@@ -151,9 +168,9 @@ console.log("\n[4-3] 테마 — 정보 탭에서 고른다");
   ok("테마 단추 네 개", (await pT.locator("#themes button").count()) === 4);
   ok("처음엔 자동이 골라져 있다",
      (await pT.locator('#themes button[data-theme-pick=""][aria-pressed="true"]').count()) === 1);
-  ok("자동 + 폰 다크 → 다크 색", (await bg()) === "#10141a", await bg());
+  ok("자동 + 폰 다크 → 다크 색(PC 다크와 같은 #0a0a0a)", (await bg()) === "#0a0a0a", await bg());
   await pick("light");
-  ok("기본을 고르면 폰이 다크여도 밝은 색", (await bg()) === "#f5f7fa" && (await attr()) === "light",
+  ok("기본을 고르면 폰이 다크여도 밝은 색(PC 기본 #f3f4f9)", (await bg()) === "#f3f4f9" && (await attr()) === "light",
      await bg());
   await pick("warm");
   ok("따뜻한", (await bg()) === "#fbf3ea" && (await attr()) === "warm", await bg());
@@ -165,7 +182,7 @@ console.log("\n[4-3] 테마 — 정보 탭에서 고른다");
   await pT.reload({ waitUntil: "networkidle" });
   ok("다시 열어도 그대로", (await bg()) === "#fbf3ea" && (await attr()) === "warm");
   await pick("dark");
-  ok("다크", (await bg()) === "#10141a" && (await attr()) === "dark");
+  ok("다크", (await bg()) === "#0a0a0a" && (await attr()) === "dark");
   await pick("");
   ok("자동으로 되돌리면 속성이 빠진다", (await attr()) === "");
   // 세 테마 모두 본문·보조 글자가 읽힌다
@@ -190,7 +207,7 @@ console.log("\n[4-3] 테마 — 정보 탭에서 고른다");
   await cT.close();
 }
 
-console.log("\n[4-4] 폰 로그인 — 1시간마다 끊기지 않게");
+console.log("\n[4-4] 예전 방식(로그인 서버 설정 전·503) — 1시간마다 끊기지 않게");
 {
   const cL = await browser.newContext({ viewport: { width: 412, height: 900 } });
   // 구글 로그인 라이브러리를 가짜로 끼운다 — 부를 때 어떤 prompt 를 줬는지 적어 둔다
@@ -273,6 +290,113 @@ console.log("\n[4-4] 폰 로그인 — 1시간마다 끊기지 않게");
      (await pL.evaluate(() => sessionStorage.getItem("__last_prompt"))) === "select_account",
      await pL.evaluate(() => sessionStorage.getItem("__last_prompt")));
   await cL.close();
+}
+
+console.log("\n[4-5] 서버 로그인(jyplanner) — 한 번 로그인하면 팝업 없이 계속");
+{
+  // 로그인 서버(api/auth/*)를 가짜로 물린다. 실제 서버 함수는 verify_api.mjs 가 본다.
+  const cS = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  const calls = [];
+  let tokenReply = { status: 200, json: { access_token: "srv-1", expires_in: 3600,
+                                          email: "me@example.com", missing: [] } };
+  let n = 0;
+  await cS.route("**/api/auth/token", (r) => {
+    calls.push(["token", r.request().method()]);
+    const rep = typeof tokenReply === "function" ? tokenReply() : tokenReply;
+    if (rep.json && rep.json.access_token) rep.json.access_token = "srv-" + (++n);
+    return r.fulfill({ status: rep.status, json: rep.json });
+  });
+  await cS.route("**/api/auth/logout", (r) => {
+    calls.push(["logout", r.request().method()]);
+    return r.fulfill({ json: { ok: true } });
+  });
+  await cS.route("**/api/auth/start**", (r) => {
+    calls.push(["start", r.request().url()]);
+    return r.fulfill({ contentType: "text/html", body: "<p>구글 로그인 화면(가짜)</p>" });
+  });
+  const gis = [];
+  await cS.route("**/accounts.google.com/**", (r) => { gis.push(r.request().url()); return r.abort(); });
+  const pS = await page(cS);
+  const t0 = Date.now();
+  await pS.goto(s.url + "#/agenda");
+  await pS.waitForSelector("#aghello", { timeout: 5000 });
+  const firstPaint = Date.now() - t0;
+  await pS.waitForLoadState("networkidle");
+  ok("첫 화면이 빨리 뜬다(예전엔 로그인 팝업을 4초 기다렸다)", firstPaint < 2500, firstPaint + "ms");
+  const tk0 = await pS.evaluate(() => JSON.parse(sessionStorage.getItem("planner.tok") || "{}").token);
+  ok("켤 때 쿠키로 토큰을 받는다(팝업 없음) — 한 번만 묻는다", tk0 === "srv-1",
+     tk0 + " · " + calls.filter(([k]) => k === "token").length + "번");
+  ok("구글 로그인 스크립트를 아예 안 받는다(가볍다)", gis.length === 0, gis.join(" "));
+  ok("로그인 단추가 안 보인다", await pS.locator("#statechip").isHidden());
+  ok("누구로 로그인했는지 보인다", (await pS.locator("#whochip").textContent()) === "me@example.com");
+  ok("토큰은 POST 로만 묻는다", calls.every(([k, m]) => k !== "token" || m === "POST"));
+
+  // 만료 5분 전 — 화면이 앞으로 오면 쿠키로 조용히 갈아 끼운다
+  await pS.evaluate(() => {
+    const t = JSON.parse(sessionStorage.getItem("planner.tok"));
+    t.expiresAt = Date.now() + 3 * 60e3;
+    sessionStorage.setItem("planner.tok", JSON.stringify(t));
+  });
+  await pS.reload({ waitUntil: "networkidle" });
+  await pS.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pS.waitForTimeout(400);
+  const tk = await pS.evaluate(() => JSON.parse(sessionStorage.getItem("planner.tok") || "{}").token);
+  ok("만료 전에 쿠키로 새 토큰(팝업 없음)", tk && tk !== "srv-1", tk);
+
+  // 쿠키가 없다(처음 쓰는 기기) — 단추 한 번에 구글 화면으로 넘어간다
+  tokenReply = { status: 401, json: { error: "signin" } };
+  await pS.evaluate(() => sessionStorage.clear());
+  await pS.reload({ waitUntil: "networkidle" });
+  ok("처음이면 '로그인' 단추", (await pS.locator("#statechip").textContent()) === "로그인",
+     await pS.locator("#statechip").textContent());
+  ok("기다리지 않는다(예전 방식처럼 팝업을 시도하지 않는다)", gis.length === 0);
+  await Promise.all([pS.waitForURL("**/api/auth/start**"), pS.click("#statechip")]);
+  const st = new URL(calls.filter(([k]) => k === "start").at(-1)[1]);
+  ok("한 번 누르면 바로 구글 로그인 화면으로(화면 이동 — 막힐 팝업이 없다)",
+     st.pathname.endsWith("/api/auth/start"), st.pathname);
+  ok("돌아올 화면을 들고 간다", st.searchParams.get("r") === "#/agenda", st.searchParams.get("r"));
+
+  // 돌아왔는데 동의 화면에서 항목을 덜 체크했다 → '모두 선택' 안내
+  tokenReply = { status: 200, json: { access_token: "x", expires_in: 3600, email: "me@example.com",
+                                      missing: ["https://www.googleapis.com/auth/tasks"] } };
+  await pS.goto(s.url + "?auth=partial#/agenda", { waitUntil: "networkidle" });
+  ok("빠진 항목이 있으면 '모두 선택' 을 안내한다",
+     (await pS.locator("#toast").isVisible())
+     && (await pS.locator("#toast").textContent()).includes("모두 선택"),
+     await pS.locator("#toast").textContent());
+  ok("다시 로그인 단추도 보인다", (await pS.locator("#statechip").textContent()) === "다시 로그인");
+  ok("주소의 ?auth= 는 지운다(새로고침해도 또 안 뜬다)",
+     !(await pS.evaluate(() => location.search)).includes("auth="), await pS.evaluate(() => location.href));
+
+  // 계정 바꾸기 — 앞 계정 토큰이 남아 있어도 돌아오면 새 계정 것으로
+  tokenReply = { status: 200, json: { access_token: "x", expires_in: 3600, email: "new@example.com",
+                                      missing: [] } };
+  await pS.evaluate(() => sessionStorage.setItem("planner.tok", JSON.stringify({
+    token: "old-account-token", expiresAt: Date.now() + 3000e3, email: "me@example.com" })));
+  await pS.goto(s.url + "?auth=ok#/about", { waitUntil: "networkidle" });
+  ok("로그인하고 돌아오면 이 탭에 남은 앞 계정 토큰을 버린다",
+     (await pS.locator("#whochip").textContent()) === "new@example.com",
+     await pS.locator("#whochip").textContent());
+  ok("로그인했다고 알려 준다", (await pS.locator("#toast").textContent()).includes("로그인했어요"));
+  await Promise.all([pS.waitForURL("**/api/auth/start**"), pS.click("#relogin")]);
+  const sw = new URL(calls.filter(([k]) => k === "start").at(-1)[1]);
+  ok("계정 바꾸기는 계정 고르는 화면부터", sw.searchParams.get("prompt") === "select_account",
+     sw.search);
+
+  // 로그아웃 — 쿠키도, 이 기기에 받은 자료도 지운다
+  await pS.goto(s.url + "#/about", { waitUntil: "networkidle" });
+  pS.once("dialog", (d) => d.accept());
+  tokenReply = () => (calls.some(([k]) => k === "logout")
+    ? { status: 401, json: { error: "signin" } }
+    : { status: 200, json: { access_token: "x", expires_in: 3600, email: "new@example.com", missing: [] } });
+  await pS.click("#signout");
+  await pS.waitForTimeout(800);
+  await pS.waitForLoadState("networkidle");
+  ok("로그아웃은 서버 쿠키를 지운다(POST)", calls.some(([k, m]) => k === "logout" && m === "POST"));
+  ok("로그아웃하면 다시 '로그인'", (await pS.locator("#statechip").textContent()) === "로그인",
+     await pS.locator("#statechip").textContent());
+  ok("계정 표시도 지운다", await pS.locator("#whochip").isHidden());
+  await cS.close();
 }
 
 console.log("\n[5] 자료검색 — 로그인 전에도 빈 화면이 아니다");
@@ -608,6 +732,7 @@ console.log("\n[11] 서류 — 드라이브를 물려 폴더·파일·보기를 
   // 좁은 화면에서는 보는 동안 목록을 감춘다 — 412px 에 둘을 나란히 두면 둘 다 못 쓴다
   ok("좁은 화면에서는 보는 동안 목록을 감춘다",
      !(await p6.locator("#dlist").isVisible()));
+  ok("서류 보기에는 첨부 넘기기(◀ ▶)가 없다 — 자료검색 첨부에만", (await p6.locator(".vnav").count()) === 0);
   await p6.click("#vclose");
   await p6.waitForTimeout(300);
   ok("닫으면 목록으로 돌아온다", await p6.locator("#dlist").isVisible());
@@ -690,6 +815,70 @@ console.log("\n[11-2] 자료 첨부(그림·PDF) — 보이고, 크게 보고, �
   await pK.locator('#kbatt .attcard[data-k="0"] button.chip[data-act="open"]').click();
   await pK.waitForSelector("#kbview .vhead", { timeout: 5000 }).catch(() => {});
   ok("[크게] 는 확대 보기", (await pK.locator("#kbview .vhead").count()) === 1);
+  // 같은 자료의 다른 첨부로 닫지 않고 넘긴다(PC v1.25.1 · 업무자료검색과 같게)
+  const vName = async () => (await pK.locator("#kbview .vhead b").innerText()).trim();
+  const vPos = async () => (await pK.locator("#vpos").innerText()).trim();
+  ok("첨부가 둘이면 '1 / 2' · ◀ 는 꺼짐",
+     (await vPos()) === "1 / 2" && (await pK.locator("#vprev").isDisabled())
+     && !(await pK.locator("#vnext").isDisabled()), await vPos());
+  if (process.env.SHOT_DIR) {
+    await pK.locator("#kbview").scrollIntoViewIfNeeded();
+    await pK.screenshot({ path: join(process.env.SHOT_DIR, "kb_viewer_nav.png") });
+  }
+  await pK.locator("#vnext").click();
+  await pK.waitForFunction(() => (document.querySelector("#vpos") || {}).textContent === "2 / 2",
+    null, { timeout: 5000 }).catch(() => {});
+  ok("[▶] 로 다음 첨부(PDF) — 창을 닫지 않는다",
+     (await vName()) === "약정 안내.pdf" && (await vPos()) === "2 / 2"
+     && (await pK.locator("#vnext").isDisabled()), `${await vName()} ${await vPos()}`);
+  await pK.evaluate(() => document.activeElement && document.activeElement.blur());
+  await pK.keyboard.press("ArrowLeft");
+  await pK.waitForTimeout(300);
+  ok("키보드 ← 로 앞 첨부", (await vName()) === "링크 화면.png" && (await vPos()) === "1 / 2",
+     `${await vName()} ${await vPos()}`);
+  await pK.keyboard.press("ArrowRight");
+  await pK.waitForTimeout(300);
+  ok("키보드 → 로 다음 첨부", (await vPos()) === "2 / 2", await vPos());
+  await pK.keyboard.press("ArrowRight");
+  await pK.waitForTimeout(200);
+  ok("마지막에서 → 는 그대로", (await vPos()) === "2 / 2", await vPos());
+  // 좁은 화면은 보는 동안 검색 칸이 감춰진다 — 보이는 글 칸을 하나 두고 그 안에서 친다
+  await pK.evaluate(() => {
+    const t = document.createElement("input");
+    t.id = "__typing";
+    t.value = "글자";
+    document.querySelector("#kbview").before(t);
+    t.focus();
+  });
+  await pK.keyboard.press("ArrowLeft");
+  await pK.waitForTimeout(200);
+  ok("글 칸에서 ← 는 글자 옮기기 — 첨부는 그대로", (await vPos()) === "2 / 2", await vPos());
+  await pK.evaluate(() => document.querySelector("#__typing").remove());
+  // 폰 — 옆으로 밀기(오른쪽으로 밀면 앞 첨부)
+  const swiped = await pK.evaluate(() => {
+    const el = document.querySelector("#vscroll");
+    if (!el || typeof Touch !== "function") return "no-touch";
+    const t = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: 300 });
+    el.dispatchEvent(new TouchEvent("touchstart", { touches: [t(100)], changedTouches: [t(100)], bubbles: true }));
+    el.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: [t(320)], bubbles: true }));
+    return "ok";
+  });
+  await pK.waitForTimeout(300);
+  ok("폰은 옆으로 밀어서 넘긴다", swiped === "no-touch" || (await vPos()) === "1 / 2",
+     `${swiped} ${await vPos()}`);
+  await pK.locator("#vin").click();
+  await pK.evaluate(() => {
+    const el = document.querySelector("#vscroll");
+    if (!el || typeof Touch !== "function") return;
+    const t = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: 300 });
+    el.dispatchEvent(new TouchEvent("touchstart", { touches: [t(320)], changedTouches: [t(320)], bubbles: true }));
+    el.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: [t(100)], bubbles: true }));
+  });
+  await pK.waitForTimeout(300);
+  ok("확대해 둔 동안 밀기는 그림 옮기기 — 넘기지 않는다", (await vPos()) === "1 / 2", await vPos());
+  await pK.keyboard.press("Escape");
+  await pK.waitForTimeout(200);
+  ok("Esc 로 닫는다", (await pK.locator("#kbview .vhead").count()) === 0);
   // 다른 자료(제목이 다른 G 칸)는 첨부가 안 붙는다
   await pK.goto(s.url + "#/kb", { waitUntil: "networkidle" });
   await pK.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();
@@ -803,6 +992,13 @@ console.log("\n[12] 펼친 화면 — 머리말이 옆으로 서지 않는다 ·
   ok("서류 탭 경계선도 끌리는 모양이다",
      (await p7.locator("#dsplit .gutter").evaluate((e) => getComputedStyle(e).cursor))
      === "col-resize");
+  // 홈 — 넓으면 두 줄(왼쪽 할일·일정, 오른쪽 이번 주·다음 주)
+  await p7.click('nav.tabs a[data-tab="/agenda"]');
+  await p7.waitForSelector("#cardthis");
+  const [ct, cw] = await Promise.all(["#cardtodo", "#cardthis"].map((q) =>
+    p7.locator(q).evaluate((e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y }; })));
+  ok("넓으면 홈 카드가 두 줄로", cw.x > ct.x + 200 && Math.abs(cw.y - ct.y) < 4,
+     `할일 x=${Math.round(ct.x)} · 이번 주 x=${Math.round(cw.x)}`);
   await ctx6.close();
 }
 
@@ -908,6 +1104,8 @@ console.log("\n[14] 일정 / 할일");
   const d = (n) => { const x = new Date(); x.setDate(x.getDate() + n);
     return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
   const patched = [];
+  const posted = [];
+  const deleted = [];
   await ctx8.route("**/accounts.google.com/**", (r) => r.abort());
   await ctx8.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
   await ctx8.route("**/www.googleapis.com/calendar/v3/**", (r) => {
@@ -928,6 +1126,11 @@ console.log("\n[14] 일정 / 할일");
   await ctx8.route("**/tasks.googleapis.com/**", (r) => {
     const u = decodeURIComponent(r.request().url());
     if (r.request().method() === "PATCH") { patched.push(u); return r.fulfill({ json: {} }); }
+    if (r.request().method() === "DELETE") { deleted.push(u); return r.fulfill({ status: 204, body: "" }); }
+    if (r.request().method() === "POST") {
+      posted.push({ url: u, body: r.request().postDataJSON() });
+      return r.fulfill({ json: { id: "t9", title: "서류 챙기기" } });
+    }
     if (u.includes("users/@me/lists")) return r.fulfill({ json: { items: [
       { id: "L1", title: "업무" }] } });
     return r.fulfill({ json: { items: [
@@ -971,6 +1174,43 @@ console.log("\n[14] 일정 / 할일");
   ok("체크하면 목록에서 바로 빠진다",
      (await p9.locator("#agtasks .taskbody .t").allTextContents()).length === 1);
   ok("구글에 '했다' 고 보낸다", patched.length === 1, patched.length + "건");
+
+  // 홈 = PC 대시보드와 같은 카드 — 인사 · 내 할일 · 다가오는 일정 · 이번 주 · 다음 주
+  ok("홈 첫머리에 인사말", (await p9.locator("#aghello").textContent()).startsWith("안녕하세요!"));
+  ok("카드 네 장", (await p9.locator(".dashgrid .card").count()) === 4);
+  ok("탭 이름은 '홈'", (await p9.locator('nav.tabs a[data-tab="/agenda"]').textContent()).includes("홈"));
+  // 할일 추가 — 구글 할일 기본 목록에 넣는다(PC 앱에도 뜬다)
+  await p9.click("#agadd");
+  ok("[할일 추가] 를 누르면 적는 칸이 열린다", await p9.locator("#agform").isVisible());
+  await p9.fill("#agtitle", "서류 챙기기");
+  await p9.fill("#agdue", d(2));
+  await p9.click("#agsave");
+  await p9.waitForTimeout(600);
+  ok("구글 할일에 제목·기한을 넣는다",
+     posted.length === 1 && posted[0].url.includes("lists/@default/tasks")
+     && posted[0].body.title === "서류 챙기기" && posted[0].body.due === d(2) + "T00:00:00.000Z",
+     JSON.stringify(posted));
+  ok("넣고 나면 칸이 닫힌다", await p9.locator("#agform").isHidden());
+
+  // 할일을 누르면 그 자리에서 고친다 · 지운다(플로우처럼)
+  const nPatch = patched.length;
+  await p9.locator("#agtasks .taskbody[data-edit]").first().click();
+  await p9.waitForSelector("#agedit", { timeout: 4000 });
+  ok("할일을 누르면 그 자리에서 고치는 칸", (await p9.locator("#etitle").inputValue()).length > 0);
+  await p9.fill("#etitle", "기한없는 할일 — 고침");
+  await p9.fill("#edue", d(3));
+  await p9.click("#esave2");
+  await p9.waitForTimeout(500);
+  ok("고친 제목·기한을 구글에 보낸다", patched.length === nPatch + 1, patched.length - nPatch);
+  ok("화면에 바로 반영", (await p9.locator("#agtasks .taskbody .t").allTextContents())
+     .includes("기한없는 할일 — 고침"));
+  await p9.locator("#agtasks .taskbody[data-edit]").first().click();
+  await p9.waitForSelector("#edel");
+  p9.once("dialog", (dl) => dl.accept());
+  await p9.click("#edel");
+  await p9.waitForTimeout(500);
+  ok("지우기는 구글에서 지운다(DELETE)", deleted.length === 1, deleted.join(" "));
+  ok("목록에서 바로 빠진다", !(await p9.locator("#agedit").count()));
 
   // 껐다 켜도 캐시로 뜬다
   await ctx8.route("**/www.googleapis.com/calendar/v3/**", (r) => r.abort());
@@ -1319,7 +1559,8 @@ console.log("\n[19] 설정이 계정을 따라다니는지 (드라이브 앱 전
 console.log("\n[20] 주간 요약 — 폰에서");
 {
   const ctxF = await browser.newContext({
-    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR",
+    permissions: ["clipboard-read", "clipboard-write"] });
   await seed(ctxF, { account: "me@example.com",
                      sheet: { id: "WKSHEET", tab: "미출고차량" } });
   await ctxF.addInitScript(() => {
@@ -1348,6 +1589,16 @@ console.log("\n[20] 주간 요약 — 폰에서");
   await ctxF.route("**/accounts.google.com/**", (r) => r.abort());
   await ctxF.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
   await ctxF.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-`
+                   + `${String(d.getDate()).padStart(2, "0")}`;
+  await ctxF.route("**/www.googleapis.com/calendar/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("calendarList")) {
+      return r.fulfill({ json: { items: [{ id: "primary", summary: "내 캘린더", primary: true }] } });
+    }
+    return r.fulfill({ json: { items: [
+      { id: "n1", start: { dateTime: iso(plus(8)) + "T10:00:00+09:00" }, summary: "다음주 미팅" }] } });
+  });
   await ctxF.route("**/sheets.googleapis.com/**", (r) => {
     const u = decodeURIComponent(r.request().url());
     if (u.includes("batchGet")) {
@@ -1387,6 +1638,38 @@ console.log("\n[20] 주간 요약 — 폰에서");
   await pF.goBack();
   await pF.waitForTimeout(400);
   ok("뒤로 오면 주간 요약이 그대로", (await pF.locator(".wksec").count()) > 0);
+  // 금요일 주간 보고 알림을 누르면 여기로 온다 — [복사] 로 본사 보고방에(v1.26)
+  await pF.locator("#wkcopy").click();
+  await pF.waitForTimeout(300);
+  const wkClip = await pF.evaluate(() => navigator.clipboard.readText());
+  ok("주간 요약 [복사] — PC 와 같은 글", wkClip.includes("주간 요약") && wkClip.includes("[이번 주 출고]")
+     && wkClip.includes("김상현"), wkClip.slice(0, 80));
+  // 알림으로 처음 열면(고객 줄이 아직 없다) — 줄이 오면 저절로 다시 그린다
+  await pF.goto(s.url + "#/customers/week", { waitUntil: "domcontentloaded" });
+  await pF.waitForFunction(() => {
+    const b = document.querySelector("#wkcopy");
+    return b && !b.disabled && document.querySelectorAll(".wkitem").length > 0;
+  }, null, { timeout: 8000 }).catch(() => {});
+  ok("주간 요약으로 바로 열어도 고객 줄이 오면 채워진다",
+     (await pF.locator(".wkitem").count()) > 0 && !(await pF.locator("#wkcopy").isDisabled()));
+
+  // 홈의 이번 주·다음 주 요약 — 고객 탭이 받아 둔 줄로 계산한다(새로 켜도 캐시로)
+  await pF.goto(s.url + "#/agenda", { waitUntil: "networkidle" });
+  await pF.waitForFunction(() => (document.querySelector("#dthis") || {}).textContent
+    && document.querySelector("#dthis").textContent.includes("김상현"), null, { timeout: 8000 })
+    .catch(() => {});
+  ok("홈 '이번 주 요약' 에 이번 주 출고 고객", (await pF.locator("#dthis").textContent()).includes("김상현"));
+  const nh = await pF.locator("#dnext .wkhead").allTextContents();
+  ok("'다음 주 요약' — 일정·할일·출고 예정·계약 (PC 와 같다)",
+     ["다음 주 일정", "다음 주 할일", "다음 주 출고 예정", "다음 주 계약"]
+       .every((w) => nh.some((h) => h.includes(w))), nh.join(" | "));
+  ok("다음 주 일정이 들어간다", (await pF.locator("#dnext").textContent()).includes("다음주 미팅"));
+  ok("이번 주 일은 다음 주 칸에 안 들어간다", !(await pF.locator("#dnext").textContent()).includes("김상현"));
+  await pF.click('#cardthis [data-copy="this"]');
+  await pF.waitForTimeout(300);
+  const clip = await pF.evaluate(() => navigator.clipboard.readText());
+  ok("[복사] 는 PC 와 같은 글(카톡용)", clip.includes("주간 요약") && clip.includes("[이번 주 출고]")
+     && clip.includes("김상현"), clip.slice(0, 60));
   await ctxF.close();
 }
 
@@ -1539,6 +1822,362 @@ console.log("\n[21] 폰에서 고객 고치기 — 시트를 망가뜨리지 않
      (await pG.locator("#emsg").textContent()).includes("새로 불러온 뒤"),
      await pG.locator("#emsg").textContent());
   await ctxG.close();
+}
+
+console.log("\n[23] 고객 피드 — 폰에서 메모를 남기면 PC 고객 이력에도(같은 동기화 묶음)");
+{
+  const ctxH = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await seed(ctxH, { account: "me@example.com", sheet: { id: "FDSHEET", tab: "미출고차량" } });
+  await ctxH.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  const SHEET = [HDR,
+    ["1", "김상현", "우리금융캐피탈", "쏘나타", "", "", "", "500,000", "", "2026. 8. 1",
+     "2026. 8. 20", "출고완료", "60개월", "", "", "", ""],
+    ["2", "박영희", "KB캐피탈", "아이오닉5", "", "", "", "", "", "2026. 9. 1", "", "심사중",
+     "", "", "", "", ""]];
+  const UIDS = { 2: "uid0000000000001", 3: "" };
+  const uidWrites = [];
+  await ctxH.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxH.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await ctxH.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (r.request().method() === "POST" && u.includes("values:batchUpdate")) {
+      const b = JSON.parse(r.request().postData() || "{}");
+      uidWrites.push(b);
+      for (const d of b.data || []) {
+        const m = d.range.match(/!U(\d+)$/);
+        if (m) UIDS[m[1]] = d.values[0][0];
+      }
+      return r.fulfill({ json: {} });
+    }
+    const one = u.match(/!B(\d+):B\d+/);
+    if (u.includes("batchGet") && one) {
+      const row = Number(one[1]);
+      return r.fulfill({ json: { valueRanges: [
+        { values: [[SHEET[row - 1][1]]] }, { values: UIDS[row] ? [[UIDS[row]]] : [] }] } });
+    }
+    if (u.includes("batchGet")) {
+      return r.fulfill({ json: { valueRanges: [
+        { values: SHEET.map((x) => x.slice(0, 17)) }, { values: SHEET.map(() => []) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  // 드라이브 앱 폴더 — PC 가 올려 둔 동기화 묶음
+  let bundle = { updatedAt: "2026-10-30T01:00:00Z",
+    files: { "customer_notes.json": JSON.stringify({ uid0000000000001: [
+      { date: "2026-10-20", text: "PC에서 남긴 메모" },
+      { date: "2026-10-21", text: "지운 메모" },
+      { date: "2026-10-21", text: "지운 메모", del: 1 }] }),
+      "todos.json": "[{\"title\":\"PC 할일\"}]" },
+    times: { "customer_notes.json": "2026-10-30T01:00:00Z", "todos.json": "2026-10-30T01:00:00Z" } };
+  const uploads = [];
+  await ctxH.route("**/www.googleapis.com/drive/v3/files**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("SYNC1") && u.includes("alt=media")) return r.fulfill({ json: bundle });
+    if (u.includes("planner_sync.json")) return r.fulfill({ json: { files: [{ id: "SYNC1" }] } });
+    return r.fulfill({ json: { files: [] } });
+  });
+  await ctxH.route("**/upload/drive/v3/files/**", (r) => {
+    uploads.push(r.request().url());
+    bundle = JSON.parse(r.request().postData());
+    return r.fulfill({ json: { id: "SYNC1" } });
+  });
+  const pH = await page(ctxH);
+  await pH.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pH.waitForSelector("#clist button.row", { timeout: 10000 });
+  await pH.locator("#clist button.row").first().click();
+  await pH.waitForFunction(() => document.querySelector("#flist")
+    && document.querySelector("#flist").textContent.includes("PC에서"), null, { timeout: 8000 }).catch(() => {});
+  const feed = () => pH.locator("#flist").innerText();
+  ok("PC 에서 남긴 메모가 폰 피드에 보인다", (await feed()).includes("PC에서 남긴 메모"), await feed());
+  ok("지운 메모(표식)는 안 보인다", !(await feed()).includes("지운 메모"));
+  ok("시트가 아는 이력도 같이(계약 · 출고)", (await feed()).includes("계약(발주)")
+     && (await feed()).includes("차량 출고"));
+  ok("만기는 맨 아래(앞날이라)", (await pH.locator("#flist .ftag").last().textContent()) === "만기");
+  await pH.fill("#fnote", "통화함 — 보증금 문의");
+  await pH.click("#fsave");
+  await pH.waitForTimeout(700);
+  const nm = JSON.parse(bundle.files["customer_notes.json"]).uid0000000000001;
+  const mine = nm.find((n) => n.text === "통화함 — 보증금 문의");
+  ok("남긴 메모가 PC 묶음의 customer_notes.json 에(📱 표시용 via:web)", mine && mine.via === "web"
+     && /^\d{4}-\d\d-\d\d$/.test(mine.date), JSON.stringify(mine));
+  ok("그 파일 시각을 지금으로 — PC 가 '원격이 최신' 으로 보고 합친다",
+     bundle.times["customer_notes.json"] > "2026-10-30T01:00:00Z", bundle.times["customer_notes.json"]);
+  ok("묶음의 다른 파일은 그대로", bundle.files["todos.json"] === "[{\"title\":\"PC 할일\"}]"
+     && bundle.times["todos.json"] === "2026-10-30T01:00:00Z");
+  ok("피드 맨 위에 바로 뜬다", (await pH.locator("#flist .ftext").first().textContent()) === "통화함 — 보증금 문의");
+  pH.once("dialog", (dl) => dl.accept());
+  await pH.locator("#flist .fdel").first().click();
+  await pH.waitForTimeout(700);
+  const nm2 = JSON.parse(bundle.files["customer_notes.json"]).uid0000000000001;
+  ok("지우면 표식을 남긴다(동기화가 합쳐도 되살아나지 않게)",
+     nm2.some((n) => n.del && n.text === "통화함 — 보증금 문의"));
+  ok("피드에서도 사라진다", !(await feed()).includes("보증금 문의"));
+
+  // 고객ID 가 아직 없는 고객 — 처음 메모를 남길 때 만들어 시트 U열에 적는다
+  await pH.evaluate(() => { location.hash = "#/customers"; });
+  await pH.waitForSelector("#clist button.row");
+  await pH.locator("#clist button.row").nth(1).click();
+  await pH.waitForSelector("#fnote");
+  await pH.waitForTimeout(400);
+  await pH.fill("#fnote", "첫 메모");
+  await pH.click("#fsave");
+  await pH.waitForTimeout(700);
+  const wroteU = uidWrites.find((b) => (b.data || []).some((d) => /!U3$/.test(d.range)));
+  ok("고객ID 를 새로 만들어 그 줄의 U열에(RAW)", wroteU && wroteU.valueInputOption === "RAW"
+     && /^[0-9a-f]{16}$/.test(UIDS[3]), JSON.stringify(wroteU));
+  ok("그 ID 로 메모가 붙는다", (JSON.parse(bundle.files["customer_notes.json"])[UIDS[3]] || [])
+     .some((n) => n.text === "첫 메모"));
+  await ctxH.close();
+}
+
+console.log("\n[24] 진행 보드 — 진행현황별 칸 · [옮기기] 로 시트 L열만");
+{
+  const ctxB = await browser.newContext({
+    viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul", locale: "ko-KR" });
+  await seed(ctxB, { account: "me@example.com", sheet: { id: "BDSHEET", tab: "미출고차량" } });
+  await ctxB.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가격", "금융수수료",
+               "대리점 수당", "합계", "특판/대리점", "계약일(발주)", "출고일", "진행현황",
+               "계약조건", "내용", "출고유형", "고객센터 번호", "사고접수연락처"];
+  const now = new Date();
+  const f = (n) => { const d = new Date(now); d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}`; };
+  const SHEET = [HDR,
+    ["1", "김상현", "KB캐피탈", "쏘나타", "", "", "", "", "", f(-40), "", "발주", "", "", "", "", ""],
+    ["2", "박영희", "KB캐피탈", "아이오닉5", "", "", "", "", "", f(-3), "", "발주", "", "", "", "", ""],
+    ["3", "최민수", "BNK캐피탈", "쏘렌토", "", "", "", "", "", f(-50), f(-4), "출고", "", "", "", "", ""],
+    ["4", "정해나", "하나캐피탈", "GV80", "", "", "", "", "", f(-60), "", "진행보류", "", "", "", "", ""],
+    ["5", "한지민", "IM캐피탈", "G70", "", "", "", "", "", f(-9), "", "취소", "", "", "", "", ""]];
+  const writes = [];
+  await ctxB.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxB.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (r.request().method() === "POST" && u.includes("values:batchUpdate")) {
+      writes.push(JSON.parse(r.request().postData() || "{}"));
+      return r.fulfill({ json: {} });
+    }
+    const one = u.match(/!A(\d+):Q\d+/);
+    if (u.includes("batchGet")) {
+      const rows = one ? [SHEET[Number(one[1]) - 1]] : SHEET;
+      return r.fulfill({ json: { valueRanges: [
+        { values: rows.map((x) => x.slice(0, 17)) }, { values: rows.map(() => []) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  const pB = await page(ctxB);
+  await pB.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pB.waitForSelector("#clist button.row", { timeout: 10000 });
+  await pB.click("#cboard");
+  await pB.waitForSelector(".bcol", { timeout: 6000 });
+  const cols = await pB.locator(".bcol .bhead b").allTextContents();
+  ok("칸 = 시트의 진행현황(흐름 순서), 취소는 숨김", JSON.stringify(cols) === '["발주","출고","진행보류"]',
+     cols.join(" | "));
+  const first = await pB.locator('.bcol[data-status="발주"] .bcard .t').allTextContents();
+  ok("오래 묵은 건이 위로", JSON.stringify(first) === '["김상현","박영희"]', first.join(","));
+  ok("40일째는 빨강", (await pB.locator('.bcol[data-status="발주"] .bchip.red').first().textContent())
+     === "계약 40일째");
+  await pB.check("#bcancel");
+  ok("취소·부결 보기", (await pB.locator(".bcol .bhead b").allTextContents()).includes("취소"));
+  await pB.uncheck("#bcancel");
+  // [옮기기] → 진행보류
+  await pB.locator('.bcol[data-status="발주"] .bmove').nth(1).click();
+  await pB.waitForSelector("#bsheet:not([hidden]) .bto");
+  const opts = await pB.locator("#bsheet .bto").allTextContents();
+  ok("옮길 곳 = 다른 칸들(지금 칸 빼고, 숨긴 취소도)", !opts.includes("발주") && opts.includes("진행보류")
+     && opts.includes("취소"), opts.join(","));
+  await pB.locator('#bsheet .bto[data-to="진행보류"]').click();
+  await pB.waitForTimeout(800);
+  const wr = writes.at(-1) || {};
+  ok("시트에는 그 고객 줄의 L열(진행현황)만", wr.data && wr.data.length === 1
+     && wr.data[0].range === "'미출고차량'!L3" && wr.data[0].values[0][0] === "진행보류",
+     JSON.stringify(wr.data));
+  ok("보드에서 바로 옮겨 간다", (await pB.locator('.bcol[data-status="진행보류"] .bcard .t').allTextContents())
+     .includes("박영희"));
+  // 카드를 누르면 상세
+  await pB.locator('.bcol[data-status="발주"] .bopen').first().click();
+  await pB.waitForTimeout(500);
+  ok("카드를 누르면 고객 상세", (await pB.evaluate(() => location.hash)) === "#/customers/2");
+  // 그 사이 그 줄에 다른 고객이 오면 쓰지 않는다
+  await pB.goto(s.url + "#/customers/board", { waitUntil: "networkidle" });
+  await pB.waitForSelector(".bcol");
+  SHEET[1] = ["1", "다른고객", "", "", "", "", "", "", "", "", "", "발주", "", "", "", "", ""];
+  const n0 = writes.length;
+  await pB.locator('.bcol[data-status="발주"] .bmove').first().click();
+  await pB.locator('#bsheet .bto[data-to="출고"]').click();
+  await pB.waitForTimeout(800);
+  ok("줄이 바뀌었으면 쓰지 않고 알린다", writes.length === n0
+     && (await pB.locator("#toast").textContent()).includes("줄이 달라졌습니다"),
+     await pB.locator("#toast").textContent());
+  if (process.env.SHOT_DIR) await pB.screenshot({ path: join(process.env.SHOT_DIR, "board_web.png") });
+  await ctxB.close();
+}
+
+console.log("\n[25] 아침 브리핑 알림 — [정보] 에서 켜기 · 받아 보기 · 끄기");
+{
+  const cP = await browser.newContext({ viewport: { width: 412, height: 900 },
+                                        permissions: ["notifications"] });
+  // 진짜 푸시 서비스(FCM)는 검사 브라우저에 없다 — 구독 창구만 가짜로
+  await cP.addInitScript(() => {
+    let sub = null;
+    const fake = {
+      async getSubscription() { return sub; },
+      async subscribe(o) {
+        window.__appKeyLen = o.applicationServerKey.length;
+        sub = { endpoint: "https://fcm.googleapis.com/fcm/send/TEST",
+                toJSON() { return { endpoint: this.endpoint, keys: { p256dh: "P", auth: "A" } }; },
+                async unsubscribe() { sub = null; return true; } };
+        return sub;
+      },
+    };
+    Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", { get: () => fake });
+  });
+  const calls = [];
+  await cP.route("**/api/auth/token", (r) => r.fulfill({ json: { access_token: "srv", expires_in: 3600,
+                                                                   email: "me@example.com", missing: [] } }));
+  await cP.route("**/api/push/**", (r) => {
+    const u = r.request().url();
+    calls.push([u.split("/api/push/")[1], r.request().method(), r.request().postData() || ""]);
+    if (u.endsWith("/key")) {
+      return r.fulfill({ json: { publicKey: "BOrK3xQ2b0Rj1oP5Q0Z5w7oGQm9-0Ck5c4uEo2f9k0sXqxvQe4aKq3x8M3pYd0gq1Y2Wc9q7h6d5n4m3l2k1j0i" } });
+    }
+    if (u.endsWith("/test")) return r.fulfill({ json: { ok: true, title: "☀️ 오늘 브리핑", body: "일정 1" } });
+    return r.fulfill({ json: { ok: true } });
+  });
+  await cP.route("**/accounts.google.com/**", (r) => r.abort());
+  const pP = await page(cP);
+  await pP.goto(s.url + "#/about", { waitUntil: "networkidle" });
+  await pP.waitForSelector("#pushon", { timeout: 6000 });
+  ok("꺼져 있으면 [알림 켜기]", await pP.locator("#pushon").isVisible());
+  await pP.click("#pushon");
+  await pP.waitForSelector("#pushtest", { timeout: 6000 });
+  const sc = calls.find((c) => c[0] === "subscribe");
+  ok("켜면 서버에 이 폰의 알림 주소를 맡긴다", sc && sc[1] === "POST"
+     && JSON.parse(sc[2]).subscription.endpoint.endsWith("/TEST"), sc && sc[2]);
+  ok("서명 공개키(65바이트)로 구독한다", (await pP.evaluate(() => window.__appKeyLen)) === 65);
+  ok("켜졌다고 알려 준다", (await pP.locator("#pushmsg").textContent()).includes("켰어요"));
+  await pP.click("#pushtest");
+  await pP.waitForTimeout(400);
+  ok("[지금 한 번 받아 보기] 는 서버에 보내 달라고 한다", calls.some((c) => c[0] === "test"
+     && JSON.parse(c[2]).endpoint.endsWith("/TEST")));
+  ok("보냈다고 알려 준다", (await pP.locator("#pushmsg").textContent()).includes("보냈어요"));
+  await pP.click("#pushoff");
+  await pP.waitForSelector("#pushon", { timeout: 6000 });
+  ok("[알림 끄기] — 서버 기록도 지운다", calls.some((c) => c[0] === "unsubscribe"));
+  // 서비스워커 — 서버가 보낸 것을 알림으로(헤드리스는 알림 권한이 없어 띄우는 함수만 가로챈다)
+  const sw = cP.serviceWorkers()[0] || await cP.waitForEvent("serviceworker");
+  const shown = await sw.evaluate(async () => {
+    const got = [];
+    self.registration.showNotification = async (t, o) => { got.push([t, o.body, o.tag, o.data.url]); };
+    const ev = new PushEvent("push", { data: JSON.stringify({
+      title: "☀️ 11/2(월) 오늘 브리핑", body: "일정 1", tag: "brief-2026-11-02", url: "./#/agenda" }) });
+    const w = [];
+    ev.waitUntil = (pr) => w.push(pr);
+    self.dispatchEvent(ev);
+    await Promise.all(w);
+    return got;
+  });
+  ok("서비스워커가 받은 브리핑을 알림으로(같은 날은 같은 꼬리표)",
+     JSON.stringify(shown) === JSON.stringify([["☀️ 11/2(월) 오늘 브리핑", "일정 1", "brief-2026-11-02", "./#/agenda"]]),
+     JSON.stringify(shown));
+  await cP.close();
+}
+
+console.log("\n[26] 통신이 잠깐 끊겼다 붙으면 '오프라인' 이 걷힌다 · 구글이 잠깐 탈나면 알리고 다시 받는다");
+{
+  const cO = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await cO.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const mode = { v: "abort" };
+  let sheetCalls = 0;
+  await cO.route("**/accounts.google.com/**", (r) => r.abort());
+  await cO.route("**/sheets.googleapis.com/**", (r) => {
+    sheetCalls += 1;
+    if (mode.v === "abort") return r.abort();
+    if (mode.v === "503") return r.fulfill({ status: 503, json: { error: { message: "backend" } } });
+    return r.fulfill({ json: { values: [["카테고리", "금융사", "제목", "태그", "본문"],
+                                        ["캐피탈", "KB", "KB 연락처", "", "1588"]] } });
+  });
+  await cO.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [], items: [] } }));
+  await cO.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  const pO = await page(cO);
+  await pO.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pO.waitForTimeout(600);
+  const chip = async () => pO.evaluate(() => {
+    const e = document.querySelector("#statechip");
+    return e && !e.hidden ? e.textContent.trim() : "";
+  });
+  ok("통신이 끊기면 '오프라인'", (await chip()) === "오프라인", await chip());
+  // 다시 붙었다 — 브라우저가 online 을 알린다(예전엔 토큰이 바뀔 때까지 최대 1시간 남았다)
+  mode.v = "ok";
+  await pO.evaluate(() => dispatchEvent(new Event("online")));
+  await pO.waitForTimeout(800);
+  ok("다시 붙으면 바로 걷힌다", (await chip()) === "", await chip());
+  ok("붙자마자 보던 화면의 자료를 다시 받는다",
+     (await pO.locator("#kblist button.row").allTextContents()).some((t) => t.includes("KB 연락처")));
+  // 구글이 잠깐 탈났다(503) — 빈 화면 대신 알리고 조금 뒤 다시
+  mode.v = "503";
+  await pO.evaluate(async () => {
+    const m = await import("./js/sheets.js");
+    try { await m.values("X", "업무자료", "A1:A2"); } catch (e) { window.__err = e.message; }
+  });
+  await pO.waitForTimeout(300);
+  const tmsg = await pO.evaluate(() => {
+    const t = document.querySelector("#toast");
+    return t && !t.hidden ? t.textContent : "";
+  });
+  ok("구글이 5xx 면 알린다(잠시 뒤 다시)", tmsg.includes("구글 서버가 잠시 응답하지 않아요"), tmsg);
+  ok("'오프라인' 으로 잘못 알리지 않는다", (await chip()) === "", await chip());
+  ok("[지금 다시] 단추", tmsg.includes("지금 다시"));
+  mode.v = "ok";
+  const before = sheetCalls;
+  await pO.locator("#toast .act").click();
+  await pO.waitForTimeout(800);
+  ok("[지금 다시] 로 다시 받는다", sheetCalls > before, `${before} → ${sheetCalls}`);
+  await cO.close();
+}
+
+console.log("\n[22] 옛 주소(github.io) → 새 주소로 옮긴다 · 첫 로딩 미리 받기");
+{
+  const tmp = join(WEB, "..", ".verify_build");
+  execFileSync("bash", [join(WEB, "..", "tools", "build_web.sh"), tmp + "/v", "verify12345678"]);
+  execFileSync("bash", [join(WEB, "..", "tools", "build_web.sh"), tmp + "/p", "verify12345678", "pages"]);
+  const vi = readFileSync(join(tmp, "v", "index.html"), "utf-8");
+  const mods = [...vi.matchAll(/rel="modulepreload" href="\.\/([^"]+)"/g)].map((m) => m[1]);
+  const jsAll = files.filter((f) => /^js\/.*\.js$/.test(f));
+  ok("배포판은 모든 모듈을 한꺼번에 미리 받는다(modulepreload)",
+     jsAll.every((f) => mods.includes(f)) && mods.length === jsAll.length, mods.length + "개");
+  ok("구글 로그인 스크립트를 처음부터 받지 않는다", !vi.includes("accounts.google.com/gsi"));
+  const sp = await serve(join(tmp, "p"), { port: 8124, build: "P" });
+  const cM = await browser.newContext();
+  await cM.route("https://jyplanner.vercel.app/**", (r) =>
+    r.fulfill({ contentType: "text/html", body: "<p id=new>새 주소</p>" }));
+  const pM = await page(cM);
+  // 예전 판을 쓰던 폰처럼 — 서비스워커·캐시가 남아 있다
+  await pM.goto(sp.url + "verify.html").catch(() => {});
+  await pM.evaluate(async () => { await caches.open("app-old"); }).catch(() => {});
+  await pM.goto(sp.url + "#/customers/12");
+  await pM.waitForURL("https://jyplanner.vercel.app/**", { timeout: 6000 }).catch(() => {});
+  ok("옛 주소로 열면 새 주소로 간다(보던 화면 그대로)",
+     pM.url() === "https://jyplanner.vercel.app/#/customers/12", pM.url());
+  const back = await page(cM);
+  await back.goto(sp.url + "nothing-here").catch(() => {});
+  ok("옛 주소의 캐시를 지운다(옛 판이 다시 안 뜬다)",
+     (await back.evaluate(() => caches.keys()).catch(() => ["?"])).length === 0);
+  await cM.close();
+  await sp.close();
+  execFileSync("rm", ["-rf", tmp]);
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

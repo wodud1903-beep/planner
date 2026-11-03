@@ -30,7 +30,7 @@ for name in ("planner.google_client", "planner.net"):
         mod.http = lambda: None
         sys.modules[name] = mod
 
-from planner import commission, hangul, sheets, weekly  # noqa: E402
+from planner import board, commission, hangul, sheets, weekly  # noqa: E402
 
 HANGUL_CASES = [
     ("김상현", ["ㄱㅅㅎ", "김상", "김", "ㄱㅅㅎㅇ", "상현", "", "ㅅㅎ"]),
@@ -224,6 +224,10 @@ def main() -> int:
         "default_rates": {},
         "weekly_rows": [],
         "weekly_sections": [],
+        "weekly_next": [],
+        "board_stage": [],
+        "board_columns": [],
+        "weekly_text": [],
         "fmt_sheet_date": [],
         "choices": [],
     }
@@ -265,11 +269,23 @@ def main() -> int:
 
     import datetime as _dt
     out["weekly_rows"] = [
-        {"total": cr.total, "values": cr.values} for cr in _weekly_rows()]
+        {"row": cr.row, "total": cr.total, "values": cr.values} for cr in _weekly_rows()]
     for day in WEEKLY_DAYS:
         today = _dt.date.fromisoformat(day)
         secs = weekly.sections(_weekly_rows(), today)
         out["weekly_sections"].append([day, weekly.title_line(today), secs])
+        # 대시보드 '다음 주 요약' — 다음 주 월요일 기준, 출고 예정·계약만
+        nmon = weekly.week_range(today + _dt.timedelta(days=7))[0]
+        out["weekly_next"].append(
+            [day, weekly.sections(_weekly_rows(), nmon, word="다음 주", week_only=True)])
+        out["weekly_text"].append([day, weekly.to_text(_weekly_rows(), today)])
+        # 고객 진행 보드 — 칸·카드(취소 숨김 / 보임)
+        for show in (False, True):
+            out["board_columns"].append([day, show, board.columns(_weekly_rows(), today, show)])
+
+    for st in ["", "발주", "출고", "출고완료", "출고대기", "출고 예정", "진행보류", "보류", "취소",
+               "부결", "심사중", "심사대기", "서류대기", "가결", "상담", "배정완료", "계약", "모르는말"]:
+        out["board_stage"].append([st, board.stage(st)])
 
     # 시트에 적을 날짜 서식 — **0 을 안 채운다**("2026. 8. 14")
     import datetime as _d2

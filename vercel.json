@@ -1,14 +1,63 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "",
+  "installCommand": "npm ci --no-audit --no-fund",
   "buildCommand": "bash tools/build_web.sh .web_out \"$VERCEL_GIT_COMMIT_SHA\"",
   "outputDirectory": ".web_out",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- web CHANGELOG.md vercel.json tools/build_web.sh python/planner/config.py",
+  "regions": [
+    "icn1"
+  ],
+  "functions": {
+    "api/push/cron.js": {
+      "maxDuration": 60
+    },
+    "api/push/test.js": {
+      "maxDuration": 30
+    },
+    "api/push/weekly.js": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/push/cron",
+      "schedule": "50 23 * * *"
+    },
+    {
+      "path": "/api/push/cron",
+      "schedule": "5 0 * * *"
+    },
+    {
+      "path": "/api/push/cron",
+      "schedule": "35 0 * * *"
+    },
+    {
+      "path": "/api/push/cron",
+      "schedule": "5 1 * * *"
+    },
+    {
+      "path": "/api/push/cron",
+      "schedule": "35 1 * * *"
+    },
+    {
+      "path": "/api/push/weekly",
+      "schedule": "0 8 * * 5"
+    },
+    {
+      "path": "/api/push/weekly",
+      "schedule": "0 9 * * 5"
+    }
+  ],
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- web api package.json package-lock.json CHANGELOG.md vercel.json tools/build_web.sh python/planner/config.py",
   "headers": [
     {
       "source": "/(sw\\.js|version\\.json)",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
     }
   ]
 }
