@@ -161,8 +161,9 @@ def main() -> int:
 
     _server.newConnection.connect(_on_second_instance)
 
-    # /tray 스위치로 실행되면 트레이로 시작
-    if any(a.lstrip("/-").lower() == "tray" for a in sys.argv[1:]):
+    # /tray 스위치로 실행되면 트레이로 시작 — 켜 둔 채로 조용히 업데이트한 뒤 다시 켜질 때도,
+    # 그때 트레이에 숨어 있었으면 트레이로(v1.26, updater.take_resume_tray)
+    if any(a.lstrip("/-").lower() == "tray" for a in sys.argv[1:]) or updater.take_resume_tray():
         win.hide()
     else:
         win.show()

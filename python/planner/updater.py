@@ -399,6 +399,58 @@ def last_failure() -> str:
     return ""
 
 
+def idle_seconds():
+    """PC 를 마지막으로 만진 뒤 몇 초(윈도 GetLastInputInfo). 모르면 None.
+
+    켜 둔 채로 찾은 새 판을 '쓰지 않을 때' 바꾸려고 본다 — 창이 보이는데 사람이 쓰는 중이면
+    다시 켜지는 창이 일을 가로막는다. 이 프로그램이 아니라 PC 전체를 본다(다른 프로그램을
+    쓰는 중이어도 새 창이 앞으로 튀어나오면 방해가 된다).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class _LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = _LII()
+        lii.cbSize = ctypes.sizeof(_LII)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return None
+        ms = (ctypes.windll.kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF
+        return ms / 1000.0
+    except Exception:
+        return None
+
+
+# 켜 둔 채로 조용히 업데이트할 때(v1.26) — 트레이에 숨어 있던 판이면 새 판도 트레이로 켠다.
+# 교체 배치는 탐색기로 새 판을 띄워(깨끗한 환경) 실행 인자를 넘길 수 없다. 그래서 옛 판이
+# 끝나기 전에 표시를 남기고, 새 판이 켜자마자 읽고 지운다(15분이 지난 표시는 버린다).
+_RESUME = "update_resume.json"
+
+
+def mark_resume(tray: bool) -> None:
+    try:
+        config.atomic_write(config.base_dir() / _RESUME,
+                            json.dumps({"tray": bool(tray), "at": time.time()}))
+    except Exception:
+        pass
+
+
+def take_resume_tray() -> bool:
+    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다."""
+    p = config.base_dir() / _RESUME
+    try:
+        o = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    try:
+        p.unlink()
+    except Exception:
+        pass
+    return bool(o.get("tray")) and time.time() - float(o.get("at") or 0) < 900
+
+
 def ack_failure() -> None:
     try:
         _status_path().unlink()
