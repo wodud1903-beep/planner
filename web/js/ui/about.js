@@ -61,7 +61,7 @@ export async function screen() {
       </section>
       <section class="card" id="pushcard">
         <h3 class="cardtitle">아침 브리핑 알림</h3>
-        <p class="s">매일 아침(8:50~10시 사이) 오늘 일정 · 할일 · 출고 · 뉴스를 이 폰으로 알려 드려요.</p>
+        <p class="s">매일 아침(8:50~10시 사이) 오늘 일정 · 할일 · 출고 · 뉴스와 내일 출고 · 안내멘트 안 보낸 고객 · 30일 넘게 멈춘 건 · 이번 달 만기를 이 폰으로 알려 드려요. 금요일 17시쯤에는 이번 주 실적(주간 보고)도 옵니다.</p>
         <p class="btnrow" id="pushbtns"></p>
         <p class="s" id="pushmsg"></p>
       </section>

@@ -8,6 +8,10 @@ import { createRequire } from "node:module";
 //    CommonJS 의 require 는 NODE_PATH 를 보므로 이 길로 부른다.
 //    (저장소에 npm 으로 깔아도 그대로 동작한다 — 그쪽이 먼저 잡힌다)
 const { chromium } = createRequire(import.meta.url)("playwright");
+// ⚠️ 검사는 늘 한국 시각으로 — 날짜를 만드는 이 검사(노드)와 브라우저의 '오늘' 이 달라지면
+//    (UTC 에서 돌리면 한국 자정~오전 9시 사이) 날짜 검사가 하루씩 어긋나 빨개졌다.
+//    브라우저는 이 프로세스의 TZ 를 물려받는다(따로 timezoneId 를 준 곳은 그대로).
+process.env.TZ = "Asia/Seoul";
 import { serve } from "./serve.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -1634,6 +1638,20 @@ console.log("\n[20] 주간 요약 — 폰에서");
   await pF.goBack();
   await pF.waitForTimeout(400);
   ok("뒤로 오면 주간 요약이 그대로", (await pF.locator(".wksec").count()) > 0);
+  // 금요일 주간 보고 알림을 누르면 여기로 온다 — [복사] 로 본사 보고방에(v1.26)
+  await pF.locator("#wkcopy").click();
+  await pF.waitForTimeout(300);
+  const wkClip = await pF.evaluate(() => navigator.clipboard.readText());
+  ok("주간 요약 [복사] — PC 와 같은 글", wkClip.includes("주간 요약") && wkClip.includes("[이번 주 출고]")
+     && wkClip.includes("김상현"), wkClip.slice(0, 80));
+  // 알림으로 처음 열면(고객 줄이 아직 없다) — 줄이 오면 저절로 다시 그린다
+  await pF.goto(s.url + "#/customers/week", { waitUntil: "domcontentloaded" });
+  await pF.waitForFunction(() => {
+    const b = document.querySelector("#wkcopy");
+    return b && !b.disabled && document.querySelectorAll(".wkitem").length > 0;
+  }, null, { timeout: 8000 }).catch(() => {});
+  ok("주간 요약으로 바로 열어도 고객 줄이 오면 채워진다",
+     (await pF.locator(".wkitem").count()) > 0 && !(await pF.locator("#wkcopy").isDisabled()));
 
   // 홈의 이번 주·다음 주 요약 — 고객 탭이 받아 둔 줄로 계산한다(새로 켜도 캐시로)
   await pF.goto(s.url + "#/agenda", { waitUntil: "networkidle" });

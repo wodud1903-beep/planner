@@ -123,20 +123,30 @@ async function appdataFile(token, name) {
   try { return typeof txt === "string" ? JSON.parse(txt) : txt; } catch (e) { return null; }
 }
 
-/** 이 계정의 설정 — 웹앱 파일 먼저, 없으면 PC 묶음의 plan_cfg.json. */
+/** 이 계정의 설정 — 웹앱 파일 먼저, 없으면 PC 묶음의 plan_cfg.json.
+ *  PC 묶음에서 안내멘트 '보냄' 기록(ment_copied.json)·만기 재계약 기록(renewals.json)도 꺼낸다. */
 async function settings(token) {
-  const out = { sheetId: "", tab: "미출고차량", newsDoc: DEF_NEWS_DOC };
+  const out = { sheetId: "", tab: "미출고차량", newsDoc: DEF_NEWS_DOC, sent: new Set(), renew: {} };
   try {
     const web = await appdataFile(token, "planner_web.json");
     if (web && web.sheetId) { out.sheetId = web.sheetId; out.tab = web.sheetTab || out.tab; }
   } catch (e) { /* 없으면 PC 것 */ }
   try {
     const pc = await appdataFile(token, "planner_sync.json");
-    const cfg = pc && pc.files && pc.files["plan_cfg.json"] ? JSON.parse(pc.files["plan_cfg.json"]) : null;
+    const files = (pc && pc.files) || {};
+    const cfg = files["plan_cfg.json"] ? JSON.parse(files["plan_cfg.json"]) : null;
     if (cfg) {
       if (!out.sheetId && cfg.sheetId) { out.sheetId = cfg.sheetId; out.tab = cfg.sheetName || out.tab; }
       if (typeof cfg.newsDoc === "string") out.newsDoc = docIdFrom(cfg.newsDoc);
     }
+    try {
+      const sent = JSON.parse(files["ment_copied.json"] || "[]");
+      if (Array.isArray(sent)) out.sent = new Set(sent.map(String));
+    } catch (e) { /* 없으면 아무도 안 보낸 것으로 */ }
+    try {
+      const rn = JSON.parse(files["renewals.json"] || "{}");
+      if (rn && typeof rn === "object" && !Array.isArray(rn)) out.renew = rn;
+    } catch (e) { /* 없으면 정리한 것 없음 */ }
   } catch (e) { /* 기본값으로 */ }
   return out;
 }
@@ -177,24 +187,30 @@ async function dueTasks(token, t) {
     .map((x) => ({ title: x.title.trim(), late: x.due.slice(0, 10) < t.ymd }));
 }
 
-async function sheetToday(token, set, t) {
-  if (!set.sheetId) return null;
+/** 고객 줄 + 고객ID(U열). U 는 따로 읽는다 — U열이 없는 시트에서 목록까지 실패하지 않게
+ *  (PC sheets.read_uids 와 같은 까닭). */
+async function sheetRows(token, set) {
   const C = await import("../web/js/customers.js");
-  const F = await import("../web/js/fmt.js");
   const rng = (a) => encodeURIComponent(`'${set.tab}'!${a}`);
-  const j = await gget(token, `https://sheets.googleapis.com/v4/spreadsheets/${set.sheetId}/values:batchGet`
-    + `?ranges=${rng("A1:Q")}&ranges=${rng("S1:T")}`
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${set.sheetId}`;
+  const j = await gget(token, `${base}/values:batchGet?ranges=${rng("A1:Q")}&ranges=${rng("S1:T")}`
     + "&valueRenderOption=FORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING");
   const [left, right] = (j.valueRanges || []).map((v) => v.values || []);
   const { rows } = C.parseRows(left || [], right || [], set.tab);
-  const same = (v) => { const d = F.parseDate(v); return d && d.getFullYear() === t.y
-    && d.getMonth() + 1 === t.mo && d.getDate() === t.d; };
-  const live = rows.filter((r) => String(r.values.status || "").trim() !== "취소");
-  return {
-    deliver: live.filter((r) => same(r.values.deliver_date))
-      .map((r) => `${r.values.customer}${r.values.model ? `(${r.values.model})` : ""}`),
-    contract: live.filter((r) => same(r.values.contract_date)).map((r) => r.values.customer),
-  };
+  try {
+    const u = await gget(token, `${base}/values/${rng("U1:U")}`);
+    const vals = (u && u.values) || [];
+    for (const cr of rows) cr.uid = String(((vals[cr.row - 1] || [])[0]) || "").trim();
+  } catch (e) { /* 고객ID 가 없으면 순번|이름 열쇠로 */ }
+  return rows;
+}
+
+/** 오늘 출고·계약 + 내일 출고 · 안내멘트 미발송 · 30일 넘게 멈춤 · 이번 달 만기(v1.26). */
+async function sheetToday(token, set, t) {
+  if (!set.sheetId) return null;
+  const B = await import("../web/js/brief.js");
+  const rows = await sheetRows(token, set);
+  return B.items(rows, new Date(t.y, t.mo - 1, t.d), { sent: set.sent, renew: set.renew });
 }
 
 /** 오늘 뉴스 문서의 제목들 — 오늘 고쳐진 문서일 때만(어제 뉴스를 오늘 것처럼 보내지 않게). */
@@ -236,7 +252,13 @@ function compose(t, { events, tasks, sheet, news }) {
     lines.push(`✅ ${cut(tasks[0].title, 24)}` + (tasks.length > 1 ? ` 외 ${tasks.length - 1}` : "")
       + (late ? ` (지난 기한 ${late})` : ""));
   }
+  const list = (xs, n = 3) => cut(xs.slice(0, n).join(", "), 40) + (xs.length > n ? ` 외 ${xs.length - n}` : "");
   if (sheet && sheet.deliver.length) lines.push(`🚗 오늘 출고: ${cut(sheet.deliver.join(", "), 40)}`);
+  // v1.26 — 오늘 할 일로 이어지는 것들(내일 출고 준비 · 멘트 · 멈춘 건 · 만기)
+  if (sheet && (sheet.tomorrow || []).length) lines.push(`🚚 내일 출고(준비 확인): ${list(sheet.tomorrow)}`);
+  if (sheet && (sheet.unsent || []).length) lines.push(`💬 안내멘트 안 보냄: ${list(sheet.unsent)}`);
+  if (sheet && (sheet.stale || []).length) lines.push(`⏳ 30일 넘게 멈춤 ${sheet.stale.length}: ${list(sheet.stale, 2)}`);
+  if (sheet && (sheet.expiry || []).length) lines.push(`🔔 이번 달 만기 ${sheet.expiry.length}: ${list(sheet.expiry, 2)}`);
   if (sheet && sheet.contract.length) lines.push(`📝 오늘 계약: ${cut(sheet.contract.join(", "), 40)}`);
   if (news && news.length) {
     lines.push(`📰 [${news[0].tone}] ${cut(news[0].title, 30)}` + (news.length > 1 ? ` 외 ${news.length - 1}` : ""));
@@ -254,12 +276,56 @@ function compose(t, { events, tasks, sheet, news }) {
 async function buildBrief(accessToken, now = new Date()) {
   const t = kst(now);
   const safe = (p) => p.catch(() => null);
-  const set = await settings(accessToken).catch(() => ({ sheetId: "", tab: "", newsDoc: DEF_NEWS_DOC }));
+  const set = await settings(accessToken).catch(() => ({ sheetId: "", tab: "", newsDoc: DEF_NEWS_DOC,
+                                                         sent: new Set(), renew: {} }));
   const [events, tasks, sheet, news] = await Promise.all([
     safe(todayEvents(accessToken, t)), safe(dueTasks(accessToken, t)),
     safe(sheetToday(accessToken, set, t)), safe(newsTitles(accessToken, set.newsDoc, t)),
   ]);
   return compose(t, { events, tasks, sheet, news });
+}
+
+// ---------------------------------------------------------------- 금요일 주간 보고(v1.26)
+// 금요일 17시 무렵 한 번 — 이번 주 출고·계약·수수료를 알림으로, 누르면 주간 요약 화면에서
+// [복사] 해 본사 보고방에 붙여 넣는다. 예약 작업은 17시대·18시대 두 번 걸어 두고(±59분)
+// 처음 맞는 것에 보낸다(같은 주에 두 번 안 보낸다 — rec.lastWeekly).
+const WEEKLY_FROM = { h: 16, m: 50 };
+const WEEKLY_UNTIL_H = 21;
+
+function dueWeekly(now = new Date()) {
+  const t = kst(now);
+  const m = t.h * 60 + t.mi;
+  return t.wd === 5 && m >= WEEKLY_FROM.h * 60 + WEEKLY_FROM.m && t.h < WEEKLY_UNTIL_H;
+}
+
+/** 그 주(월요일 시작)의 열쇠 — 월요일 날짜. */
+function weekKey(now = new Date()) {
+  const t = kst(now);
+  const d = new Date(Date.UTC(t.y, t.mo - 1, t.d));
+  d.setUTCDate(d.getUTCDate() - ((t.wd + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+function composeWeekly(t, secs) {
+  return {
+    title: `📊 ${t.mo}/${t.d}(${WD[t.wd]}) 이번 주 실적`,
+    body: secs.lines.join("\n"),
+    url: "./#/customers/week",
+    tag: "weekly-" + secs.week,
+  };
+}
+
+async function buildWeekly(accessToken, now = new Date()) {
+  const t = kst(now);
+  const set = await settings(accessToken).catch(() => ({ sheetId: "", tab: "" }));
+  if (!set.sheetId) {
+    return composeWeekly(t, { week: weekKey(now), lines: ["고객 시트를 아직 정하지 않아 주간 실적을 셀 수 없어요."] });
+  }
+  const W = await import("../web/js/weekly.js");
+  const B = await import("../web/js/brief.js");
+  const rows = await sheetRows(accessToken, set);
+  const secs = W.sections(rows, new Date(t.y, t.mo - 1, t.d));
+  return composeWeekly(t, { week: weekKey(now), lines: B.weeklyLines(secs) });
 }
 
 async function accessFrom(rt) {
@@ -290,6 +356,7 @@ function validSub(sub) {
 module.exports = {
   vapid, subId, store, storeReady, send, now, kst, dueNow, buildBrief, compose, titlesFrom, accessFrom,
   readBody, validSub, docIdFrom, SEND_FROM, SEND_UNTIL_H,
+  dueWeekly, weekKey, buildWeekly, composeWeekly,
   _setStore: (x) => { _store = x; }, _setSend: (fn) => { _send = fn; },
   _setClock: (fn) => { _clock = fn; },
 };

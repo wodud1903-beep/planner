@@ -257,9 +257,22 @@ const HDR = ["순번", "고객명/사업자", "금융사", "차종", "차량가�
              "특판/대리점", "계약일(발주)", "출고일", "진행현황", "계약조건", "내용", "출고유형",
              "고객센터 번호", "사고접수연락처"];
 const SHEETV = [HDR,
-  ["1", "김상현", "KB캐피탈", "쏘나타", "", "", "", "", "", "2026. 9. 1", "2026. 11. 2", "출고", "", "", "", "", ""],
+  ["1", "김상현", "KB캐피탈", "쏘나타", "", "", "", "300,000", "", "2026. 9. 1", "2026. 11. 2", "출고", "", "", "", "", ""],
   ["2", "박영희", "KB캐피탈", "아이오닉5", "", "", "", "", "", "2026. 11. 2", "", "발주", "", "", "", "", ""],
-  ["3", "한지민", "IM캐피탈", "G70", "", "", "", "", "", "", "2026. 11. 2", "취소", "", "", "", "", ""]];
+  ["3", "한지민", "IM캐피탈", "G70", "", "", "", "", "", "", "2026. 11. 2", "취소", "", "", "", "", ""],
+  // v1.26 — 내일 출고 · 안내멘트 미발송 · 30일 넘게 멈춤 · 이번 달 만기(재계약 정리 건은 뺀다)
+  ["4", "이수진", "우리캐피탈", "아반떼", "", "", "", "200,000", "", "2026. 10. 1", "2026. 11. 3", "출고대기", "", "", "", "", ""],
+  ["5", "최민수", "BNK캐피탈", "K5", "", "", "", "", "", "2026. 9. 1", "2026. 10. 31", "출고", "", "", "", "", ""],
+  ["6", "정해나", "KB캐피탈", "스포티지", "", "", "", "", "", "2026. 9. 20", "", "발주", "", "", "", "", ""],
+  ["7", "오래된", "현대캐피탈", "그랜저", "", "", "", "", "", "2023. 11. 1", "2023. 11. 20", "출고", "36개월 / 2만", "", "", "", ""],
+  ["8", "재계약됨", "현대캐피탈", "투싼", "", "", "", "", "", "2023. 11. 1", "2023. 11. 25", "출고", "36개월", "", "", "", ""]];
+// 고객ID(U열) — 김상현·재계약됨만 있다. 김상현은 안내멘트를 이미 보냈다(PC 묶음 ment_copied.json).
+const UIDS = [["고객ID"], ["U-KIM"], [""], [""], [""], [""], [""], [""], ["U-RE"]];
+const PCB = { files: {
+  "plan_cfg.json": JSON.stringify({ sheetId: "SHEETX", sheetName: "미출고차량" }),
+  "ment_copied.json": JSON.stringify(["uid:U-KIM"]),
+  "renewals.json": JSON.stringify({ "uid:U-RE|2026-11-25": { s: "재계약", at: "2026-10-20T00:00:00Z" } }),
+} };
 let revoked = false;
 const calUrls = [];
 const NEWS = "# **주요 뉴스**\n|  **호재** | **SK하이닉스, 3분기 영업익 83조 돌파**[원문](https://x)*08:30* 본문 |\n"
@@ -286,9 +299,12 @@ globalThis.fetch = async (url, init = {}) => {
     { title: "지난 할일", due: "2026-10-30T00:00:00.000Z" },
     { title: "다음 주 할일", due: "2026-11-09T00:00:00.000Z" }] });
   if (u.includes("spaces=appDataFolder") && u.includes("planner_web.json")) return J({ files: [{ id: "W1" }] });
+  if (u.includes("spaces=appDataFolder") && u.includes("planner_sync.json")) return J({ files: [{ id: "P1" }] });
   if (u.includes("spaces=appDataFolder")) return J({ files: [] });
   if (u.includes("/files/W1?alt=media")) return T(JSON.stringify({ sheetId: "SHEETX", sheetTab: "미출고차량" }));
+  if (u.includes("/files/P1?alt=media")) return T(JSON.stringify(PCB));
   if (u.includes("values:batchGet")) return J({ valueRanges: [{ values: SHEETV }, { values: SHEETV.map(() => []) }] });
+  if (u.includes("/values/'미출고차량'!U1:U")) return J({ values: UIDS });
   if (u.includes("fields=modifiedTime")) return J({ modifiedTime: "2026-11-01T23:40:00Z" });   // 한국 08:40
   if (u.includes("/export?mimeType=text/plain")) return T(NEWS);
   return { ok: false, status: 404, headers: new Map(), json: async () => ({}), text: async () => "" };
@@ -321,6 +337,12 @@ ok("일정 — 시각 순(종일은 앞)", lines.some((l) => l.startsWith("📅 
 ok("할일 — 오늘·지난 기한만(다음 주 것은 빼고)", lines.some((l) => l.startsWith("✅ 박영희 심사서류 받기 외 1 (지난 기한 1)")));
 ok("오늘 출고 — 취소는 빼고", lines.includes("🚗 오늘 출고: 김상현(쏘나타)"));
 ok("오늘 계약", lines.includes("📝 오늘 계약: 박영희"));
+ok("내일 출고 — 전날 준비", lines.includes("🚚 내일 출고(준비 확인): 이수진(아반떼)"), msg.body);
+ok("안내멘트 안 보냄 — 출고 0~2일째, 이미 보낸 고객(고객ID)은 뺀다",
+   lines.includes("💬 안내멘트 안 보냄: 최민수"), msg.body);
+ok("30일 넘게 멈춘 건 — 보드의 빨간 카드(출고 대기·출고는 아니다)",
+   lines.includes("⏳ 30일 넘게 멈춤 1: 정해나 43일"), msg.body);
+ok("이번 달 만기 — 재계약으로 정리한 건은 뺀다", lines.includes("🔔 이번 달 만기 1: 오래된 11/20"), msg.body);
 ok("오늘 뉴스 — 첫 기사 제목", lines.includes("📰 [호재] SK하이닉스, 3분기 영업익 83조 돌파 외 1"));
 ok("누르면 홈으로 · 같은 날은 같은 꼬리표(알림이 겹치면 하나만)", msg.url === "./#/agenda" && msg.tag === "brief-2026-11-02");
 r = res();
@@ -362,6 +384,42 @@ await load("push/unsubscribe.js")({ ...req({ method: "POST" }), body: { endpoint
 ok("[알림 끄기] — 기록을 지운다", r.statusCode === 200 && !mem.has(id));
 const empty = PU.compose(PU.kst(CLOCK), { events: [], tasks: [], sheet: null, news: null });
 ok("아무것도 없는 날은 인사 한 줄", empty.body.endsWith("좋은 하루 보내세요!"), empty.body);
+
+console.log("\n[8-2] 금요일 주간 보고 알림 — 금 17시대 한 번 · 누르면 주간 요약에서 [복사]");
+r = res();
+await subscribe({ ...req({ method: "POST", cookie: sessCookie }), body: { subscription: SUB } }, r);
+const weekly = load("push/weekly.js");
+const sentBefore = pushed.length;
+PU._setClock(() => new Date("2026-11-05T08:10:00Z"));      // 한국 목 17:10 — 금요일이 아니다
+r = res();
+await weekly(cronReq(), r);
+ok("금요일이 아니면 안 보낸다", r.json().skipped === "time" && pushed.length === sentBefore);
+PU._setClock(() => new Date("2026-11-06T07:30:00Z"));      // 한국 금 16:30 — 아직
+r = res();
+await weekly(cronReq(), r);
+ok("16:50 전이면 안 보낸다", r.json().skipped === "time");
+PU._setClock(() => new Date("2026-11-06T08:10:00Z"));      // 한국 금 17:10
+r = res();
+await weekly(cronReq(), r);
+ok("금요일 17시대 첫 예약 작업에 보낸다", r.json().sent === 1 && pushed.length === sentBefore + 1,
+   JSON.stringify(r.json()));
+const wk = pushed.at(-1).payload;
+ok("제목 — 날짜와 '이번 주 실적'", wk.title === "📊 11/6(금) 이번 주 실적", wk.title);
+const wl = wk.body.split("\n");
+ok("첫 줄 — 이번 주 출고·계약·수수료", wl[0] === "출고 2 · 계약 1 · 수수료 500,000원", wl[0]);
+ok("출고한 고객", wl.includes("🚗 김상현, 이수진"), wk.body);
+ok("누르면 주간 요약 화면 · 주마다 꼬리표", wk.url === "./#/customers/week" && wk.tag === "weekly-2026-11-02",
+   wk.url + " " + wk.tag);
+ok("[복사] 안내", wl.at(-1).includes("[복사]"));
+PU._setClock(() => new Date("2026-11-06T09:20:00Z"));      // 한국 금 18:20 — 두 번째 예약 작업
+r = res();
+await weekly(cronReq(), r);
+ok("같은 주 두 번째는 건너뛴다", r.json().sent === 0 && pushed.length === sentBefore + 1);
+ok("아침 브리핑 기록(하루 한 번)과 따로 센다", mem.get(id).rec.lastWeekly === "2026-11-02");
+PU._setClock(() => new Date("2026-11-07T00:10:00Z"));      // 한국 토 09:10 — 아침 브리핑은 그대로 간다
+r = res();
+await cron(cronReq(), r);
+ok("주간 보고를 보낸 뒤에도 아침 브리핑은 따로 간다", r.json().sent === 1);
 
 console.log(fails ? `\n${fails}건 실패` : "\n전부 통과");
 process.exit(fails ? 1 : 0);

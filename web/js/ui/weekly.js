@@ -4,8 +4,11 @@
 // 그래서 오프라인에서도 열린다.
 import { html, raw, esc, render, $, $$ } from "./dom.js";
 import * as weekly from "../weekly.js";
-import { setBody, markTab } from "./chrome.js";
+import { setBody, markTab, toast } from "./chrome.js";
 import * as router from "../router.js";
+
+// 금요일 주간 보고 알림을 누르면 이 화면이 먼저 뜨고 고객 줄은 뒤에 온다 — 오면 다시 그린다
+addEventListener("planner:rows", () => { if ($("#wkcopy")) screen(); });
 
 // PC 앱의 안내말 중 폰에 안 맞는 것만 바꿔 넣는다.
 // (weekly.js 는 파이썬과 글자까지 같게 두고, 고치는 일은 여기서 한다)
@@ -31,7 +34,9 @@ export function screen() {
     <div class="pane">
       <button class="chip backbtn2" id="wkback">← 고객 목록</button>
       <h2 style="margin:10px 0 2px">주간 요약</h2>
-      <p class="s" style="color:var(--sub);margin:0 0 14px">${weekly.titleLine(today)}</p>
+      <p class="s" style="color:var(--sub);margin:0 0 10px">${weekly.titleLine(today)}</p>
+      <p style="margin:0 0 14px"><button class="primary" id="wkcopy"
+        ${raw(rows.length ? "" : "disabled")}>복사 — 본사 보고방에 붙여 넣기</button></p>
       ${raw(rows.length ? "" : `<p class="notice">고객 목록을 아직 못 읽었습니다.
         고객 탭에서 한 번 불러온 뒤 다시 열어 주세요.</p>`)}
       ${raw(secs.map((x) => sec(x, rowIndex(rows))).join(""))}
@@ -39,6 +44,16 @@ export function screen() {
     </div>`);
 
   $("#wkback").onclick = () => router.go("/customers");
+  // PC 의 [복사] 와 같은 글(weekly.renderText) — 카톡 보고방에 그대로 붙인다(v1.26)
+  const btn = $("#wkcopy");
+  btn.onclick = () => {
+    const text = weekly.renderText(weekly.titleLine(today), secs);
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = "복사됨 ✓";
+      setTimeout(() => { btn.textContent = "복사 — 본사 보고방에 붙여 넣기"; }, 1600);
+      toast("복사했어요. 카카오톡 보고방에 붙여 넣으세요.");
+    }).catch(() => toast("복사하지 못했습니다.", { tone: "bad" }));
+  };
   wire($("#body"));
 }
 
