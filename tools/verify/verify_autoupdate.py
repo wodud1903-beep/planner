@@ -77,10 +77,7 @@ print("[1] 켤 때 — 묻지 않고 받는다")
 w = MainWindow()
 w.sig_toast.connect(lambda t, m: TOASTS.append(m))
 w.show()
-pump(0.3)
-STARTED.clear()
-w.check_update(manual=False)
-pump(0.8)
+pump(5.0)                                   # 켜고 4초 뒤 저절로 확인한다 — 그 길을 그대로 본다
 ok("새 판이면 바로 받는다(창 없이)", STARTED == [("9.9.9", False)] and not ASKED, (STARTED, ASKED))
 ok("받는다고 알림으로만", any("받는 중" in t for t in TOASTS), TOASTS[-1:])
 
