@@ -177,6 +177,22 @@ rows = [row(2, "김상현", "발주", T - timedelta(days=5)),
 w.sheet_rows = rows
 w._sheet_loaded = True
 w.todos = []
+# ⚠️ 다른 PC 기록을 받기 전엔 돌리지 않는다(v1.27) — 받기 전에 할일을 만들면 이 PC 의 옛 목록이
+#    더 새것으로 보여 다른 PC 에서 고친 할일을 덮어쓴다(todos.json 은 나중 파일이 이긴다)
+w._pulled_once = False
+ok("다른 PC 기록을 받기 전엔 할일을 만들지 않는다", w._run_auto_rules() == 0 and w.todos == [])
+_calls = []
+_orig_rar = w._run_auto_rules
+w._run_auto_rules = lambda: _calls.append("rules") or 0
+w._maybe_auto_monthly = lambda: _calls.append("monthly")
+w._fetch_after_sync = w.fetch_all_async
+w.fetch_all_async = lambda *a, **k: None
+w._on_synced(False)
+for _ in range(5):
+    app.processEvents()
+ok("받고 나면 미뤄 둔 자동 규칙·월 마감을 돌린다", _calls == ["rules", "monthly"] and w._pulled_once, _calls)
+del w._run_auto_rules, w._maybe_auto_monthly
+w.fetch_all_async = w._fetch_after_sync
 n1 = w._run_auto_rules()
 titles = [t.title for t in w.todos]
 ok("처음 — 날짜 규칙 할일만(출고 전날·감사·만기 D-90)", set(titles) == {"[내일 출고] 이수진", "[출고 감사] 이수진",

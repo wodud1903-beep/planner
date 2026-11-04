@@ -357,7 +357,8 @@ res = {"version": "v9.9.9", "asset_url": "x", "notes": ""}
 w._on_update_checked(res, "", False)
 ok("켤 때는 묻지 않고 바로 받는다", started == [("v9.9.9", False)] and asked == [] and told == [],
    (started, asked, told))
-ok("받는다고 알림으로만", any("받는 중" in m for m in toasts), toasts[-1:])
+ok("받는다고 진행 창(막대)으로(v1.27)", w._upd_prog is not None and w._upd_prog.isVisible()
+   and w._upd_prog.state == "download", getattr(w, "_upd_prog", None))
 ok("시도를 센다", tries["n"] == 1)
 w._on_update_checked(res, "", False)
 ok("두 번째도 한다", len(started) == 2 and tries["n"] == 2)
@@ -379,10 +380,17 @@ w._auto_updating = False
 _n = len(toasts)
 w._on_update_checked(None, "연결 안 됨", False)
 ok("켤 때 확인이 실패해도 창도 알림도 띄우지 않는다", told == [] and len(toasts) == _n, (told, toasts[_n:]))
-w._auto_updating = True                       # 받다가 실패(자동) — 알림으로만, 몇 시간 뒤 다시
+w._auto_updating = True                       # 받다가 실패(자동) — 진행 창에 까닭, 몇 시간 뒤 다시
+w._upd_prog.downloading()
+w._upd_prog.pop()
 w._on_update_checked(None, "끊김", False)
-ok("자동으로 받다 실패하면 창 없이 알림으로", told == [] and len(toasts) == _n + 1
-   and not w._auto_updating, toasts[_n:])
+ok("자동으로 받다 실패하면 창 없이 진행 창에 까닭(v1.27)", told == [] and w._upd_prog.state == "fail"
+   and "끊김" in w._upd_prog.lbl_msg.text() and not w._auto_updating, w._upd_prog.lbl_msg.text())
+w._upd_prog.close()
+w._auto_updating = True                       # 진행 창이 없을 때(닫혔음)는 알림으로
+w._on_update_checked(None, "끊김", False)
+ok("진행 창이 닫혀 있으면 알림으로", told == [] and len(toasts) == _n + 1 and not w._auto_updating,
+   toasts[_n:])
 QMessageBox.question, QMessageBox.information, QMessageBox.warning = _q, _i, _wn
 updater.is_frozen, updater.attempts, updater.note_attempt = _frozen, _att, _note
 src_up = inspect.getsource(MainWindow._on_update_checked)

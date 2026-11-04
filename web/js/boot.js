@@ -69,7 +69,8 @@ async function retryLoads() {
   await auth.token();
   paintState();
   for (const m of MODS()) {
-    try { m.load(); } catch (e) { /* 하나가 탈나도 나머지는 받는다 */ }
+    // 하나가 탈나도 나머지는 받는다 — 비동기 실패도 여기서 삼킨다(처리 안 된 거절이 콘솔에 남지 않게)
+    try { Promise.resolve(m.load()).catch(() => {}); } catch (e) { /* 동기 실패 */ }
   }
 }
 addEventListener("planner:busy", () => {

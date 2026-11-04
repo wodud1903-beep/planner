@@ -157,9 +157,14 @@ w.settings.sheet_on, w.settings.sheet_id, w.settings.sheet_name = True, "SID", "
 w.sheet_rows = list(ROWS)
 w._sheet_loaded = True
 w._account_verified = False
+w._pulled_once = True
 w._maybe_auto_monthly()
 ok("계정을 확인하기 전에는 쓰지 않는다", not WROTE)
 w._account_verified = True
+w._pulled_once = False
+w._maybe_auto_monthly()
+ok("다른 PC 기록(적은 달)을 받기 전에는 쓰지 않는다", not WROTE)
+w._pulled_once = True
 w._maybe_auto_monthly()
 for _ in range(30):
     app.processEvents()
@@ -177,6 +182,23 @@ w.settings.monthly_on = False
 w.settings.monthly_last = ""
 w._maybe_auto_monthly()
 ok("끄면 안 적는다", len(WROTE) == 1)
+# 적을 권한이 없는 PC(직원 PC 등) — 시트를 새로 읽을 때마다 다시 쓰려 하지 않는다(v1.27)
+w.settings.monthly_on = True
+_tries = []
+def _deny(auth, sid, tab, values, guard=""):
+    _tries.append(1)
+    raise sheets.GoogleError("이 시트를 고칠 권한이 없습니다")
+sheets.write_tab = _deny
+w._maybe_auto_monthly()
+for _ in range(30):
+    app.processEvents()
+    time.sleep(0.02)
+w._maybe_auto_monthly()
+for _ in range(10):
+    app.processEvents()
+ok("못 적었으면 이번 실행 동안 다시 하지 않는다", len(_tries) == 1 and w.settings.monthly_last == "", _tries)
+sheets.write_tab = lambda auth, sid, tab, values, guard="": WROTE.append((sid, tab, values[0][0], guard))
+w.settings.monthly_on = False
 from planner.monthly_dialog import MonthlyDialog  # noqa: E402
 
 d = MonthlyDialog(ROWS, date(2026, 11, 3), on_write=lambda y, m: WROTE.append(("dlg", y, m)))
