@@ -68,7 +68,6 @@ def _now() -> str:
 
 def write(kind: str, text: str) -> None:
     """기록 한 덩어리 — 머리글(무엇·판·시각) + 내용."""
-    global _fh
     with _lock:
         try:
             f = _fh or open(log_path(), "a", encoding="utf-8")

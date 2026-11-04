@@ -102,12 +102,15 @@ def _rm(path: str) -> None:
         pass
 
 
-def download(asset_url: str) -> str:
+def download(asset_url: str, progress=None) -> str:
     """자산을 임시 파일로 내려받고 경로 반환.
 
     **받은 크기를 반드시 검증한다.** stream=True 로 받다가 연결이 끊겨도
     iter_content 는 예외 없이 정상 종료한다. 예전엔 검증이 없어 절반짜리 exe 가
     그대로 설치되고, 교체 배치가 백업본까지 지워 앱이 아예 실행되지 않았다.
+
+    progress(받은 바이트, 전체 바이트) — 받는 동안 진행 창(update_progress)에 알린다(v1.27).
+    전체를 모르면 0. 이 함수는 일꾼 스레드에서 돈다 — progress 는 신호로 넘겨야 한다.
     """
     r = requests.get(asset_url, headers=_headers("application/octet-stream"),
                      timeout=180, stream=True)
@@ -116,12 +119,21 @@ def download(asset_url: str) -> str:
     expect = int(r.headers.get("Content-Length") or 0)
     fd, path = tempfile.mkstemp(suffix=".exe", prefix="planner_upd_")
     got = 0
+
+    def tell():
+        if progress is not None:
+            try:
+                progress(got, expect)
+            except Exception:
+                pass                       # 화면 쪽이 탈나도 받기는 계속한다
+    tell()
     try:
         with os.fdopen(fd, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
                 if chunk:
                     f.write(chunk)
                     got += len(chunk)
+                    tell()
     except Exception as e:
         _rm(path)
         raise RuntimeError(f"다운로드 중 연결이 끊겼습니다: {e}")
@@ -460,26 +472,71 @@ def idle_seconds():
 _RESUME = "update_resume.json"
 
 
-def mark_resume(tray: bool) -> None:
+def mark_resume(tray: bool, to: str = "") -> None:
+    """to — 바꾸려는 새 판 번호. 새 판이 켜지면 '업데이트 완료' 를 보여 준다(v1.27)."""
     try:
         config.atomic_write(config.base_dir() / _RESUME,
-                            json.dumps({"tray": bool(tray), "at": time.time()}))
+                            json.dumps({"tray": bool(tray), "at": time.time(),
+                                        "from": config.APP_VERSION, "to": str(to or "").lstrip("v")}))
     except Exception:
         pass
 
 
-def take_resume_tray() -> bool:
-    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다."""
+def take_resume() -> dict:
+    """업데이트로 다시 켜졌으면 {tray, from, to} — 15분이 지난 표시는 버린다. 읽으면 지운다."""
     p = config.base_dir() / _RESUME
     try:
         o = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
-        return False
+        return {}
     try:
         p.unlink()
     except Exception:
         pass
-    return bool(o.get("tray")) and time.time() - float(o.get("at") or 0) < 900
+    if not isinstance(o, dict) or time.time() - float(o.get("at") or 0) >= 900:
+        return {}
+    return o
+
+
+def take_resume_tray() -> bool:
+    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다."""
+    return bool(take_resume().get("tray"))
+
+
+_LAST_RUN = "last_version.json"
+
+
+def note_run_version() -> str:
+    """지난번에 켠 판 번호를 돌려주고(처음이면 "") 지금 판을 적는다 — '업데이트 완료' 를 가린다."""
+    p = config.base_dir() / _LAST_RUN
+    prev = ""
+    try:
+        prev = str(json.loads(p.read_text(encoding="utf-8")).get("version") or "")
+    except Exception:
+        prev = ""
+    if prev != config.APP_VERSION:
+        try:
+            config.atomic_write(p, json.dumps({"version": config.APP_VERSION}))
+        except Exception:
+            pass
+    return prev
+
+
+def finished_update(resume: dict, prev: str = "") -> str:
+    """방금 업데이트로 이 판이 켜졌으면 그 판 번호(→ '업데이트 완료'), 아니면 "".
+
+    · 바꾸기 전에 남긴 표시(mark_resume 의 to)가 지금 판이면
+    · 지난번에 켠 판(prev)보다 지금 판이 높으면(직접 받아 바꾼 경우도)
+    · 기록이 없는 첫 판인데 방금 교체 배치가 깔았으면(v1.26 → v1.27 처럼 표시를 몰랐던 옛 판이 바꾼 경우)
+    되돌림(교체 실패로 옛 판이 다시 켜짐)은 완료가 아니다.
+    """
+    cur = config.APP_VERSION
+    to = str((resume or {}).get("to") or "").lstrip("v")
+    if to and _parse_ver(to) == _parse_ver(cur) and (resume or {}).get("from") != cur:
+        return cur
+    if prev:
+        return cur if _parse_ver(cur) > _parse_ver(prev) else ""
+    return cur if just_installed() else ""
 
 
 def ack_failure() -> None:

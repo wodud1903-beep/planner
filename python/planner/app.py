@@ -162,11 +162,17 @@ def main() -> int:
     _server.newConnection.connect(_on_second_instance)
 
     # /tray 스위치로 실행되면 트레이로 시작 — 켜 둔 채로 조용히 업데이트한 뒤 다시 켜질 때도,
-    # 그때 트레이에 숨어 있었으면 트레이로(v1.26, updater.take_resume_tray)
-    if any(a.lstrip("/-").lower() == "tray" for a in sys.argv[1:]) or updater.take_resume_tray():
+    # 그때 트레이에 숨어 있었으면 트레이로(v1.26, updater.take_resume)
+    resume = updater.take_resume()
+    if any(a.lstrip("/-").lower() == "tray" for a in sys.argv[1:]) or resume.get("tray"):
         win.hide()
     else:
         win.show()
+    # 방금 업데이트로 켜졌으면 '업데이트 완료' 를 잠깐 보여 준다(v1.27 — 진행 창의 마지막 단계)
+    done_ver = updater.finished_update(resume, updater.note_run_version())
+    if done_ver:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1200, lambda: win.show_update_done(done_ver))
 
     rc = app.exec()
     # ⚠️ 파이썬의 마무리 정리(위젯·Qt 객체를 하나씩 지우기)를 건너뛰고 바로 끝낸다.

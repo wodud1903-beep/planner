@@ -79,7 +79,8 @@ w.sig_toast.connect(lambda t, m: TOASTS.append(m))
 w.show()
 pump(5.0)                                   # 켜고 4초 뒤 저절로 확인한다 — 그 길을 그대로 본다
 ok("새 판이면 바로 받는다(창 없이)", STARTED == [("9.9.9", False)] and not ASKED, (STARTED, ASKED))
-ok("받는다고 알림으로만", any("받는 중" in t for t in TOASTS), TOASTS[-1:])
+ok("받는다고 진행 창(막대)으로 — 알림 창 없이(v1.27)", w._upd_prog is not None and w._upd_prog.isVisible()
+   and w._upd_prog.state == "download" and not ASKED, (getattr(w, "_upd_prog", None), ASKED))
 
 print("[2] [업데이트 확인] 을 눌러도 묻지 않는다")
 w._auto_updating = False

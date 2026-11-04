@@ -155,6 +155,17 @@ ok("대시보드·보드용 줄도 저장본으로", len(w2.sheet_rows) == 2)
 pump(3.0)
 ok("읽기에 실패해도 오류 창을 띄우지 않는다(저장본을 보는 중)", not WARN, WARN)
 ok("'잠시 뒤 다시 읽습니다'", "잠시 뒤 다시" in w2.lbl_cust.text(), w2.lbl_cust.text())
+# v1.27 — 못 읽는 까닭을 보여 주고, 계속 안 되면 알림 한 번 뒤 그만 조른다([불러오기] 로 다시)
+_t2 = []
+w2.sig_toast.connect(lambda t, m: _t2.append(m))
+_n0 = getattr(w2, "_sheet_cache_fails", 0)
+for _i in range(10 - _n0):
+    w2._on_sheet_rows(None, 0, "HTTP 403 권한이 없습니다\n자세한 내용")
+ok("못 읽는 까닭도 보인다", "권한이 없습니다" in w2.lbl_cust.text(), w2.lbl_cust.text())
+ok("10번째에는 알림 한 번 · '[불러오기] 를 눌러'", len(_t2) == 1 and "[불러오기]" in w2.lbl_cust.text(),
+   (_t2, w2.lbl_cust.text()))
+ok("그래도 오류 창은 없다", not WARN, WARN)
+w2._sheet_cache_fails = 0
 
 print("[3] 인터넷이 붙으면 새로 읽은 것으로 바꾼다")
 NET["up"] = True

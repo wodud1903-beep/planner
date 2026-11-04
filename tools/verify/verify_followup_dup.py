@@ -121,6 +121,22 @@ DEL.clear()
 w._run_followups()
 pump(0.4)
 ok("다시 조회해도 더 만들지 않는다", INS == [] and DEL == [] and len(w.todos) == 2, (INS, DEL))
+print("[4] 지울 수 없는 캘린더(남의 읽기 전용)의 겹침 — 조회 때마다 다시 지우려 하지 않는다(v1.27)")
+RO = []
+def _ro_delete(auth, cal, eid):
+    RO.append(eid)
+    raise google_client.GoogleError("권한 없음")
+google_client.delete_event = _ro_delete
+w.cal_events = [ev("r1", "[출고 1개월] 남궁민", target, cal="shared@x"),
+                ev("r2", "[출고 1개월] 남궁민", target, cal="shared@x")]
+w._run_followups()
+pump(0.4)
+ok("한 번은 지워 본다", RO == ["r2"], RO)
+w.cal_events = [ev("r1", "[출고 1개월] 남궁민", target, cal="shared@x"),
+                ev("r2", "[출고 1개월] 남궁민", target, cal="shared@x")]
+w._run_followups()
+pump(0.4)
+ok("못 지운 것은 다시 부르지 않고 그대로 보여 준다", RO == ["r2"] and len(w.cal_events) == 2, (RO, len(w.cal_events)))
 ok("받고 나면(_on_synced) 검사할 수 있게 된다",
    "self._pulled_once = True" in __import__("inspect").getsource(MainWindow._on_synced))
 w.hide()

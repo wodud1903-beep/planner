@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import threading
+import time
 import uuid
 import webbrowser
 from dataclasses import dataclass, field, replace
@@ -35,6 +36,7 @@ from . import (
     theme, updater, weekly,
 )
 from .auto_rules_dialog import AutoRulesDialog
+from .update_progress import UpdateProgress
 from .monthly_dialog import MonthlyDialog
 from .calendar_window import CalendarWindow
 from .customer_dialog import CustomerDialog
@@ -152,6 +154,8 @@ class MainWindow(QMainWindow):
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
+    sig_upd_progress = Signal(object, object)   # 업데이트 받는 중 (받은 바이트, 전체) — 진행 창(v1.27)
+    sig_upd_stage = Signal(str)                 # 업데이트 단계 ("apply" = 다 받고 바꾸는 중)
     sig_news = Signal(object, str, bool)    # 오늘의 뉴스 (뉴스|None, 오류, 권한 모자람)
     sig_write_done = Signal(object, object, str)   # (_PendingOp, 실제결과|None, 오류)
     sig_sheet_rows = Signal(object, object, str)   # (행목록|None, 마지막행, 오류)
@@ -309,6 +313,8 @@ class MainWindow(QMainWindow):
         self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
         self.sig_update.connect(self._on_update_checked)
+        self.sig_upd_progress.connect(self._on_upd_progress)
+        self.sig_upd_stage.connect(self._on_upd_stage)
         self.sig_news.connect(self._on_news)
         self.sig_write_done.connect(self._on_write_done)
         self.sig_sheet_rows.connect(self._on_sheet_rows)
@@ -646,6 +652,10 @@ class MainWindow(QMainWindow):
         if changed:
             self.reload_data()
             self.sig_toast.emit(config.APP_NAME, "다른 PC의 변경사항을 동기화했습니다.")
+        # 받기 전에 시트를 먼저 다 읽었으면 그때 미뤄 둔 자동 규칙·월 마감을 지금(v1.27)
+        if self._sheet_loaded:
+            QTimer.singleShot(0, self._run_auto_rules)
+            QTimer.singleShot(0, self._maybe_auto_monthly)
         # 원격 초기 시드/수렴을 위해 로컬 상태를 한 번 업로드 예약
         self._touch_sync()
         self.fetch_all_async()
@@ -804,7 +814,12 @@ class MainWindow(QMainWindow):
     UPDATE_IDLE_SEC = 180           # 창이 보이면 PC 를 이만큼 안 만질 때 바꾼다(쓰는 중에 꺼지지 않게)
 
     def check_update(self, manual: bool, periodic: bool = False):
-        if getattr(self, "_upd_checking", False) or getattr(self, "_auto_updating", False):
+        if getattr(self, "_auto_updating", False):
+            prog = getattr(self, "_upd_prog", None)
+            if manual and prog is not None:
+                prog.pop()                      # 이미 받는 중 — 진행 창을 다시 앞으로(v1.27)
+            return
+        if getattr(self, "_upd_checking", False):
             return
         self._upd_checking = True
         self._periodic_check = periodic
@@ -836,8 +851,7 @@ class MainWindow(QMainWindow):
             return
         updater.note_attempt(ver)
         self._auto_updating = True
-        self.sig_toast.emit(config.APP_NAME, f"새 버전 {ver} 으로 바꿉니다 — 잠시 뒤 저절로 다시 켜집니다.")
-        self._start_update(res, manual=False)
+        self._begin_update(res, manual=False)
 
     def _on_update_checked(self, res, err, manual):
         if res != "__applied__":
@@ -848,19 +862,35 @@ class MainWindow(QMainWindow):
             # ⚠️ QApplication.quit() 로 끝내면 파이썬 마무리 정리에서 멈춰 프로그램이 남는
             #    일이 있었다 — 그러면 새 판이 '이미 실행 중' 으로 보고 꺼졌다(v1.22.1 무한
             #    업데이트). 저장할 것은 _shutdown 에서 끝내고 곧바로 끝낸다.
+            prog = getattr(self, "_upd_prog", None)
+            if prog is not None:
+                # '바꾸는 중 — 잠시 뒤 새 버전이 저절로 켜집니다' 를 읽을 틈(배치는 1초마다 우리가
+                # 끝났는지 본다 — 조금 늦게 끝나도 된다)
+                prog.applying()
+                end = time.monotonic() + 0.9
+                while time.monotonic() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.03)
             self._really_close = True
             self._shutdown()
             crashlog.clean_exit()
             crashlog.shutdown()
             os._exit(0)
+            return                          # (끝나지 않는 경우는 없지만 — 아래로 흘러가지 않게)
         if err:
             was = getattr(self, "_auto_updating", False)
             self._auto_updating = False
+            prog = getattr(self, "_upd_prog", None)
             if manual:
+                if prog is not None:
+                    prog.close()
                 QMessageBox.warning(self, config.APP_NAME, "업데이트 실패:\n" + err)
             elif was:
-                self.sig_toast.emit(config.APP_NAME, "자동 업데이트를 받지 못했습니다 — 몇 시간 뒤 확인 때 "
-                                                     "저절로 다시 해 봅니다.")
+                if prog is not None and prog.isVisible():
+                    prog.failed(err)             # 진행 창에 까닭을 잠깐 보여 주고 닫는다(v1.27)
+                else:
+                    self.sig_toast.emit(config.APP_NAME, "자동 업데이트를 받지 못했습니다 — 몇 시간 뒤 확인 때 "
+                                                         "저절로 다시 해 봅니다.")
             return
         if not res:
             if manual:
@@ -895,23 +925,66 @@ class MainWindow(QMainWindow):
                 return
             updater.note_attempt(ver)
             self._auto_updating = True
-            self.sig_toast.emit(config.APP_NAME, f"새 버전 {ver} 을(를) 받는 중입니다 — "
-                                                 "다 받으면 저절로 다시 켜집니다.")
-            self._start_update(res, manual=False)
+            self._begin_update(res, manual=False)
             return
         # [업데이트 확인] 을 눌렀다 — 묻지 않고 바로 받는다(v1.26, 요청)
-        self.sig_toast.emit(config.APP_NAME, f"새 버전 {res['version']} 을(를) 받는 중입니다 — "
-                                             "다 받으면 저절로 다시 켜집니다.")
         self._auto_updating = True
-        self._start_update(res, manual=True)
+        self._begin_update(res, manual=True)
+
+    # ---- 업데이트 진행 창(v1.27, update_progress) ----
+    def _show_update_progress(self, ver: str) -> UpdateProgress:
+        prog = getattr(self, "_upd_prog", None)
+        if prog is None:
+            prog = UpdateProgress(ver)
+            self._upd_prog = prog
+        else:
+            prog.version = str(ver or "").lstrip("v")
+            prog.apply_theme()
+        prog.downloading()
+        prog.pop()
+        return prog
+
+    def _begin_update(self, res, manual: bool):
+        """진행 창(막대·%·MB)을 띄우고 받기 시작한다 — 켤 때 · [업데이트 확인] · 켜 둔 동안 모두."""
+        self._show_update_progress(res.get("version", ""))
+        self._start_update(res, manual)
+
+    def _on_upd_progress(self, got, total):
+        prog = getattr(self, "_upd_prog", None)
+        if prog is not None:
+            prog.progress(got, total)
+
+    def _on_upd_stage(self, stage: str):
+        prog = getattr(self, "_upd_prog", None)
+        if prog is not None and stage == "apply":
+            prog.applying()
+
+    def show_update_done(self, ver: str):
+        """방금 업데이트로 켜졌다 — '업데이트 완료' 를 잠깐(누르면 변경 이력)."""
+        done = UpdateProgress(ver)
+        done.clicked.connect(self.open_changelog)
+        self._upd_done = done
+        done.done(ver)
 
     def _start_update(self, res, manual: bool):
-        # 트레이에 숨어 있었으면 새 판도 트레이로 켜지게 표시해 둔다(교체 배치는 인자를 못 넘긴다)
-        updater.mark_resume(tray=not self.isVisible())
+        # 트레이에 숨어 있었으면 새 판도 트레이로 켜지게 표시해 둔다(교체 배치는 인자를 못 넘긴다).
+        # 바꾸려는 판도 적어 둔다 — 새 판이 켜지면 '업데이트 완료' 를 보여 준다(v1.27).
+        updater.mark_resume(tray=not self.isVisible(), to=res.get("version", ""))
+        if getattr(self, "_upd_prog", None) is None:
+            self._show_update_progress(res.get("version", ""))
+        last = {"t": 0.0}
+
+        def prog(got, total):
+            # 일꾼 스레드 → 신호로(화면은 화면 스레드에서만). 너무 자주 보내지 않는다(0.15초)
+            now = time.monotonic()
+            if now - last["t"] >= 0.15 or (total and got >= total):
+                last["t"] = now
+                self.sig_upd_progress.emit(got, total)
 
         def worker():
             try:
-                path = updater.download(res["asset_url"])
+                path = updater.download(res["asset_url"], progress=prog)
+                self.sig_upd_stage.emit("apply")
                 updater.apply_and_restart(path)
                 self.sig_update.emit("__applied__", "", manual)
             except Exception as e:
@@ -1609,11 +1682,15 @@ class MainWindow(QMainWindow):
             return
         if not (self.settings.sheet_on and self._account_verified and self.gauth.is_connected()):
             return                      # 계정을 확인하기 전에는 남의 시트에 쓰지 않는다
+        if not self._pulled_once:
+            return                      # 다른 PC 기록(설정의 '적은 달')을 받은 뒤에 — _on_synced 가 다시 부른다
         t = date.today()
         y, m = monthly.prev_month(t.year, t.month)
         ym = f"{y}-{m:02d}"
         if (self.settings.monthly_last or "") >= ym or getattr(self, "_monthly_busy", "") == ym:
             return
+        if getattr(self, "_monthly_failed", "") == ym:
+            return                      # 이번 실행에서 이미 못 적었다(권한 없음 등) — 다음에 켤 때 다시
         self._monthly_busy = ym
         self._write_monthly_async(y, m, auto=True)
 
@@ -1624,6 +1701,7 @@ class MainWindow(QMainWindow):
             dlg.written(err)
         if err:
             if auto:
+                self._monthly_failed = ym   # 시트를 새로 읽을 때마다 다시 쓰려 하지 않게(v1.27)
                 crashlog.note(f"월 마감 자동 작성 실패({ym}): {err}")
             return
         if auto:
@@ -1639,6 +1717,11 @@ class MainWindow(QMainWindow):
         ⚠️ 저장해 둔 목록(sheet_cache)으로는 돌리지 않는다 — 어제 것을 보고 할일을 만들면 안 된다.
         """
         if not getattr(self.settings, "auto_on", True) or not self._sheet_loaded or not self.sheet_rows:
+            return 0
+        if not self._pulled_once:
+            # ⚠️ 다른 PC 기록을 받기 전이다(v1.27). 할일 목록(todos.json)은 PC 사이에서 '나중에 고친
+            #    파일이 이긴다'. 켜자마자 여기서 할일을 하나라도 만들면 이 PC 의 옛 목록이 더 새것으로
+            #    보여, 다른 PC 에서 고친 할일을 덮어쓴다. 받고 나면 _on_synced 가 다시 부른다.
             return 0
         try:
             done = auto_rules.load_done()
@@ -2257,10 +2340,23 @@ class MainWindow(QMainWindow):
             if getattr(self, "_sheet_cached_at", "") and not self._sheet_loaded:
                 # 저장해 둔 목록을 보여 주는 중 — 창을 띄우지 않고 조금 뒤 다시 읽는다
                 # (PC 를 켠 직후 인터넷이 늦게 붙는 일이 흔하다)
-                self._sheet_cache_note = "시트를 읽지 못해 잠시 뒤 다시 읽습니다"
+                # v1.27: 왜 못 읽는지도 보여 주고, 계속 안 되면(15분) 알림 한 번 뒤 그만 조른다
+                #        ([불러오기] 로 언제든 다시) — 시트 권한이 없어진 경우 등은 기다려도 안 풀린다
+                n = getattr(self, "_sheet_cache_fails", 0) + 1
+                self._sheet_cache_fails = n
+                why = (err or "").strip().splitlines()[0][:60] if (err or "").strip() else ""
+                self._sheet_cache_note = ("시트를 읽지 못해 잠시 뒤 다시 읽습니다"
+                                          + (f" ({why})" if why else ""))
+                if n >= 10:
+                    self._sheet_cache_note = "시트를 계속 읽지 못합니다 — [불러오기] 를 눌러 다시 해 보세요" \
+                        + (f" ({why})" if why else "")
+                    self.sig_toast.emit(config.APP_NAME, "고객관리 시트를 읽지 못하고 있습니다"
+                                        + (f": {why}" if why else "")
+                                        + " — 저장해 둔 목록을 보여 주는 중입니다. [불러오기] 로 다시 해 보세요.")
                 self.refresh_customers()
-                QTimer.singleShot(90 * 1000, lambda: (not self._sheet_loaded)
-                                  and self.load_sheet_async(manual=False))
+                if n < 10:
+                    QTimer.singleShot(90 * 1000, lambda: (not self._sheet_loaded)
+                                      and self.load_sheet_async(manual=False))
                 return
             self.lbl_cust.setText("불러오기 실패")
             QMessageBox.warning(self, config.APP_NAME, "시트를 불러오지 못했습니다:\n" + err)
@@ -2269,6 +2365,7 @@ class MainWindow(QMainWindow):
             return                      # 읽는 사이 계정·시트가 바뀌었다 — 앞 시트의 결과
         rows, summary, hdr = payload[:3]
         self._sheet_cached_at = ""       # 이제 새로 읽은 것
+        self._sheet_cache_fails = 0
         self.sheet_rows = rows
         self._sheet_last_row = last_row
         self._sheet_header_row = hdr
@@ -3434,7 +3531,10 @@ class MainWindow(QMainWindow):
             self.refresh_todo()
         if not self.gauth.is_connected():
             return
-        extra = followup.duplicate_events(self.cal_events)
+        # 지우지 못한 것(남의 읽기 전용 캘린더 등)은 이번 실행 동안 다시 하지 않는다 — 조회 때마다
+        # 헛되이 지우기를 부르고 화면에서만 빼 두지 않게(v1.27)
+        fail = self.__dict__.setdefault("_dup_del_fail", set())
+        extra = [ev for ev in followup.duplicate_events(self.cal_events) if ev.event_id not in fail]
         if not extra:
             return
         gone = {id(ev) for ev in extra}
@@ -3449,7 +3549,7 @@ class MainWindow(QMainWindow):
                     google_client.delete_event(self.gauth, cal_id, event_id)
                     done += 1
                 except Exception:
-                    pass             # 못 지운 건 다음 조회 때 다시 본다
+                    fail.add(event_id)   # 다음 조회 때는 그대로 보여 준다(지울 수 없는 캘린더)
             if done:
                 self.sig_toast.emit(config.APP_NAME,
                                     f"겹쳐 올라간 팔로업 일정 {done}건을 정리했습니다.")
