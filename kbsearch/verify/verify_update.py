@@ -208,7 +208,7 @@ update_ui.UpdateSplash.show = lambda self: (seen_btn.append(len(self.findChildre
 out = update_ui.run(INFO, show=True, tray=False)
 ok("받아서 바꾼다 → 끝낸다(RESTART)", out == update_ui.RESTART and ("apply", "/tmp/new.exe", "1.0.1") in CALLS,
    CALLS)
-ok("받는 동안 창에 단추가 없다(묻지 않는다)", seen_btn == [0], seen_btn)
+ok("받는 동안 창에 단추가 없다(묻지 않는다)", seen_btn and all(n == 0 for n in seen_btn), seen_btn)
 ok("다시 켜질 때 창으로(트레이 아님)", updater.take_resume_tray() is False)
 CALLS.clear()
 (config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
@@ -229,6 +229,71 @@ out = update_ui.run(INFO, show=False)
 ok("방금 바꾸지 못했으면 되풀이하지 않는다(몇 시간 뒤 다시)", out == update_ui.CONTINUE and CALLS == [], CALLS)
 (config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
 update_ui.UpdateSplash.show = _orig_show
+
+print("[8-2] 진행 창 — 막대 · % · MB · 바꾸는 중 · 못 받으면 까닭(kb-v1.5.0)")
+# 지점장 요청: "업데이트 할 때에는 프로그레스바를 만들어서 업데이트 하고 있다는 내용을 시각적으로"
+from kbsearch.update_progress import UpdateProgress, notes_lines  # noqa: E402
+STATES = []
+_orig_prog, _orig_apply, _orig_fail = UpdateProgress.progress, UpdateProgress.applying, UpdateProgress.failed
+UpdateProgress.progress = lambda self, g, t: (STATES.append(("p", g, t, self.bar.value())),
+                                             _orig_prog(self, g, t))[1]
+UpdateProgress.applying = lambda self: (STATES.append(("apply",)), _orig_apply(self))[1]
+UpdateProgress.failed = lambda self, why: (STATES.append(("fail", why)), _orig_fail(self, why))[1]
+update_ui.APPLY_SHOW_SEC = update_ui.FAIL_SHOW_SEC = 0.05
+
+
+def dl_steps(info, progress=None):
+    for i in range(5):
+        progress(i * 10 << 20, 40 << 20)
+        time.sleep(0.06)
+    return "/tmp/new.exe"
+
+
+updater.download = dl_steps
+(config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
+out = update_ui.run(dict(INFO, notes="## v1.0.1\n· 첫째 고침\n· 둘째 고침"), show=True, tray=False, corner=True)
+pc = [x for x in STATES if x[0] == "p"]
+ok("받는 동안 진행을 그린다(마지막은 100%)", out == update_ui.RESTART and len(pc) >= 2 and pc[-1][1] == pc[-1][2],
+   pc[-1:])
+ok("다 받으면 '바꾸는 중' 을 보여 준 뒤 바꾼다", ("apply",) in STATES)
+mk = json.loads(config.data_file("update_resume.json").read_text(encoding="utf-8"))
+ok("새 판에 넘길 표시 — 바꾸려는 판 · 달라진 것", mk.get("to") == "1.0.1" and "첫째 고침" in mk.get("notes", "")
+   and mk.get("from") == config.APP_VERSION, mk)
+config.APP_VERSION = "1.0.1"
+r = updater.take_resume()
+ok("새 판이 켜지면 '업데이트 완료'", updater.finished_update(r) == "1.0.1" and updater.take_resume() == {})
+config.APP_VERSION = "1.0.0"
+ok("바꾸지 못하고 옛 판으로 켜졌으면 완료라 하지 않는다", updater.finished_update(r, "1.0.1") == "")
+config.data_file("last_version.json").unlink(missing_ok=True)
+ok("처음 켠 판은 지난 판이 없다", updater.note_run_version() == "")
+config.APP_VERSION = "1.0.1"
+_prev = updater.note_run_version()
+ok("판이 올라가면 완료(표시를 몰랐던 옛 판이 바꿔 줘도)", _prev == "1.0.0" and updater.finished_update({}, _prev) == "1.0.1")
+ok("같은 판으로 다시 켜면 완료가 아니다", updater.finished_update({}, updater.note_run_version()) == "")
+config.APP_VERSION = "1.0.0"
+ok("완료 창에는 달라진 것 앞 몇 줄", notes_lines(r.get("notes")) == "· 첫째 고침\n· 둘째 고침")
+STATES.clear()
+(config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
+FAILS["n"] = 9
+updater.download = fake_dl
+out = update_ui.run(INFO, show=True)
+ok("끝내 못 받으면 진행 창에 까닭을 보여 주고 지금 판으로", out == update_ui.CONTINUE
+   and any(x[0] == "fail" and "인터넷" in x[1] for x in STATES), STATES[-1:])
+FAILS["n"] = 0
+UpdateProgress.progress, UpdateProgress.applying, UpdateProgress.failed = _orig_prog, _orig_apply, _orig_fail
+p = UpdateProgress("1.5.0", corner=True)
+p.pop()
+p.progress(10 << 20, 40 << 20)
+ok("막대 25% · '10.0 / 40.0 MB' · 단추 없음", p.bar.value() == 25 and "10.0 / 40.0 MB" in p.lbl_msg.text()
+   and not p.findChildren(QPushButton), p.lbl_msg.text())
+from PySide6.QtGui import QGuiApplication  # noqa: E402
+_g = QGuiApplication.primaryScreen().availableGeometry()
+ok("켜 둔 동안은 오른쪽 아래", p.x() > _g.center().x() and p.y() > _g.center().y())
+p.close()
+c = UpdateProgress("1.5.0", corner=False)
+c.pop()
+ok("켤 때(창이 뜨기 전)는 화면 가운데", abs(c.geometry().center().x() - _g.center().x()) <= 2, (c.geometry(), _g))
+c.close()
 updater.download, updater.apply_and_restart = _dl, _apply
 
 config.APP_VERSION = REAL_VERSION
@@ -365,6 +430,9 @@ import inspect as _insp  # noqa: E402
 from kbsearch import app as _kapp  # noqa: E402
 _src = _insp.getsource(_kapp.main)
 ok("켤 때 — 업데이트를 먼저 보고 그다음 스위치", _src.index("_check_with_splash") < _src.index("switch.fetch_state"))
+ok("켤 때 — 진행 창은 트레이로 켤 때도 보인다(kb-v1.5.0)", "update_ui.run(info, show=True, tray=tray_start)" in _src)
+ok("켤 때 — 업데이트로 켜졌으면 '업데이트 완료'", "updater.take_resume()" in _src
+   and "updater.finished_update(resume, updater.note_run_version())" in _src and "show_update_done" in _src)
 
 print("\n[11] 배치에 깨끗한 환경 — 새 판이 옛 판의 임시 폴더(_MEI)를 물려받지 않게 (kb-v1.4.1)")
 import os as _os2, tempfile as _tf2  # noqa: E402

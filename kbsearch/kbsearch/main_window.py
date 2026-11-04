@@ -688,16 +688,23 @@ class MainWindow(QMainWindow):
             return                          # 1분 뒤 다시 본다
         self._pending_update = None
         self._upd_idle_timer.stop()
-        self._apply_update(info, show=False)
+        self._apply_update(info, show=True)     # 진행 창(막대)을 보여 주며(kb-v1.5.0)
 
     def _apply_update(self, info: dict, show: bool) -> None:
         self._updating = True
         try:
-            out = update_ui.run(info, show=show, tray=not self.isVisible())
+            out = update_ui.run(info, show=show, tray=not self.isVisible(), corner=True)
         finally:
             self._updating = False
         if out == update_ui.RESTART:
             self.quit_app()                 # 바꾸는 배치가 기다린다
+
+    def show_update_done(self, ver: str, notes: str = "") -> None:
+        """방금 업데이트로 켜졌다 — '업데이트 완료' 와 달라진 것 몇 줄을 잠깐(kb-v1.5.0)."""
+        from .update_progress import UpdateProgress
+        done = UpdateProgress(ver, corner=True)
+        self._upd_done = done
+        done.done(ver, notes)
 
     def check_update(self, manual: bool = False) -> None:
         if self._upd_checking or self._updating:

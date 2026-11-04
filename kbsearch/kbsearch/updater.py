@@ -228,26 +228,75 @@ def just_failed(version: str) -> bool:
 _RESUME = "update_resume.json"
 
 
-def mark_resume(tray: bool) -> None:
-    """교체 배치는 탐색기로 새 판을 띄워 실행 인자를 못 넘긴다 — 트레이로 켤지 표시를 남긴다."""
+def mark_resume(tray: bool, to: str = "", notes: str = "") -> None:
+    """교체 배치는 탐색기로 새 판을 띄워 실행 인자를 못 넘긴다 — 트레이로 켤지 표시를 남긴다.
+
+    to · notes — 바꾸려는 새 판 번호와 릴리스 안내. 새 판이 켜지면 '업데이트 완료' 와 달라진 것
+    몇 줄을 보여 준다(kb-v1.5.0, update_progress).
+    """
     try:
-        config.atomic_write(config.data_file(_RESUME), json.dumps({"tray": bool(tray), "at": time.time()}))
+        config.atomic_write(config.data_file(_RESUME), json.dumps(
+            {"tray": bool(tray), "at": time.time(), "from": config.APP_VERSION,
+             "to": str(to or "").lstrip("v"), "notes": str(notes or "")[:1500]}, ensure_ascii=False))
     except Exception:
         pass
 
 
-def take_resume_tray() -> bool:
-    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다(15분 지난 표시는 버린다)."""
+def take_resume() -> dict:
+    """업데이트로 다시 켜졌으면 {tray, from, to, notes} — 15분이 지난 표시는 버린다. 읽으면 지운다."""
     p = config.data_file(_RESUME)
     try:
         o = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
-        return False
+        return {}
     try:
         p.unlink()
     except Exception:
         pass
-    return bool(o.get("tray")) and time.time() - float(o.get("at") or 0) < 900
+    if not isinstance(o, dict) or time.time() - float(o.get("at") or 0) >= 900:
+        return {}
+    return o
+
+
+def take_resume_tray() -> bool:
+    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다(15분 지난 표시는 버린다)."""
+    return bool(take_resume().get("tray"))
+
+
+_LAST_RUN = "last_version.json"
+
+
+def note_run_version() -> str:
+    """지난번에 켠 판 번호를 돌려주고(처음이면 "") 지금 판을 적는다 — '업데이트 완료' 를 가린다."""
+    p = config.data_file(_LAST_RUN)
+    prev = ""
+    try:
+        prev = str(json.loads(p.read_text(encoding="utf-8")).get("version") or "")
+    except Exception:
+        prev = ""
+    if prev != config.APP_VERSION:
+        try:
+            config.atomic_write(p, json.dumps({"version": config.APP_VERSION}))
+        except Exception:
+            pass
+    return prev
+
+
+def finished_update(resume: dict, prev: str = "") -> str:
+    """방금 업데이트로 이 판이 켜졌으면 그 판 번호(→ '업데이트 완료'), 아니면 "" (일정관리기와 같다).
+
+    · 바꾸기 전에 남긴 표시(mark_resume 의 to)가 지금 판이면
+    · 지난번에 켠 판(prev)보다 지금 판이 높으면
+    · 기록이 없는 첫 판인데 방금 교체 배치가 깔았으면(표시를 몰랐던 옛 판 kb-v1.4 가 바꾼 경우)
+    되돌림(교체 실패로 옛 판이 다시 켜짐)은 완료가 아니다.
+    """
+    cur = config.APP_VERSION
+    to = str((resume or {}).get("to") or "").lstrip("v")
+    if to and parse_ver(to) == parse_ver(cur) and (resume or {}).get("from") != cur:
+        return cur
+    if prev:
+        return cur if parse_ver(cur) > parse_ver(prev) else ""
+    return cur if just_installed() else ""
 
 
 def idle_seconds():

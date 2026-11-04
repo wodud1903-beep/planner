@@ -152,7 +152,8 @@ def main() -> int:
         time.sleep(1.5)                 # 끝낸 옛 판이 소켓·파일을 놓을 때까지
     # 켜 둔 채로(트레이) 조용히 업데이트한 뒤 다시 켜진 판이면 트레이로(updater.mark_resume)
     # ⚠️ 하나만 도는 것이 정해진 뒤에 읽는다 — 두 번째 실행이 표시를 먹어 버리지 않게
-    if not tray_start and updater.take_resume_tray():
+    resume = updater.take_resume()
+    if not tray_start and resume.get("tray"):
         tray_start = True
     # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py — 일정관리기와 같다). 두 번째 실행은 위에서 빠졌다.
     prev_crash = crashlog.start()
@@ -196,11 +197,12 @@ def main() -> int:
             pass                     # 곧 안내를 띄우고 끝난다
     server.newConnection.connect(on_second)
 
-    # ── 업데이트 — 묻지 않고 받아 바꾼다(kb-v1.4.0). 트레이로 켤 때는 창도 없이 ──
+    # ── 업데이트 — 묻지 않고 받아 바꾼다(kb-v1.4.0). 진행 창(막대)은 언제나 보인다(kb-v1.5.0,
+    #    지점장 요청) — 트레이로 켤 때(PC 시작)도. 창이 뜨기 전이라 화면 가운데에 ──
     info, checked = _check_with_splash(app, quiet=tray_start)
     if info:
         from . import update_ui
-        if update_ui.run(info, show=not tray_start, tray=tray_start) == update_ui.RESTART:
+        if update_ui.run(info, show=True, tray=tray_start) == update_ui.RESTART:
             crashlog.clean_exit()        # 업데이트로 끝나는 것도 정상 종료다
             _hard_exit(0)                # 바꾸는 배치가 기다린다 — 남지 않고 바로 끝난다
 
@@ -228,6 +230,11 @@ def main() -> int:
         win.start_in_tray()
     else:
         win.show_window()
+    # 방금 업데이트로 켜졌으면 '업데이트 완료' 와 달라진 것 몇 줄(kb-v1.5.0 — 진행 창의 마지막 단계)
+    done_ver = updater.finished_update(resume, updater.note_run_version())
+    if done_ver:
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1200, lambda: win.show_update_done(done_ver, resume.get("notes", "")))
     _hard_exit(app.exec())
 
 

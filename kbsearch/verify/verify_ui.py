@@ -223,8 +223,8 @@ print("[9] 업데이트 — 묻지 않고, 쓰는 중이면 미뤘다가 안 쓸
 from kbsearch import update_ui, updater as _upd  # noqa: E402
 shown = []
 _run = update_ui.run
-update_ui.run = lambda info, show=True, tray=False: shown.append((info["version"], show, tray)) \
-    or update_ui.RESTART
+update_ui.run = lambda info, show=True, tray=False, corner=False: shown.append(
+    (info["version"], show, tray, corner)) or update_ui.RESTART
 _idle = _upd.idle_seconds
 IDLE = {"s": 5.0}
 _upd.idle_seconds = lambda: IDLE["s"]
@@ -241,22 +241,28 @@ w._try_pending_update()
 ok("창이 보이고 PC 를 쓰는 중이면 미룬다", shown == [])
 IDLE["s"] = 600.0
 w._try_pending_update()
-ok("3분 넘게 안 쓰면 그때 — 창 없이(show=False) 바꾸고 끝낸다", shown == [("9.9.9", False, False)]
-   and quit_called, shown)
+ok("3분 넘게 안 쓰면 그때 — 진행 창(오른쪽 아래)을 보여 주며 바꾸고 끝낸다(kb-v1.5.0)",
+   shown == [("9.9.9", True, False, True)] and quit_called, shown)
 shown.clear()
 quit_called.clear()
 IDLE["s"] = 1.0
 w.hide()
 w._on_update({"version": "9.9.9"}, "", False)
-ok("트레이에 숨어 있으면 바로 — 다시 켜질 때도 트레이로", shown == [("9.9.9", False, True)] and quit_called,
-   shown)
+ok("트레이에 숨어 있으면 바로 — 진행 창은 보이고, 다시 켜질 때는 트레이로", shown == [("9.9.9", True, True, True)]
+   and quit_called, shown)
 shown.clear()
 w.show_window()
 pump(0.1)
 w._on_update({"version": "9.9.9"}, "", True)
-ok("[업데이트 확인] 은 묻지 않고 바로(받는 정도만 작은 창으로)", shown == [("9.9.9", True, False)], shown)
+ok("[업데이트 확인] 은 묻지 않고 바로(받는 정도만 작은 창으로)", shown == [("9.9.9", True, False, True)], shown)
 update_ui.run = _run
 _upd.idle_seconds = _idle
+w.show_update_done("9.9.9", "## v9.9.9\n· 진행 막대가 보입니다\n· 둘째 고침")
+pump(0.1)
+_d = w._upd_done
+ok("새 판으로 켜지면 '업데이트 완료' 와 달라진 것(kb-v1.5.0)", _d.isVisible() and _d.state == "done"
+   and "v9.9.9" in _d.lbl_msg.text() and "진행 막대가 보입니다" in _d.lbl_sub.text(), _d.lbl_sub.text())
+_d.close()
 
 print("[10] 동기화를 끈 판(SYNC_ON=False)")
 config.SYNC_ON = False
