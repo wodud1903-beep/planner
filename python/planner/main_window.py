@@ -255,6 +255,8 @@ class MainWindow(QMainWindow):
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
         self.settings = AppSettings.load(self.cfg_file)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
+        # 다른 PC 기록(Drive)을 한 번 받았나 — 받기 전엔 팔로업을 만들지 않는다(v1.26.1, 겹침)
+        self._pulled_once = False
         self.cal_events: list[google_client.CalEvent] = []
         self.gtasks: list[google_client.GoogleTask] = []
         self.week_dates: list[date | None] = []
@@ -640,6 +642,7 @@ class MainWindow(QMainWindow):
                                     "이미 최신입니다. 이 PC의 내용도 올렸습니다.")
 
     def _on_synced(self, changed: bool):
+        self._pulled_once = True        # 이제 팔로업을 검사해도 된다(아래 fetch_all → _run_followups)
         if changed:
             self.reload_data()
             self.sig_toast.emit(config.APP_NAME, "다른 PC의 변경사항을 동기화했습니다.")
@@ -3390,7 +3393,13 @@ class MainWindow(QMainWindow):
 
     def _run_followups(self):
         """캘린더에서 팔로업 대상을 찾아 내 할일로 자동 등록."""
+        if not self._pulled_once:
+            # ⚠️ 다른 PC 기록을 받기 전이다 — 지금 만들면 PC 마다 같은 고객을 또 올린다
+            #    ([출고 1개월] 이 2개·3개씩 쌓이던 원인). 받고 나면 _on_synced → 다시 조회 → 여기.
+            return
         self._rename_old_followups()
+        self._drop_duplicate_followups()
+        on_cal = followup.calendar_names(self.cal_events)
         added = followup.check_followups(
             self.settings, self.cal_events, self.todos, self.followup_tracker)
         if added:
@@ -3400,8 +3409,10 @@ class MainWindow(QMainWindow):
             self.refresh_todo()
             self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 [내 할일]에 추가했습니다.")
             # 설정 시 구글 캘린더에도 종일 일정으로 등록
-            if self.settings.follow_to_calendar and self.gauth.is_connected():
-                items = [(it.title, it.run_date) for it in added]
+            # 캘린더에 이미 그 고객의 팔로업이 있으면(다른 PC 가 올림) 또 올리지 않는다
+            items = [(it.title, it.run_date) for it in added
+                     if followup.followup_name(it.title) not in on_cal]
+            if items and self.settings.follow_to_calendar and self.gauth.is_connected():
                 rmin = self._reminder_minutes()
 
                 def worker():
@@ -3412,6 +3423,37 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                 threading.Thread(target=worker, daemon=True).start()
+
+    def _drop_duplicate_followups(self):
+        """겹쳐 올라간 [출고 1개월] 일정·할일을 하나만 남기고 지운다(같은 제목 · 같은 날)."""
+        dup_todos = followup.duplicate_todos(self.todos)
+        if dup_todos:
+            gone = {id(t) for t in dup_todos}
+            self.todos = [t for t in self.todos if id(t) not in gone]
+            self._save_todos()
+            self.refresh_todo()
+        if not self.gauth.is_connected():
+            return
+        extra = followup.duplicate_events(self.cal_events)
+        if not extra:
+            return
+        gone = {id(ev) for ev in extra}
+        self.cal_events = [ev for ev in self.cal_events if id(ev) not in gone]
+        self.refresh_calendar()          # 화면에서 먼저 뺀다
+        jobs = [(ev.cal_id, ev.event_id) for ev in extra]
+
+        def worker():
+            done = 0
+            for cal_id, event_id in jobs:
+                try:
+                    google_client.delete_event(self.gauth, cal_id, event_id)
+                    done += 1
+                except Exception:
+                    pass             # 못 지운 건 다음 조회 때 다시 본다
+            if done:
+                self.sig_toast.emit(config.APP_NAME,
+                                    f"겹쳐 올라간 팔로업 일정 {done}건을 정리했습니다.")
+        threading.Thread(target=worker, daemon=True).start()
 
     def _reminder_minutes(self):
         """설정된 구글 캘린더 알림(분). 꺼져 있으면 None."""
