@@ -311,8 +311,36 @@ def apply_and_restart(new_exe: str, version: str = "") -> None:
     except (LookupError, UnicodeEncodeError):
         with open(bat, "w", encoding="utf-8") as f:
             f.write("chcp 65001 >nul\n" + script)
-    subprocess.Popen(["cmd", "/c", bat],
+    # 깨끗한 환경으로 · exe 폴더에서(옛 판의 임시 폴더를 새 판이 물려받지 않게 — clean_env)
+    subprocess.Popen(["cmd", "/c", bat], env=clean_env(), cwd=tdir,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+
+def clean_env() -> dict:
+    """교체 배치(그리고 그 배치가 띄우는 새 판)에 넘길 **깨끗한 환경 변수** (kb-v1.4.1).
+
+    ⚠️ 한 파일 exe(PyInstaller)는 풀어 놓은 임시 폴더(_MEI…)를 환경 변수(_PYI_…)로 자식에게
+       알린다. 그 값이 배치 → 새 판으로 넘어가면 새 판이 끝나는 옛 판의 임시 폴더를 그대로 써서,
+       'Failed to remove temporary directory … _MEI…' 경고와 함께 새 판이 뜨지 못했다
+       (일정관리기 v1.26 업데이트 직후 지점장 PC). 그 변수와 임시 폴더를 가리키는 값을 빼고
+       새로 풀라고 알린다(PYINSTALLER_RESET_ENVIRONMENT=1, PyInstaller 6.9+).
+    """
+    mei = os.path.normcase(os.path.abspath(getattr(sys, "_MEIPASS", "") or "")) \
+        if getattr(sys, "_MEIPASS", "") else ""
+    env = {}
+    for k, v in os.environ.items():
+        ku = k.upper()
+        if ku.startswith("_PYI_") or ku.startswith("_MEIPASS") or ku == "PYINSTALLER_RESET_ENVIRONMENT":
+            continue
+        if mei and ku == "PATH":
+            v = os.pathsep.join(x for x in v.split(os.pathsep)
+                                if x and not os.path.normcase(os.path.abspath(x)).startswith(mei))
+        elif mei and mei in os.path.normcase(v):
+            continue
+        env[k] = v
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def update_script(staged: str, target: str, old_full: str, log: str, pid: int,
@@ -341,6 +369,7 @@ set "LOG={log}"
 set "STATUS={status}"
 set "PID={pid}"
 set "PPID={ppid}"
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
 echo [update] start SRC=%SRC% DST=%DST% PID=%PID% PPID=%PPID% > "%LOG%"
 
 rem 1) 이전(현재) 프로세스가 완전히 끝날 때까지 대기 — 자식(PID)과 부모(PPID) 모두.

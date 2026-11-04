@@ -281,7 +281,13 @@ app.exec()
 """], stdout=_sp.PIPE, text=True)
 srv.stdout.readline()
 kapp._SINGLE_KEY = key
-ok("켜져 있는 쪽이 판 번호로 대답한다", kapp._activate_existing() == "9.9.9")
+# ⚠️ 붙는 데 0.4초만 기다린다(앱과 같다) — 검사 PC 가 바쁘면 가끔 못 붙는다. 세 번까지 해 본다.
+_rep = None
+for _t in range(3):
+    _rep = kapp._activate_existing()
+    if _rep == "9.9.9":
+        break
+ok("켜져 있는 쪽이 판 번호로 대답한다", _rep == "9.9.9", _rep)
 srv.kill()
 kapp._SINGLE_KEY = "KbSearchVerify_none"
 ok("아무것도 없으면 None", kapp._activate_existing() is None)
@@ -359,6 +365,30 @@ import inspect as _insp  # noqa: E402
 from kbsearch import app as _kapp  # noqa: E402
 _src = _insp.getsource(_kapp.main)
 ok("켤 때 — 업데이트를 먼저 보고 그다음 스위치", _src.index("_check_with_splash") < _src.index("switch.fetch_state"))
+
+print("\n[11] 배치에 깨끗한 환경 — 새 판이 옛 판의 임시 폴더(_MEI)를 물려받지 않게 (kb-v1.4.1)")
+import os as _os2, tempfile as _tf2  # noqa: E402
+from kbsearch import updater as _up2  # noqa: E402
+_mei = _tf2.mkdtemp(prefix="_MEI")
+_had = getattr(_sys, "_MEIPASS", None)
+_sys._MEIPASS = _mei
+_save = dict(_os2.environ)
+_os2.environ.update({"_PYI_APPLICATION_HOME_DIR": _mei, "_PYI_ARCHIVE_FILE": "x.exe",
+                     "_PYI_PARENT_PROCESS_LEVEL": "1", "QT_PLUGIN_PATH": _os2.path.join(_mei, "p"),
+                     "PATH": _os2.pathsep.join([_os2.path.join(_mei, "q"), "/usr/bin"])})
+_env = _up2.clean_env()
+ok("_PYI_ 변수를 뺀다", not [k for k in _env if k.startswith("_PYI_")])
+ok("새로 풀라고 알린다", _env.get("PYINSTALLER_RESET_ENVIRONMENT") == "1")
+ok("옛 임시 폴더를 가리키는 값을 뺀다", "QT_PLUGIN_PATH" not in _env and _env["PATH"] == "/usr/bin", _env.get("PATH"))
+_os2.environ.clear(); _os2.environ.update(_save)
+if _had is None:
+    del _sys._MEIPASS
+else:
+    _sys._MEIPASS = _had
+_asrc = _insp.getsource(_up2.apply_and_restart)
+ok("배치를 깨끗한 환경 · exe 폴더에서 돌린다", "env=clean_env()" in _asrc and "cwd=tdir" in _asrc)
+ok("배치 안에서도 새로 풀라고 알린다",
+   'set "PYINSTALLER_RESET_ENVIRONMENT=1"' in _up2.update_script("S", "C:\\a\\b.exe", "C:\\a\\b.exe.old", "L", 1, 2, "ST"))
 
 print()
 print("실패:", FAIL if FAIL else "없음")
