@@ -219,23 +219,44 @@ w.sync_clicked()
 pump(0.2)
 ok("취소하면 동기화 안 함", "취소" in w.lbl_msg.text() and not w._busy)
 
-print("[9] 업데이트 — 다른 창이 떠 있으면 잠시 미룬다")
-from kbsearch import update_ui  # noqa: E402
+print("[9] 업데이트 — 묻지 않고, 쓰는 중이면 미뤘다가 안 쓸 때 조용히(kb-v1.4.0)")
+from kbsearch import update_ui, updater as _upd  # noqa: E402
 shown = []
-_run = update_ui.UpdateDialog.run
-update_ui.UpdateDialog.run = classmethod(lambda cls, info, parent=None: shown.append(info) or update_ui.QUIT)
-import kbsearch.main_window as mw  # noqa: E402
-mw.UpdateDialog = update_ui.UpdateDialog
+_run = update_ui.run
+update_ui.run = lambda info, show=True, tray=False: shown.append((info["version"], show, tray)) \
+    or update_ui.RESTART
+_idle = _upd.idle_seconds
+IDLE = {"s": 5.0}
+_upd.idle_seconds = lambda: IDLE["s"]
 _am = QApplication.activeModalWidget
 QApplication.activeModalWidget = staticmethod(lambda: w)
-w._on_update({"version": "9.9.9"}, "", False)
-ok("모달이 있으면 안 띄움", shown == [])
-QApplication.activeModalWidget = _am
 quit_called = []
 w.quit_app = lambda: quit_called.append(1)
+w.show_window()
+pump(0.1)
 w._on_update({"version": "9.9.9"}, "", False)
-ok("없으면 업데이트 창 → 종료(건너뛰기 없음)", shown and quit_called)
-update_ui.UpdateDialog.run = _run
+ok("편집 창(모달)이 떠 있으면 미룬다", shown == [] and w._pending_update is not None)
+QApplication.activeModalWidget = _am
+w._try_pending_update()
+ok("창이 보이고 PC 를 쓰는 중이면 미룬다", shown == [])
+IDLE["s"] = 600.0
+w._try_pending_update()
+ok("3분 넘게 안 쓰면 그때 — 창 없이(show=False) 바꾸고 끝낸다", shown == [("9.9.9", False, False)]
+   and quit_called, shown)
+shown.clear()
+quit_called.clear()
+IDLE["s"] = 1.0
+w.hide()
+w._on_update({"version": "9.9.9"}, "", False)
+ok("트레이에 숨어 있으면 바로 — 다시 켜질 때도 트레이로", shown == [("9.9.9", False, True)] and quit_called,
+   shown)
+shown.clear()
+w.show_window()
+pump(0.1)
+w._on_update({"version": "9.9.9"}, "", True)
+ok("[업데이트 확인] 은 묻지 않고 바로(받는 정도만 작은 창으로)", shown == [("9.9.9", True, False)], shown)
+update_ui.run = _run
+_upd.idle_seconds = _idle
 
 print("[10] 동기화를 끈 판(SYNC_ON=False)")
 config.SYNC_ON = False

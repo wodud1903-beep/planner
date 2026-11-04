@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from . import config, google_auth, kb, kb_files, sheets_kb
 
 MINE_KEY = kb.MINE_FILE             # 묶음 안의 칸 이름 — 일정관리기와 같다(kb_mine.json)
+TOMBS_KEY = "deleted.json"          # 지운 표식 칸 — 일정관리기 tombs.FILE 과 같다(kb-v1.4.0)
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"      # 일정관리기 sync.py 와 같은 꼴(문자열로 크기를 견준다)
 
 
@@ -115,6 +116,79 @@ def merge_mine(local: list, remote: list, local_newer: bool, dead: set) -> list:
             continue
         seen.add(t)
         out.append(it)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 지운 표식(kb-v1.4.0) — 일정관리기 v1.26 tombs.py 와 같은 칸·같은 규칙
+#
+# 예전엔 이 PC 에서 지운 제목(kb_meta.deleted)만 알아서, 일정관리기나 다른 PC 에서 지운 메모는
+# 이 PC 에 남아 있던 것이 다음 동기화에 되살아났다. 이제 묶음의 deleted.json 칸
+# {"kb_mine.json": {제목: 지운 시각(UTC)}} 을 함께 읽고 쓰고, **지운 시각보다 나중에 고치지 않은**
+# 메모는 뺀다. 메모마다 고친 시각(at)이 있어 같은 제목으로 다시 만든 메모는 산다.
+# ---------------------------------------------------------------------------
+def _clean_tombs(o) -> dict:
+    out = {}
+    if not isinstance(o, dict):
+        return out
+    for f, d in o.items():
+        if isinstance(d, dict):
+            dd = {str(k).strip(): str(v) for k, v in d.items() if str(k).strip() and v}
+            if dd:
+                out[str(f)] = dd
+    return out
+
+
+def remote_tombs(bundle) -> dict:
+    text = str(((bundle or {}).get("files") or {}).get(TOMBS_KEY) or "")
+    try:
+        return _clean_tombs(json.loads(text)) if text.strip() else {}
+    except Exception:
+        return {}
+
+
+def local_tombs() -> dict:
+    """이 PC 에서 지운 제목(kb_meta.deleted, 이 PC 시각) → 표식(UTC)."""
+    dead = kb.load_meta().get("deleted") or {}
+    out = {}
+    for t, st in dead.items():
+        try:
+            dt = datetime.datetime.fromisoformat(str(st))
+        except (TypeError, ValueError):
+            dt = datetime.datetime.now()
+        out[str(t)] = kb.utc_stamp(dt)
+    return {MINE_KEY: out} if out else {}
+
+
+def merge_tombs(a, b) -> dict:
+    out = _clean_tombs(a)
+    for f, d in _clean_tombs(b).items():
+        cur = out.setdefault(f, {})
+        for k, v in d.items():
+            if v > cur.get(k, ""):
+                cur[k] = v
+    return out
+
+
+def drop_dead(items: list, tombs: dict) -> list:
+    """지운 표식보다 나중에 고치지 않은 메모는 뺀다."""
+    dead = (tombs or {}).get(MINE_KEY) or {}
+    if not dead:
+        return list(items)
+    return [it for it in items
+            if not ((it.get("title") or "").strip() in dead
+                    and str(it.get("at") or "") <= dead[(it.get("title") or "").strip()])]
+
+
+def put_tombs(bundle: dict, tombs: dict, stamp: str) -> dict:
+    """묶음의 deleted.json 칸만 바꾼다(다른 파일의 표식 — 일정관리기 인사말 등 — 도 그대로 싣는다)."""
+    out = dict(bundle or {})
+    files = dict(out.get("files") or {})
+    files[TOMBS_KEY] = json.dumps(_clean_tombs(tombs), ensure_ascii=False, indent=2)
+    out["files"] = files
+    times = dict(out.get("times") or {})
+    times[TOMBS_KEY] = stamp
+    out["times"] = times
     return out
 
 
@@ -289,16 +363,22 @@ def run(auth, push_shared: bool = False) -> Result:
     remote, rstamp = remote_mine(bundle)
     dead = kb.deleted_titles()
     merged = merge_mine(mine, remote, local_newer=(lstamp >= rstamp), dead=dead)
+    # 일정관리기·다른 PC 에서 지운 메모도 빼고, 이 PC 에서 지운 것은 표식으로 묶음에 싣는다
+    rtombs = remote_tombs(bundle)
+    tombs = merge_tombs(rtombs, local_tombs())
+    merged = drop_dead(merged, tombs)
     before = {it["title"] for it in mine}
     res.mine_added = sum(1 for it in merged if it["title"] not in before)
     res.mine_count = len(merged)
 
-    if kb.clean_list(merged) != kb.clean_list(remote) or not bundle:
+    if kb.clean_list(merged) != kb.clean_list(remote) or not bundle or tombs != rtombs:
         stamp = now_stamp()
+        out = put_mine(bundle, merged, stamp)
+        if tombs:
+            out = put_tombs(out, tombs, stamp)
         try:
             google_auth.appdata_write(auth, config.PLANNER_SYNC_FILE,
-                                      json.dumps(put_mine(bundle, merged, stamp),
-                                                 ensure_ascii=False), fid)
+                                      json.dumps(out, ensure_ascii=False), fid)
         except google_auth.GoogleError as e:
             raise SyncError(f"내 메모를 올리지 못했습니다: {e}")
     else:

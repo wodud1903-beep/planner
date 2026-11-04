@@ -221,6 +221,53 @@ def just_failed(version: str) -> bool:
             and time.time() - float(st.get("at") or 0) < RETRY_GUARD_SEC)
 
 
+# ---------------------------------------------------------------------------
+# 묻지 않고 바꾸기(kb-v1.4.0) — 트레이였으면 트레이로 다시 켜기 · PC 를 안 쓸 때 고르기
+# (일정관리기 updater 의 mark_resume · take_resume_tray · idle_seconds 와 같다)
+# ---------------------------------------------------------------------------
+_RESUME = "update_resume.json"
+
+
+def mark_resume(tray: bool) -> None:
+    """교체 배치는 탐색기로 새 판을 띄워 실행 인자를 못 넘긴다 — 트레이로 켤지 표시를 남긴다."""
+    try:
+        config.atomic_write(config.data_file(_RESUME), json.dumps({"tray": bool(tray), "at": time.time()}))
+    except Exception:
+        pass
+
+
+def take_resume_tray() -> bool:
+    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다(15분 지난 표시는 버린다)."""
+    p = config.data_file(_RESUME)
+    try:
+        o = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    try:
+        p.unlink()
+    except Exception:
+        pass
+    return bool(o.get("tray")) and time.time() - float(o.get("at") or 0) < 900
+
+
+def idle_seconds():
+    """PC 를 마지막으로 만진 뒤 몇 초(윈도 GetLastInputInfo). 모르면 None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class _LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = _LII()
+        lii.cbSize = ctypes.sizeof(_LII)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return None
+        return ((ctypes.windll.kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF) / 1000.0
+    except Exception:
+        return None
+
+
 def log_path() -> str:
     return str(config.base_dir() / "update_log.txt")
 

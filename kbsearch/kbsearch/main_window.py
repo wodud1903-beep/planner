@@ -34,7 +34,7 @@ from .icon import make_icon
 from .kb_view import KbEditDialog, KbView, QuickSearch
 from .settings import Settings
 from .settings_dialog import SettingsDialog
-from .update_ui import CONTINUE, UpdateDialog
+from . import update_ui
 
 
 def _file_ids(items: list) -> dict:
@@ -97,6 +97,10 @@ class MainWindow(QMainWindow):
         self._upd_timer = QTimer(self)
         self._upd_timer.timeout.connect(lambda: self.check_update(manual=False))
         self._upd_timer.start(int(config.UPDATE_CHECK_HOURS * 3600 * 1000))
+        # 켜 둔 채로 찾은 새 판은 '쓰지 않을 때' 묻지 않고 바꾼다(kb-v1.4.0) — 1분마다 본다
+        self._pending_update = None
+        self._upd_idle_timer = QTimer(self)
+        self._upd_idle_timer.timeout.connect(self._try_pending_update)
         if not update_checked:
             QTimer.singleShot(60 * 1000, lambda: self.check_update(manual=False))
 
@@ -664,6 +668,37 @@ class MainWindow(QMainWindow):
         self.refresh_account()
 
     # ------------------------------------------------------------ 업데이트
+    def _busy_now(self) -> bool:
+        """지금 쓰는 중인가 — 편집 창(모달)·빠른검색이 떠 있거나, 창이 보이는데 PC 를 막 만졌다."""
+        if QApplication.activeModalWidget() is not None:
+            return True
+        if self._quick is not None and self._quick.isVisible():
+            return True
+        if self.isVisible() and not self.isMinimized():
+            idle = updater.idle_seconds()
+            return idle is None or idle < self.UPDATE_IDLE_SEC
+        return False
+
+    def _try_pending_update(self) -> None:
+        info = self._pending_update
+        if info is None:
+            self._upd_idle_timer.stop()
+            return
+        if self._busy_now() or self._updating:
+            return                          # 1분 뒤 다시 본다
+        self._pending_update = None
+        self._upd_idle_timer.stop()
+        self._apply_update(info, show=False)
+
+    def _apply_update(self, info: dict, show: bool) -> None:
+        self._updating = True
+        try:
+            out = update_ui.run(info, show=show, tray=not self.isVisible())
+        finally:
+            self._updating = False
+        if out == update_ui.RESTART:
+            self.quit_app()                 # 바꾸는 배치가 기다린다
+
     def check_update(self, manual: bool = False) -> None:
         if self._upd_checking or self._updating:
             return
@@ -676,19 +711,19 @@ class MainWindow(QMainWindow):
                 self.sig_update.emit(None, str(e), manual)
         threading.Thread(target=work, daemon=True).start()
 
+    UPDATE_IDLE_SEC = 180       # 창이 보이면 PC 를 이만큼 안 만질 때 바꾼다(쓰는 중에 꺼지지 않게)
+
     def _on_update(self, info, err: str, manual: bool) -> None:
         self._upd_checking = False
         if info:
-            # 편집 창처럼 다른 창이 떠 있으면 고치던 것을 잃지 않게 잠시 미룬다
-            modal = QApplication.activeModalWidget()
-            if modal is not None and not manual:
-                QTimer.singleShot(2 * 60 * 1000, lambda: self.check_update(manual=False))
+            if manual:
+                # [업데이트 확인] — 묻지 않고 바로(받는 정도만 작은 창으로)
+                self._apply_update(info, show=True)
                 return
-            self._updating = True
-            out = UpdateDialog.run(info, self if self.isVisible() else None)
-            self._updating = False
-            if out != CONTINUE:
-                self.quit_app()
+            # 켜 둔 채로 찾았다 — 쓰지 않을 때 조용히 바꾼다(편집 창이 떠 있으면 고치던 것을 잃지 않게)
+            self._pending_update = info
+            self._upd_idle_timer.start(60 * 1000)
+            self._try_pending_update()
             return
         if manual:
             if err:

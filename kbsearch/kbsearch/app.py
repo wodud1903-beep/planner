@@ -2,8 +2,8 @@
 
 순서
   1. 이미 켜져 있으면 그 창을 띄우고 끝낸다(한 PC 에 하나만).
-  2. 업데이트 확인 — 새 판이 있으면 받아 바꾸기 전에는 넘어가지 않는다(update_ui).
-     인터넷이 안 돼 확인을 못 하면 그냥 켠다(켜 둔 동안 다시 확인한다).
+  2. 업데이트 확인 — 새 판이 있으면 **묻지 않고** 받아 바꾸고 다시 켠다(update_ui, kb-v1.4.0).
+     받지 못하거나 인터넷이 안 돼 확인을 못 하면 지금 판으로 켠다(켜 둔 동안 다시 확인한다).
   3. 서비스 스위치 — 꺼진 판(config.SERVICE_ON)이거나 웹 스위치가 꺼졌으면(switch.py)
      안내만 하고 끝낸다. 업데이트를 먼저 보므로 다시 켜는 판도 받을 수 있다.
   4. 메인 창. `/tray` 로 켜지면(PC 시작 시 자동 실행) 창 없이 트레이에서 시작한다.
@@ -150,6 +150,10 @@ def main() -> int:
         if not _take_over_after_update(reply):
             return 0
         time.sleep(1.5)                 # 끝낸 옛 판이 소켓·파일을 놓을 때까지
+    # 켜 둔 채로(트레이) 조용히 업데이트한 뒤 다시 켜진 판이면 트레이로(updater.mark_resume)
+    # ⚠️ 하나만 도는 것이 정해진 뒤에 읽는다 — 두 번째 실행이 표시를 먹어 버리지 않게
+    if not tray_start and updater.take_resume_tray():
+        tray_start = True
     # 갑자기 꺼짐·멈춤을 기록한다(crashlog.py — 일정관리기와 같다). 두 번째 실행은 위에서 빠졌다.
     prev_crash = crashlog.start()
     crashlog.install_qt_handler()       # Qt 의 오류 문구도 같은 기록에(창 프로그램이라 안 보인다)
@@ -192,11 +196,11 @@ def main() -> int:
             pass                     # 곧 안내를 띄우고 끝난다
     server.newConnection.connect(on_second)
 
-    # ── 업데이트 (건너뛸 수 없다) ──
+    # ── 업데이트 — 묻지 않고 받아 바꾼다(kb-v1.4.0). 트레이로 켤 때는 창도 없이 ──
     info, checked = _check_with_splash(app, quiet=tray_start)
     if info:
-        from .update_ui import CONTINUE, UpdateDialog
-        if UpdateDialog.run(info) != CONTINUE:
+        from . import update_ui
+        if update_ui.run(info, show=not tray_start, tray=tray_start) == update_ui.RESTART:
             crashlog.clean_exit()        # 업데이트로 끝나는 것도 정상 종료다
             _hard_exit(0)                # 바꾸는 배치가 기다린다 — 남지 않고 바로 끝난다
 

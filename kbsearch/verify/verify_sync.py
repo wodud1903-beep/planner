@@ -362,6 +362,57 @@ ok("원본과 같아지면 지운다", kb.set_local(v) is True and kb.load_local
 config.data_file(kb.LOCAL_FILE).write_text("[{\"key\": 3}, \"x\", {}]", encoding="utf-8")
 ok("깨진 파일은 무시", kb.load_local() == [] and len(kb.local_view()) == 1)
 
+print("[17] 지운 표식 — 일정관리기와 서로 지운 메모를 되살리지 않는다(kb-v1.4.0 · 일정관리기 v1.26)")
+g = fresh()
+kb.save_mine([memo("남길 메모"), memo("일정관리기에서 지울 메모")])
+b0 = planner_bundle([memo("남길 메모"), memo("일정관리기에서 지울 메모")])
+put_bundle(g, b0)
+sync.run(FakeAuth())
+# 일정관리기에서 지웠다 — 묶음의 메모에서 빠지고 지운 표식이 실렸다(인사말 표식도 함께)
+b = get_bundle(g)
+b["files"]["kb_mine.json"] = json.dumps([memo("남길 메모")], ensure_ascii=False)
+b["files"]["deleted.json"] = json.dumps({"kb_mine.json": {"일정관리기에서 지울 메모": "2099-01-01T00:00:00Z"},
+                                         "greetings.json": {"옛 채널": "2099-01-01T00:00:00Z"}},
+                                        ensure_ascii=False)
+b["times"]["kb_mine.json"] = "2000-01-01T00:00:00Z"     # 이 PC 쪽이 더 최근인 척(예전엔 여기서 되살아났다)
+put_bundle(g, b)
+sync.run(FakeAuth())
+ok("일정관리기에서 지운 메모가 이 PC 에서도 사라진다", [x["title"] for x in kb.load_mine()] == ["남길 메모"],
+   [x["title"] for x in kb.load_mine()])
+ok("묶음에도 되살려 보내지 않는다", "일정관리기에서 지울 메모" not in get_bundle(g)["files"]["kb_mine.json"])
+ok("일정관리기의 다른 표식(인사말)은 그대로 싣는다",
+   "옛 채널" in json.loads(get_bundle(g)["files"]["deleted.json"]).get("greetings.json", {}))
+# 이 PC 에서 지웠다 → 표식이 묶음에 실리고, 일정관리기(실제 코드)도 지운다
+kb.save_mine([memo("남길 메모"), memo("여기서 지울 메모")])
+sync.run(FakeAuth())
+kb.save_mine([memo("남길 메모")])
+sync.run(FakeAuth())
+tb = json.loads(get_bundle(g)["files"]["deleted.json"])
+ok("이 PC 에서 지운 제목이 표식으로 묶음에", "여기서 지울 메모" in tb.get("kb_mine.json", {}), tb)
+from planner import config as pconfig, sync as psync  # noqa: E402
+pconfig.set_account("tomb@example.com")
+acc = pconfig.data_dir()
+(acc / "kb_mine.json").write_text(json.dumps([memo("남길 메모"), memo("여기서 지울 메모")], ensure_ascii=False),
+                                  encoding="utf-8")
+os.utime(acc / "kb_mine.json", (4102444800, 4102444800))   # 2100 — 일정관리기 쪽이 더 최근이어도
+psync.apply_remote(get_bundle(g))
+pm = [x["title"] for x in json.loads((acc / "kb_mine.json").read_text(encoding="utf-8"))]
+ok("일정관리기(실제 코드)도 이 PC 에서 지운 메모를 뺀다", pm == ["남길 메모"], pm)
+# 같은 제목으로 다시 만들면(고친 시각이 늦다) 산다
+at0 = [x for x in kb.load_mine() if x["title"] == "남길 메모"][0].get("at")
+kb.save_mine([dict([x for x in kb.load_mine() if x["title"] == "남길 메모"][0]),
+              memo("여기서 지울 메모", body="다시 만듦")])
+it = [x for x in kb.load_mine() if x["title"] == "여기서 지울 메모"][0]
+ok("다시 만든 메모에는 고친 시각(at)", bool(it.get("at")))
+tb["kb_mine.json"]["여기서 지울 메모"] = "2000-01-01T00:00:00Z"   # 지운 때가 더 옛날
+bb = get_bundle(g)
+bb["files"]["deleted.json"] = json.dumps(tb, ensure_ascii=False)
+put_bundle(g, bb)
+sync.run(FakeAuth())
+ok("다시 만든 메모는 지워지지 않는다", "여기서 지울 메모" in [x["title"] for x in kb.load_mine()])
+ok("안 바뀐 메모의 고친 시각은 그대로", at0 and
+   [x for x in kb.load_mine() if x["title"] == "남길 메모"][0].get("at") == at0)
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

@@ -175,28 +175,61 @@ ok("30초 넘게 남으면 끝낸다 · 결과를 남긴다",
    "taskkill /F /T /PID %PID%" in sc and "echo ok> \"%STATUS%\"" in sc
    and "fail missing" in sc and "fail locked" in sc)
 
-print("[8] 업데이트 창 — 건너뛰기 없음")
+print("[8] 묻지 않는 업데이트 — 단추 없이 받아 바꾸고, 못 받으면 지금 판으로(kb-v1.4.0)")
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 app = QApplication.instance() or QApplication([])
 from kbsearch import update_ui  # noqa: E402
-d = update_ui.UpdateDialog({"version": "1.0.1", "notes": "고침"})
-labels = sorted(b.text() for b in d.findChildren(QPushButton))
-ok("단추는 [계속(개발 실행)] 과 [종료] 뿐", labels == sorted(["계속", "종료"]), labels)
-d.reject()
-ok("Esc/닫기 = 종료", d.outcome == update_ui.QUIT)
+INFO = {"version": "1.0.1", "notes": "고침"}
+updater.is_frozen = lambda: False
+ok("소스로 돌 때는 그냥 계속", update_ui.run(INFO) == update_ui.CONTINUE)
 updater.is_frozen = lambda: True             # exe 로 돈다고 치고
-d = update_ui.UpdateDialog({"version": "1.0.1", "notes": ""}, failed_before=False)
-labels = sorted(b.text() for b in d.findChildren(QPushButton))
-ok("exe 에서는 [다시 시도] 와 [종료] 뿐", labels == sorted(["다시 시도", "종료"]), labels)
-ok("창에 닫기 단추가 없다", not (d.windowFlags() & __import__("PySide6.QtCore").QtCore.Qt.WindowCloseButtonHint))
-closed = []
-d.done = lambda r: closed.append(r)
-d._busy = True
-d.reject()
-ok("받는 중에는 Esc 무시", closed == [])
-d._busy = False
-d.reject()
-ok("받는 중이 아니면 Esc = 종료", closed and d.outcome == update_ui.QUIT)
+CALLS = []
+_dl, _apply = updater.download, updater.apply_and_restart
+update_ui.RETRY_WAIT_SEC = 0.01
+FAILS = {"n": 0}
+
+
+def fake_dl(info, progress=None):
+    CALLS.append("dl")
+    if FAILS["n"] > 0:
+        FAILS["n"] -= 1
+        raise updater.UpdateError("인터넷 연결")
+    if progress:
+        progress(50, 100)
+    return "/tmp/new.exe"
+
+
+updater.download = fake_dl
+updater.apply_and_restart = lambda path, ver="": CALLS.append(("apply", path, ver))
+seen_btn = []
+_orig_show = update_ui.UpdateSplash.show
+update_ui.UpdateSplash.show = lambda self: (seen_btn.append(len(self.findChildren(QPushButton))),
+                                            _orig_show(self))[1]
+out = update_ui.run(INFO, show=True, tray=False)
+ok("받아서 바꾼다 → 끝낸다(RESTART)", out == update_ui.RESTART and ("apply", "/tmp/new.exe", "1.0.1") in CALLS,
+   CALLS)
+ok("받는 동안 창에 단추가 없다(묻지 않는다)", seen_btn == [0], seen_btn)
+ok("다시 켜질 때 창으로(트레이 아님)", updater.take_resume_tray() is False)
+CALLS.clear()
+(config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
+FAILS["n"] = 2
+out = update_ui.run(INFO, show=False, tray=True)
+ok("두 번 못 받아도 세 번째에 받는다", out == update_ui.RESTART and CALLS.count("dl") == 3, CALLS)
+ok("트레이로 켰으면 새 판도 트레이로", updater.take_resume_tray() is True)
+CALLS.clear()
+(config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
+FAILS["n"] = 9
+out = update_ui.run(INFO, show=False)
+ok("끝내 못 받으면 지금 판으로 켠다(종료하지 않는다)", out == update_ui.CONTINUE and not any(
+   isinstance(c, tuple) for c in CALLS), CALLS)
+FAILS["n"] = 0
+updater.note_attempt("1.0.1")                # 방금 이 판으로 바꾸려다 그대로 켜졌다
+CALLS.clear()
+out = update_ui.run(INFO, show=False)
+ok("방금 바꾸지 못했으면 되풀이하지 않는다(몇 시간 뒤 다시)", out == update_ui.CONTINUE and CALLS == [], CALLS)
+(config.data_file(updater.STATE_FILE)).unlink(missing_ok=True)
+update_ui.UpdateSplash.show = _orig_show
+updater.download, updater.apply_and_restart = _dl, _apply
 
 config.APP_VERSION = REAL_VERSION
 
@@ -228,11 +261,6 @@ updater.is_frozen = _frozen
 st = config.base_dir() / "update_status.txt"
 st.write_text("fail missing\n", encoding="utf-8")
 ok("지난 실패 이유", updater.last_failure() == "missing" and "백신" in updater.failure_text("missing"))
-d = update_ui.UpdateDialog({"version": "1.0.4", "notes": ""}, failed_before=True)
-ok("실패했으면 이유와 [받는 곳 열기]", "백신" in d.lbl_state.text()
-   and any(b.text() == "받는 곳 열기" for b in d.findChildren(QPushButton)))
-ok("그래도 건너뛰기 단추는 없다", not any(b.text() in ("나중에", "건너뛰기", "계속")
-                                    for b in d.findChildren(QPushButton)))
 st.unlink()
 # 켜져 있는 쪽이 'ok 판번호' 로 대답하는지 — 따로 띄운 프로그램(서버)에 붙어 본다
 key = f"KbSearchVerify_{os.getpid()}"

@@ -98,6 +98,8 @@ def _clean(o) -> dict | None:
     files = clean_files(o.get("files"))
     if files:                       # 첨부가 없는 자료는 예전 모양 그대로 둔다
         out["files"] = files
+    if o.get("at"):                 # 내 메모를 고친 시각(UTC) — 지운 표식과 견준다(kb-v1.4.0)
+        out["at"] = str(o["at"])
     return out
 
 
@@ -106,8 +108,20 @@ def clean_list(items) -> list:
 
 
 def same(a, b) -> bool:
-    """저장했을 때 같은 자료인가(표시용 꼬리표는 빼고 본다)."""
-    return _clean(a) == _clean(b)
+    """저장했을 때 같은 자료인가(표시용 꼬리표·고친 시각은 빼고 본다)."""
+    ca, cb = _clean(a), _clean(b)
+    if ca:
+        ca.pop("at", None)
+    if cb:
+        cb.pop("at", None)
+    return ca == cb
+
+
+def utc_stamp(dt: datetime | None = None) -> str:
+    """일정관리기 동기화와 같은 꼴(UTC 'YYYY-MM-DDTHH:MM:SSZ') — 글자로 크기를 견준다."""
+    from datetime import timezone
+    d = (dt or datetime.now()).astimezone(timezone.utc)
+    return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse(text: str) -> list:
@@ -203,7 +217,8 @@ def save_mine(items: list, track: bool = True) -> None:
     """
     new = clean_list(items)
     if track:
-        before = {it["title"] for it in load_mine()}
+        old = {it["title"]: it for it in load_mine()}
+        before = set(old)
         after = {it["title"] for it in new}
         meta = load_meta()
         dead = dict(meta.get("deleted") or {})
@@ -212,6 +227,15 @@ def save_mine(items: list, track: bool = True) -> None:
             dead[t] = stamp
         for t in after:
             dead.pop(t, None)
+        # 새로 만들거나 고친 메모에는 고친 시각을 붙인다(그대로인 것은 원래 시각) — 일정관리기와 같은
+        # 지운 표식(deleted.json)이 다른 PC 에서 지운 옛 메모만 빼고, 다시 만든 메모는 살리게(kb-v1.4.0)
+        now = utc_stamp()
+        for it in new:
+            prev = old.get(it["title"])
+            if prev is not None and same(prev, it) and prev.get("at"):
+                it["at"] = prev["at"]
+            elif prev is None or not same(prev, it):
+                it["at"] = now
         _save_file(MINE_FILE, new)
         update_meta(deleted=dead, pending=True)
         return
