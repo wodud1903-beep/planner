@@ -333,13 +333,18 @@ ok("주 이름", (weekly.week_word(T, T), weekly.week_word(T + timedelta(days=7)
               weekly.week_word(T - timedelta(days=7), T), weekly.week_word(T + timedelta(days=21), T))
    == ("이번 주", "다음 주", "지난 주", "그 주"))
 
-print("\n[13] 켤 때 자동 업데이트 — 묻지 않고, 같은 판 두 번 실패하면 그만")
+print("\n[13] 자동 업데이트 — 묻지 않고, 같은 판 두 번 실패하면 그만(v1.26: 창 대신 알림)")
+# ⚠️ v1.26 (지점장 요청 "묻지않고 업데이트가 있으면 자동으로"): 켤 때 · [업데이트 확인] 어느
+#    쪽도 묻지 않는다. 그만둘 때 알리는 것도 창(information)이 아니라 트레이 알림(sig_toast).
+#    자세한 길(켜 둔 동안 3시간마다 · 쓰지 않을 때 바꾸기 · 트레이로 다시 켜기)은 verify_autoupdate.
 from PySide6.QtWidgets import QMessageBox  # noqa: E402
 from planner import updater  # noqa: E402
-asked, told, started = [], [], []
-_q, _i = QMessageBox.question, QMessageBox.information
+asked, told, started, toasts = [], [], [], []
+_q, _i, _wn = QMessageBox.question, QMessageBox.information, QMessageBox.warning
 QMessageBox.question = staticmethod(lambda *a, **k: asked.append(a) or QMessageBox.No)
 QMessageBox.information = staticmethod(lambda *a, **k: told.append(a))
+QMessageBox.warning = staticmethod(lambda *a, **k: told.append(a))
+w.sig_toast.connect(lambda t, m: toasts.append(m))
 _frozen, _att, _note = updater.is_frozen, updater.attempts, updater.note_attempt
 updater.is_frozen = lambda: True
 tries = {"n": 0}
@@ -347,27 +352,38 @@ updater.attempts = lambda v: tries["n"]
 updater.note_attempt = lambda v: tries.__setitem__("n", tries["n"] + 1)
 w._start_update = lambda res, manual: started.append((res["version"], manual))
 w._update_failed = ""
+w._periodic_check = False
 res = {"version": "v9.9.9", "asset_url": "x", "notes": ""}
 w._on_update_checked(res, "", False)
-ok("켤 때는 묻지 않고 바로 받는다", started == [("v9.9.9", False)] and asked == [], (started, asked))
+ok("켤 때는 묻지 않고 바로 받는다", started == [("v9.9.9", False)] and asked == [] and told == [],
+   (started, asked, told))
+ok("받는다고 알림으로만", any("받는 중" in m for m in toasts), toasts[-1:])
 ok("시도를 센다", tries["n"] == 1)
 w._on_update_checked(res, "", False)
 ok("두 번째도 한다", len(started) == 2 and tries["n"] == 2)
 w._on_update_checked(res, "", False)
 ok("같은 판 두 번 실패 뒤엔 그만(켤 때마다 꺼지지 않게)", len(started) == 2, started)
-ok("그만둘 때 한 번 알린다", len(told) == 1)
+_stops = lambda: [m for m in toasts if "건너뜁니다" in m]  # noqa: E731
+ok("그만둘 때 한 번 알린다(창이 아니라 알림)", len(_stops()) == 1 and told == [], (toasts[-1:], told))
 w._on_update_checked(res, "", False)
-ok("알림은 한 번만", len(told) == 1)
+ok("알림은 한 번만", len(_stops()) == 1)
 tries["n"] = 0
 w._update_failed = "missing"
 w._on_update_checked(res, "", False)
-ok("지난 업데이트가 실패했다고 알린 판에서는 자동으로 다시 안 한다", len(started) == 2)
+ok("지난 업데이트가 실패했다고 알린 판에서는 켜자마자 다시 안 한다", len(started) == 2)
 w._update_failed = ""
 w._on_update_checked(res, "", True)
-ok("[업데이트 확인](직접 누름)은 물어본다", len(asked) == 1 and len(started) == 2)
+ok("[업데이트 확인](직접 누름)도 묻지 않고 바로 받는다",
+   asked == [] and started[-1:] == [("v9.9.9", True)] and len(started) == 3, (asked, started))
+w._auto_updating = False
+_n = len(toasts)
 w._on_update_checked(None, "연결 안 됨", False)
-ok("켤 때 확인이 실패해도 창을 띄우지 않는다", len(told) == 1)
-QMessageBox.question, QMessageBox.information = _q, _i
+ok("켤 때 확인이 실패해도 창도 알림도 띄우지 않는다", told == [] and len(toasts) == _n, (told, toasts[_n:]))
+w._auto_updating = True                       # 받다가 실패(자동) — 알림으로만, 몇 시간 뒤 다시
+w._on_update_checked(None, "끊김", False)
+ok("자동으로 받다 실패하면 창 없이 알림으로", told == [] and len(toasts) == _n + 1
+   and not w._auto_updating, toasts[_n:])
+QMessageBox.question, QMessageBox.information, QMessageBox.warning = _q, _i, _wn
 updater.is_frozen, updater.attempts, updater.note_attempt = _frozen, _att, _note
 src_up = inspect.getsource(MainWindow._on_update_checked)
 ok("업데이트를 걸면 곧바로 끝낸다(마무리 정리에서 멈추지 않게)",

@@ -185,8 +185,38 @@ def apply_and_restart(new_exe: str) -> None:
         # 폴백: mbcs 불가 환경이면 UTF-8 + chcp 65001
         with open(bat, "w", encoding="utf-8") as f:
             f.write("chcp 65001 >nul\n" + script)
-    subprocess.Popen(["cmd", "/c", bat],
+    # 깨끗한 환경으로 · exe 폴더에서 돌린다(옛 판의 임시 폴더를 새 판이 물려받지 않게 — clean_env)
+    subprocess.Popen(["cmd", "/c", bat], env=clean_env(), cwd=tdir,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+
+def clean_env() -> dict:
+    """교체 배치(그리고 그 배치가 띄우는 새 판)에 넘길 **깨끗한 환경 변수** (v1.26.2).
+
+    ⚠️ 한 파일 exe(PyInstaller)는 풀어 놓은 임시 폴더(_MEI…)를 환경 변수(_PYI_…)로 자식에게
+       알린다. 그 값이 배치 → 새 판으로 그대로 넘어가면 새 판이 '같은 exe 의 자식' 으로 보고
+       **끝나는 옛 판의 임시 폴더를 그대로 쓴다.** 옛 판은 끝나며 그 폴더를 지우려다 못 지워
+       'Failed to remove temporary directory … _MEI…' 경고를 띄우고, 새 판은 파일이 반쯤
+       지워진 폴더로 켜지다 뜨지 못했다(지점장 PC, v1.26 업데이트 직후).
+       → _PYI_/_MEIPASS 변수와 임시 폴더를 가리키는 값을 빼고, 새로 풀라고 알린다
+         (PYINSTALLER_RESET_ENVIRONMENT=1 — PyInstaller 6.9+ 가 공식으로 읽는 스위치).
+    """
+    mei = os.path.normcase(os.path.abspath(getattr(sys, "_MEIPASS", "") or "")) \
+        if getattr(sys, "_MEIPASS", "") else ""
+    env = {}
+    for k, v in os.environ.items():
+        ku = k.upper()
+        if ku.startswith("_PYI_") or ku.startswith("_MEIPASS") or ku == "PYINSTALLER_RESET_ENVIRONMENT":
+            continue
+        if mei and ku == "PATH":
+            v = os.pathsep.join(x for x in v.split(os.pathsep)
+                                if x and not os.path.normcase(os.path.abspath(x)).startswith(mei))
+        elif mei and mei in os.path.normcase(v):
+            continue                    # QT_PLUGIN_PATH 처럼 옛 임시 폴더를 가리키는 값
+        env[k] = v
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def update_script(staged: str, target: str, old_full: str, log: str, pid: int,
@@ -215,6 +245,7 @@ set "LOG={log}"
 set "STATUS={status}"
 set "PID={pid}"
 set "PPID={ppid}"
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
 echo [update] start SRC=%SRC% DST=%DST% PID=%PID% PPID=%PPID% > "%LOG%"
 
 rem 1) 이전(현재) 프로세스가 완전히 끝날 때까지 대기 — 자식(PID)과 부모(PPID) 모두.
@@ -397,6 +428,58 @@ def last_failure() -> str:
     except Exception:
         pass
     return ""
+
+
+def idle_seconds():
+    """PC 를 마지막으로 만진 뒤 몇 초(윈도 GetLastInputInfo). 모르면 None.
+
+    켜 둔 채로 찾은 새 판을 '쓰지 않을 때' 바꾸려고 본다 — 창이 보이는데 사람이 쓰는 중이면
+    다시 켜지는 창이 일을 가로막는다. 이 프로그램이 아니라 PC 전체를 본다(다른 프로그램을
+    쓰는 중이어도 새 창이 앞으로 튀어나오면 방해가 된다).
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class _LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = _LII()
+        lii.cbSize = ctypes.sizeof(_LII)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return None
+        ms = (ctypes.windll.kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF
+        return ms / 1000.0
+    except Exception:
+        return None
+
+
+# 켜 둔 채로 조용히 업데이트할 때(v1.26) — 트레이에 숨어 있던 판이면 새 판도 트레이로 켠다.
+# 교체 배치는 탐색기로 새 판을 띄워(깨끗한 환경) 실행 인자를 넘길 수 없다. 그래서 옛 판이
+# 끝나기 전에 표시를 남기고, 새 판이 켜자마자 읽고 지운다(15분이 지난 표시는 버린다).
+_RESUME = "update_resume.json"
+
+
+def mark_resume(tray: bool) -> None:
+    try:
+        config.atomic_write(config.base_dir() / _RESUME,
+                            json.dumps({"tray": bool(tray), "at": time.time()}))
+    except Exception:
+        pass
+
+
+def take_resume_tray() -> bool:
+    """업데이트로 다시 켜진 판이 트레이로 시작해야 하나. 읽으면 지운다."""
+    p = config.base_dir() / _RESUME
+    try:
+        o = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    try:
+        p.unlink()
+    except Exception:
+        pass
+    return bool(o.get("tray")) and time.time() - float(o.get("at") or 0) < 900
 
 
 def ack_failure() -> None:

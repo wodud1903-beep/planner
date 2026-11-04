@@ -238,6 +238,57 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
 
 
 # ---------------------------------------------------------------------------
+# 캘린더에 겹쳐 올라간 팔로업 (v1.26.1 — "출고 1개월 이 계속 2개씩 등록돼")
+# ---------------------------------------------------------------------------
+# ⚠️ 왜 겹쳤나: 켤 때 캘린더를 받자마자 팔로업을 검사했는데, 그때는 아직 다른 PC 의
+#    기록(followups.json · todos.json)을 받기 전이었다. 그래서 사무실 PC · 집 PC 가 같은
+#    고객의 [출고 1개월] 일정을 저마다 캘린더에 올렸다(PC 수만큼 2개·3개).
+#    할일 목록(todos.json)은 파일째 최신인 쪽을 쓰므로 할일은 하나로 보여도 캘린더는 쌓였다.
+#    이제 ① 동기화를 받은 뒤에만 검사하고 ② 캘린더에 이미 있는 고객이면 또 올리지 않고
+#    ③ 이미 겹친 것(같은 제목 · 같은 날)은 하나만 남기고 지운다.
+def calendar_names(cal_events) -> set:
+    """캘린더에 이미 올라간 팔로업 일정의 고객명."""
+    return {n for n in (followup_name(getattr(ev, "summary", "")) for ev in (cal_events or [])) if n}
+
+
+def duplicate_events(cal_events) -> list:
+    """같은 캘린더 · 같은 날 · 같은 제목으로 겹친 팔로업 일정 — 첫 것만 남기고 나머지.
+
+    이 앱이 만든 모양('[출고 1개월] 홍길동')만 본다. 지울 수 있는 것(cal_id · event_id)만.
+    """
+    seen, extra = set(), []
+    for ev in cal_events or []:
+        title = str(getattr(ev, "summary", "") or "").strip()
+        if not _NEW_RE.match(title):
+            continue
+        if not getattr(ev, "event_id", "") or not getattr(ev, "cal_id", ""):
+            continue
+        key = (ev.cal_id, title, ev.start.date())
+        if key in seen:
+            extra.append(ev)
+        else:
+            seen.add(key)
+    return extra
+
+
+def duplicate_todos(todos) -> list:
+    """같은 제목 · 같은 날로 겹친 팔로업 할일 — 하나만 남기고 나머지(끝낸 것을 남긴다)."""
+    groups: dict = {}
+    for it in todos or []:
+        title = str(getattr(it, "title", "") or "").strip()
+        if not _NEW_RE.match(title):
+            continue
+        groups.setdefault((title, getattr(it, "run_date", None)), []).append(it)
+    extra = []
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        keep = next((i for i in items if getattr(i, "done", False)), items[0])
+        extra.extend(i for i in items if i is not keep)
+    return extra
+
+
+# ---------------------------------------------------------------------------
 # 옛 제목 바꾸기 ("[팔로업] 홍길동 (출고 1개월)" → "[출고 1개월] 홍길동")
 # ---------------------------------------------------------------------------
 def rename_old_todos(todos, keyword: str, months: int) -> int:

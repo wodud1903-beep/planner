@@ -255,6 +255,8 @@ class MainWindow(QMainWindow):
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
         self.settings = AppSettings.load(self.cfg_file)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
+        # 다른 PC 기록(Drive)을 한 번 받았나 — 받기 전엔 팔로업을 만들지 않는다(v1.26.1, 겹침)
+        self._pulled_once = False
         self.cal_events: list[google_client.CalEvent] = []
         self.gtasks: list[google_client.GoogleTask] = []
         self.week_dates: list[date | None] = []
@@ -377,6 +379,16 @@ class MainWindow(QMainWindow):
         self._update_failed = updater.last_failure()
         QTimer.singleShot(3000, self._tell_update_failure)
         QTimer.singleShot(4000, lambda: self.check_update(manual=False))
+        # 켜 둔 채로 지내도(트레이) 몇 시간마다 다시 확인한다(v1.26) — 예전엔 켤 때만 봐서,
+        # PC 를 끄지 않고 지내면 새 판(v1.25.x)이 며칠씩 깔리지 않았다.
+        # 새 판이 있으면 **쓰지 않을 때**(창이 숨어 있거나 3분 넘게 손대지 않을 때·편집 창 없음)
+        # 조용히 받아 바꾸고 다시 켠다 — 트레이였으면 트레이로.
+        self._pending_update = None
+        self._upd_timer = QTimer(self)
+        self._upd_timer.timeout.connect(lambda: self.check_update(manual=False, periodic=True))
+        self._upd_timer.start(int(self.UPDATE_CHECK_HOURS * 3600 * 1000))
+        self._upd_idle_timer = QTimer(self)
+        self._upd_idle_timer.timeout.connect(self._try_pending_update)
 
         # 창이 뜬 직후 고객관리 시트를 자동으로 불러온다.
         # (백그라운드 스레드라 시작이 느려지지 않는다. 브리핑의 '안내멘트 미발송'
@@ -630,6 +642,7 @@ class MainWindow(QMainWindow):
                                     "이미 최신입니다. 이 PC의 내용도 올렸습니다.")
 
     def _on_synced(self, changed: bool):
+        self._pulled_once = True        # 이제 팔로업을 검사해도 된다(아래 fetch_all → _run_followups)
         if changed:
             self.reload_data()
             self.sig_toast.emit(config.APP_NAME, "다른 PC의 변경사항을 동기화했습니다.")
@@ -787,7 +800,15 @@ class MainWindow(QMainWindow):
         return None
 
     # ------------------------------------------------------------ 업데이트
-    def check_update(self, manual: bool):
+    UPDATE_CHECK_HOURS = 3          # 켜 둔 동안 이 간격으로 다시 확인(v1.26)
+    UPDATE_IDLE_SEC = 180           # 창이 보이면 PC 를 이만큼 안 만질 때 바꾼다(쓰는 중에 꺼지지 않게)
+
+    def check_update(self, manual: bool, periodic: bool = False):
+        if getattr(self, "_upd_checking", False) or getattr(self, "_auto_updating", False):
+            return
+        self._upd_checking = True
+        self._periodic_check = periodic
+
         def worker():
             try:
                 res = updater.check()
@@ -796,7 +817,32 @@ class MainWindow(QMainWindow):
                 self.sig_update.emit(None, str(e), manual)
         threading.Thread(target=worker, daemon=True).start()
 
+    def _try_pending_update(self):
+        """켜 둔 채로 찾은 새 판 — 쓰지 않을 때(창이 숨었거나 3분 넘게 손대지 않음 · 편집 창 없음) 바꾼다."""
+        res = self._pending_update
+        if res is None:
+            self._upd_idle_timer.stop()
+            return
+        if QApplication.activeModalWidget() is not None:
+            return                              # 고객 수정·설정 같은 창이 떠 있다 — 다음에
+        if self.isVisible() and not self.isMinimized():
+            idle = updater.idle_seconds()
+            if idle is None or idle < self.UPDATE_IDLE_SEC:
+                return                          # 지금 쓰는 중 — 1분 뒤 다시 본다
+        self._pending_update = None
+        self._upd_idle_timer.stop()
+        ver = res["version"]
+        if updater.attempts(ver) >= updater.AUTO_MAX_TRIES:
+            return
+        updater.note_attempt(ver)
+        self._auto_updating = True
+        self.sig_toast.emit(config.APP_NAME, f"새 버전 {ver} 으로 바꿉니다 — 잠시 뒤 저절로 다시 켜집니다.")
+        self._start_update(res, manual=False)
+
     def _on_update_checked(self, res, err, manual):
+        if res != "__applied__":
+            self._upd_checking = False
+        periodic = getattr(self, "_periodic_check", False)
         if res == "__applied__":
             # 교체 배치가 실행됨 → 바로 끝낸다(배치가 우리가 끝나기를 기다린다).
             # ⚠️ QApplication.quit() 로 끝내면 파이썬 마무리 정리에서 멈춰 프로그램이 남는
@@ -808,12 +854,13 @@ class MainWindow(QMainWindow):
             crashlog.shutdown()
             os._exit(0)
         if err:
+            was = getattr(self, "_auto_updating", False)
+            self._auto_updating = False
             if manual:
                 QMessageBox.warning(self, config.APP_NAME, "업데이트 실패:\n" + err)
-            elif getattr(self, "_auto_updating", False):
-                self._auto_updating = False
-                self.sig_toast.emit(config.APP_NAME, "자동 업데이트를 받지 못했습니다 — 다음에 켤 때 "
-                                                     "다시 해 봅니다.")
+            elif was:
+                self.sig_toast.emit(config.APP_NAME, "자동 업데이트를 받지 못했습니다 — 몇 시간 뒤 확인 때 "
+                                                     "저절로 다시 해 봅니다.")
             return
         if not res:
             if manual:
@@ -828,19 +875,23 @@ class MainWindow(QMainWindow):
                     f"릴리스에서 {config.UPDATE_ASSET_NAME} 를 받아 사용하세요.")
             return
         if not manual:
-            # 켤 때 — 묻지 않고 받는다. 단 같은 판에서 두 번 실패했으면 그만둔다
-            # (안 그러면 켤 때마다 꺼졌다 켜지기를 되풀이한다). 그때는 한 번 알린다.
+            # 묻지 않고 받는다. 단 같은 판에서 두 번 실패했으면 그만둔다
+            # (안 그러면 켤 때마다 꺼졌다 켜지기를 되풀이한다). 그때는 한 번 알린다(창 대신 알림).
             ver = res["version"]
-            if getattr(self, "_update_failed", ""):
-                return
+            if getattr(self, "_update_failed", "") and not periodic:
+                return                  # 켜자마자 또 하지 않는다 — 몇 시간 뒤 확인 때 다시
             if updater.attempts(ver) >= updater.AUTO_MAX_TRIES:
                 if not getattr(self, "_auto_stop_told", False):
                     self._auto_stop_told = True
-                    QMessageBox.information(
-                        self, config.APP_NAME,
-                        f"새 버전 {ver} 자동 업데이트가 {updater.AUTO_MAX_TRIES}번 실패해 "
-                        "이번에는 건너뜁니다.\n트레이 아이콘 → [업데이트 확인] 으로 다시 하거나, "
-                        "받는 곳에서 직접 받아 주세요.")
+                    self.sig_toast.emit(config.APP_NAME,
+                                        f"새 버전 {ver} 자동 업데이트가 {updater.AUTO_MAX_TRIES}번 실패해 "
+                                        "건너뜁니다 — 트레이 아이콘 → [업데이트 확인] 으로 다시 할 수 있습니다.")
+                return
+            if periodic:
+                # 켜 둔 채로 찾았다 — 쓰지 않을 때 바꾼다(1분마다 본다)
+                self._pending_update = res
+                self._upd_idle_timer.start(60 * 1000)
+                self._try_pending_update()
                 return
             updater.note_attempt(ver)
             self._auto_updating = True
@@ -848,14 +899,16 @@ class MainWindow(QMainWindow):
                                                  "다 받으면 저절로 다시 켜집니다.")
             self._start_update(res, manual=False)
             return
-        msg = (f"새 버전 {res['version']} 이(가) 있습니다. (현재 v{config.APP_VERSION})\n\n"
-               f"{(res.get('notes') or '').strip()[:300]}\n\n지금 업데이트할까요?")
-        if QMessageBox.question(self, config.APP_NAME, msg) != QMessageBox.Yes:
-            return
-        self.sig_toast.emit(config.APP_NAME, "업데이트 다운로드 중...")
+        # [업데이트 확인] 을 눌렀다 — 묻지 않고 바로 받는다(v1.26, 요청)
+        self.sig_toast.emit(config.APP_NAME, f"새 버전 {res['version']} 을(를) 받는 중입니다 — "
+                                             "다 받으면 저절로 다시 켜집니다.")
+        self._auto_updating = True
         self._start_update(res, manual=True)
 
     def _start_update(self, res, manual: bool):
+        # 트레이에 숨어 있었으면 새 판도 트레이로 켜지게 표시해 둔다(교체 배치는 인자를 못 넘긴다)
+        updater.mark_resume(tray=not self.isVisible())
+
         def worker():
             try:
                 path = updater.download(res["asset_url"])
@@ -871,15 +924,11 @@ class MainWindow(QMainWindow):
         if not reason:
             return
         updater.ack_failure()
-        box = QMessageBox(self)
-        box.setWindowTitle(config.APP_NAME)
-        box.setIcon(QMessageBox.Warning)
-        box.setText(updater.failure_text(reason))
-        go = box.addButton("받는 곳 열기", QMessageBox.ActionRole)
-        box.addButton("닫기", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is go:
-            webbrowser.open(f"https://github.com/{config.UPDATE_REPO}/releases/latest")
+        # 창을 띄워 묻지 않는다(v1.26, 요청) — 알림으로만 알리고 몇 시간 뒤 확인 때 저절로 다시 한다.
+        # 계속 안 되면 [업데이트 확인] 이 실패 이유와 받는 곳을 알려 준다.
+        why = updater.failure_text(reason).split("\n\n")
+        self.sig_toast.emit(config.APP_NAME, why[0] + " " + (why[1] if len(why) > 1 else "")
+                            + " 몇 시간 뒤 확인 때 저절로 다시 해 봅니다.")
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -3344,7 +3393,13 @@ class MainWindow(QMainWindow):
 
     def _run_followups(self):
         """캘린더에서 팔로업 대상을 찾아 내 할일로 자동 등록."""
+        if not self._pulled_once:
+            # ⚠️ 다른 PC 기록을 받기 전이다 — 지금 만들면 PC 마다 같은 고객을 또 올린다
+            #    ([출고 1개월] 이 2개·3개씩 쌓이던 원인). 받고 나면 _on_synced → 다시 조회 → 여기.
+            return
         self._rename_old_followups()
+        self._drop_duplicate_followups()
+        on_cal = followup.calendar_names(self.cal_events)
         added = followup.check_followups(
             self.settings, self.cal_events, self.todos, self.followup_tracker)
         if added:
@@ -3354,8 +3409,10 @@ class MainWindow(QMainWindow):
             self.refresh_todo()
             self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 [내 할일]에 추가했습니다.")
             # 설정 시 구글 캘린더에도 종일 일정으로 등록
-            if self.settings.follow_to_calendar and self.gauth.is_connected():
-                items = [(it.title, it.run_date) for it in added]
+            # 캘린더에 이미 그 고객의 팔로업이 있으면(다른 PC 가 올림) 또 올리지 않는다
+            items = [(it.title, it.run_date) for it in added
+                     if followup.followup_name(it.title) not in on_cal]
+            if items and self.settings.follow_to_calendar and self.gauth.is_connected():
                 rmin = self._reminder_minutes()
 
                 def worker():
@@ -3366,6 +3423,37 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                 threading.Thread(target=worker, daemon=True).start()
+
+    def _drop_duplicate_followups(self):
+        """겹쳐 올라간 [출고 1개월] 일정·할일을 하나만 남기고 지운다(같은 제목 · 같은 날)."""
+        dup_todos = followup.duplicate_todos(self.todos)
+        if dup_todos:
+            gone = {id(t) for t in dup_todos}
+            self.todos = [t for t in self.todos if id(t) not in gone]
+            self._save_todos()
+            self.refresh_todo()
+        if not self.gauth.is_connected():
+            return
+        extra = followup.duplicate_events(self.cal_events)
+        if not extra:
+            return
+        gone = {id(ev) for ev in extra}
+        self.cal_events = [ev for ev in self.cal_events if id(ev) not in gone]
+        self.refresh_calendar()          # 화면에서 먼저 뺀다
+        jobs = [(ev.cal_id, ev.event_id) for ev in extra]
+
+        def worker():
+            done = 0
+            for cal_id, event_id in jobs:
+                try:
+                    google_client.delete_event(self.gauth, cal_id, event_id)
+                    done += 1
+                except Exception:
+                    pass             # 못 지운 건 다음 조회 때 다시 본다
+            if done:
+                self.sig_toast.emit(config.APP_NAME,
+                                    f"겹쳐 올라간 팔로업 일정 {done}건을 정리했습니다.")
+        threading.Thread(target=worker, daemon=True).start()
 
     def _reminder_minutes(self):
         """설정된 구글 캘린더 알림(분). 꺼져 있으면 None."""
