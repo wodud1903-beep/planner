@@ -400,6 +400,8 @@ class MainWindow(QMainWindow):
         self._upd_timer.start(int(self.UPDATE_CHECK_HOURS * 3600 * 1000))
         self._upd_idle_timer = QTimer(self)
         self._upd_idle_timer.timeout.connect(self._try_pending_update)
+        # 지난번 실행(업데이트 · 종료 · 두 번째 실행)이 남긴 임시 폴더를 켜고 1분 뒤 조용히 지운다(v1.28.1)
+        self.schedule_temp_cleanup(60)
 
         # 창이 뜬 직후 고객관리 시트를 자동으로 불러온다.
         # (백그라운드 스레드라 시작이 느려지지 않는다. 브리핑의 '안내멘트 미발송'
@@ -883,6 +885,10 @@ class MainWindow(QMainWindow):
             self._shutdown()
             crashlog.clean_exit()
             crashlog.shutdown()
+            # 부모(임시 폴더를 풀어 놓은 쪽)를 먼저 끝낸다 — 끝날 때 그 폴더를 지우려다 막혀(백신 등)
+            # 15초 뒤 'Failed to remove temporary directory' 경고 창을 띄웠다(v1.28.1, 지점장 PC).
+            # 남은 폴더는 새 판이 켜지고 1분 뒤 지운다(cleanup_old_temp).
+            updater.release_bootloader()
             os._exit(0)
             return                          # (끝나지 않는 경우는 없지만 — 아래로 흘러가지 않게)
         if err:
@@ -938,6 +944,12 @@ class MainWindow(QMainWindow):
         # [업데이트 확인] 을 눌렀다 — 묻지 않고 바로 받는다(v1.26, 요청)
         self._auto_updating = True
         self._begin_update(res, manual=True)
+
+    def schedule_temp_cleanup(self, after_sec: int = 60) -> None:
+        """남은 우리 임시 폴더(_MEI…)를 after_sec 뒤 뒤에서 지운다(updater.cleanup_old_temp)."""
+        def run():
+            threading.Thread(target=updater.cleanup_old_temp, daemon=True).start()
+        QTimer.singleShot(int(after_sec * 1000), run)
 
     # ---- 업데이트 진행 창(v1.27, update_progress) ----
     def _show_update_progress(self, ver: str) -> UpdateProgress:

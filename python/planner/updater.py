@@ -281,9 +281,11 @@ if !N! gtr 30 goto forcekill
 timeout /t 1 /nobreak >nul
 goto waitparent
 :forcekill
+rem ⚠️ /T(딸린 프로세스까지)는 쓰지 않는다 — 이 배치(cmd)가 바로 옛 판이 띄운 '딸린 프로세스' 라,
+rem    /T 로 끝내면 배치 자신까지 끝나 교체도 다시 켜기도 못 한 채 프로그램이 사라졌다(v1.28.1)
 echo [update] old process still running after 30s - ending it >> "%LOG%"
-taskkill /F /T /PID %PID% >nul 2>&1
-if not "%PPID%"=="0" taskkill /F /T /PID %PPID% >nul 2>&1
+taskkill /F /PID %PID% >nul 2>&1
+if not "%PPID%"=="0" taskkill /F /PID %PPID% >nul 2>&1
 timeout /t 2 /nobreak >nul
 :gone
 echo [update] old process ended (waited !N!s) >> "%LOG%"
@@ -395,6 +397,95 @@ def _parent_if_bootloader() -> int:
     except Exception:
         pass
     return 0
+
+
+# ---------------------------------------------------------------------------
+# 'Failed to remove temporary directory … _MEI…' 경고 막기(v1.28.1)
+# ---------------------------------------------------------------------------
+# 한 파일 exe(PyInstaller)는 프로세스가 둘이다 — exe 를 임시 폴더(_MEI…)에 풀어 놓는 부모와
+# 실제로 도는 자식(이 프로그램). 자식이 끝나면 부모가 그 폴더를 지우는데, 백신 등이 파일을 붙잡고
+# 있으면 1초 간격으로 15번 다시 해 본 뒤 **경고 창**을 띄우고 확인을 누를 때까지 남는다(부트로더
+# pyi_main.c · pyi_win32_mitigate_locked_temporary_directory). 업데이트로 끝날 때 자주 보였다.
+# → 끝나기 직전에 부모를 먼저 끝내 지우기를 아예 안 하게 하고(경고 없음), 남은 우리 임시 폴더는
+#   다음에 켤 때(또는 두 번째 실행 뒤) 조용히 지운다. 부트로더는 Job 개체를 쓰지 않아 부모가
+#   끝나도 자식·교체 배치는 그대로 돈다.
+TEMP_MARKER = "planner.ico"      # 우리 exe 가 임시 폴더 맨 위에 풀어 놓는 파일 — 남의 프로그램 폴더는 안 건드린다
+
+
+def release_bootloader() -> bool:
+    """부모(풀어 놓는 쪽)를 먼저 끝낸다 — 끝날 때 임시 폴더를 못 지워 경고 창을 띄우지 않게.
+
+    부모가 정말 이 exe 일 때만(경로가 같을 때만) 끝낸다. 끝냈으면 True.
+    """
+    if not is_frozen() or sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)   # 공용 windll 의 함수 정의를 바꾸지 않게
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        k32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                   ctypes.POINTER(wintypes.DWORD))
+        k32.TerminateProcess.restype = wintypes.BOOL
+        k32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        ppid = os.getppid()
+        h = k32.OpenProcess(0x0001 | 0x1000, False, ppid)    # TERMINATE | QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return False
+            same = os.path.normcase(os.path.abspath(buf.value)) == \
+                os.path.normcase(os.path.abspath(sys.executable))
+            if not same:
+                return False                 # 부모가 이 exe 가 아니다(탐색기 등) — 건드리지 않는다
+            return bool(k32.TerminateProcess(h, 0))
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        return False
+
+
+def cleanup_old_temp(min_age_sec: int = 120) -> int:
+    """지난번 실행들이 남긴 우리 임시 폴더(_MEI…)를 지운다 → 지운 개수.
+
+    · 지금 쓰는 폴더(sys._MEIPASS)는 빼고 · 우리 표시 파일(TEMP_MARKER)이 있는 것만 ·
+      막 만들어진 것(min_age_sec 안)은 두고 · 못 지우는 것(아직 잠김)은 다음에 다시.
+    """
+    if not is_frozen():
+        return 0
+    me = getattr(sys, "_MEIPASS", "") or ""
+    if not me:
+        return 0
+    me_n = os.path.normcase(os.path.abspath(me))
+    base = os.path.dirname(os.path.abspath(me))
+    n = 0
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith("_MEI"):
+            continue
+        p = os.path.join(base, name)
+        if os.path.normcase(os.path.abspath(p)) == me_n or not os.path.isdir(p):
+            continue
+        if not os.path.isfile(os.path.join(p, TEMP_MARKER)):
+            continue
+        try:
+            if time.time() - os.path.getmtime(p) < min_age_sec:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        if not os.path.exists(p):
+            n += 1
+    return n
 
 
 def kill_other_instances() -> int:

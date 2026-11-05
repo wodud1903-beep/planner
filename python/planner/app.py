@@ -119,6 +119,10 @@ def main() -> int:
     reply = _activate_existing()
     if reply is not None:
         if not _take_over_after_update(reply):
+            # 두 번째 실행 — 있는 창만 띄우고 끝난다. 막 풀어 놓은 임시 폴더를 부모가 지우려다
+            # (백신이 아직 검사 중) 'Failed to remove temporary directory' 경고를 띄우지 않게
+            # 부모를 먼저 끝낸다(v1.28.1). 남은 폴더는 켜져 있는 쪽이 조금 뒤 지운다.
+            updater.release_bootloader()
             return 0
         import time as _time
         _time.sleep(1.5)                # 끝낸 옛 판이 소켓·파일을 놓을 때까지
@@ -177,6 +181,8 @@ def main() -> int:
                 pass
             conn.disconnectFromServer()
         win.show_window()
+        # 방금 두 번째 실행이 남긴 임시 폴더를 몇 분 뒤 지운다(v1.28.1, updater.cleanup_old_temp)
+        win.schedule_temp_cleanup(180)
 
     _server.newConnection.connect(_on_second_instance)
 
@@ -203,6 +209,9 @@ def main() -> int:
         sys.stderr and sys.stderr.flush()
     except Exception:
         pass
+    # 부모(임시 폴더를 풀어 놓은 쪽)를 먼저 끝낸다 — 지우다 막혀 경고 창을 띄우지 않게(v1.28.1).
+    # 남은 폴더는 다음에 켤 때 지운다.
+    updater.release_bootloader()
     os._exit(rc)
 
 
