@@ -101,6 +101,8 @@ class MainWindow(QMainWindow):
         self._pending_update = None
         self._upd_idle_timer = QTimer(self)
         self._upd_idle_timer.timeout.connect(self._try_pending_update)
+        # 지난번 실행(업데이트 · 종료 · 두 번째 실행)이 남긴 임시 폴더를 켜고 1분 뒤 조용히 지운다(kb-v1.5.1)
+        self.schedule_temp_cleanup(60)
         if not update_checked:
             QTimer.singleShot(60 * 1000, lambda: self.check_update(manual=False))
 
@@ -698,6 +700,12 @@ class MainWindow(QMainWindow):
             self._updating = False
         if out == update_ui.RESTART:
             self.quit_app()                 # 바꾸는 배치가 기다린다
+
+    def schedule_temp_cleanup(self, after_sec: int = 60) -> None:
+        """남은 우리 임시 폴더(_MEI…)를 after_sec 뒤 뒤에서 지운다(updater.cleanup_old_temp)."""
+        def run():
+            threading.Thread(target=updater.cleanup_old_temp, daemon=True).start()
+        QTimer.singleShot(int(after_sec * 1000), run)
 
     def show_update_done(self, ver: str, notes: str = "") -> None:
         """방금 업데이트로 켜졌다 — '업데이트 완료' 와 달라진 것 몇 줄을 잠깐(kb-v1.5.0)."""

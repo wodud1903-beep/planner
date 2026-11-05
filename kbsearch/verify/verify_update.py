@@ -172,7 +172,7 @@ sc = updater.update_script(*args2)
 ok("부모(PPID)·결과 파일까지 넘겨도 같다(일정관리기 v1.23.1)",
    cmds(sc) == cmds(pupd.update_script(*args2)))
 ok("30초 넘게 남으면 끝낸다 · 결과를 남긴다",
-   "taskkill /F /T /PID %PID%" in sc and "echo ok> \"%STATUS%\"" in sc
+   "taskkill /F /PID %PID%" in sc and "echo ok> \"%STATUS%\"" in sc
    and "fail missing" in sc and "fail locked" in sc)
 
 print("[8] 묻지 않는 업데이트 — 단추 없이 받아 바꾸고, 못 받으면 지금 판으로(kb-v1.4.0)")
@@ -457,6 +457,82 @@ _asrc = _insp.getsource(_up2.apply_and_restart)
 ok("배치를 깨끗한 환경 · exe 폴더에서 돌린다", "env=clean_env()" in _asrc and "cwd=tdir" in _asrc)
 ok("배치 안에서도 새로 풀라고 알린다",
    'set "PYINSTALLER_RESET_ENVIRONMENT=1"' in _up2.update_script("S", "C:\\a\\b.exe", "C:\\a\\b.exe.old", "L", 1, 2, "ST"))
+
+print("\n[12] 'Failed to remove temporary directory' 경고 막기 — 부모를 먼저 끝내고 남은 폴더는 나중에(kb-v1.5.1)")
+import ctypes as _ct  # noqa: E402
+import shutil as _sh  # noqa: E402
+import tempfile as _tf3  # noqa: E402
+from kbsearch import updater as _up3  # noqa: E402
+ok("개발 실행이면 부모를 건드리지 않는다", _up3.release_bootloader() is False)
+
+
+class _Fn3:
+    def __init__(self, impl):
+        self.impl, self.restype, self.argtypes = impl, None, None
+
+    def __call__(self, *a):
+        return self.impl(*a)
+
+
+class _K3:
+    def __init__(self, img):
+        self.term = []
+        self.OpenProcess = _Fn3(lambda a, i, pid: 55)
+
+        def q(h, f, buf, size):
+            buf.value = img
+            return 1
+        self.QueryFullProcessImageNameW = _Fn3(q)
+        self.TerminateProcess = _Fn3(lambda h, c: self.term.append(h) or 1)
+        self.CloseHandle = _Fn3(lambda h: 1)
+
+
+_fz3, _pl3, _ex3 = _up3.is_frozen, _sys.platform, _sys.executable
+_up3.is_frozen = lambda: True
+_sys.platform = "win32"
+_sys.executable = os.path.join(_tf3.gettempdir(), "업무자료검색.exe")
+_k = {"k": _K3(_sys.executable)}
+_ct.WinDLL = lambda name, use_last_error=False: _k["k"]
+ok("부모가 이 exe 면 먼저 끝낸다", _up3.release_bootloader() is True and _k["k"].term == [55])
+_k["k"] = _K3(r"C:\Windows\explorer.exe")
+ok("부모가 다른 프로그램이면 건드리지 않는다", _up3.release_bootloader() is False and _k["k"].term == [])
+_sys.platform, _sys.executable = _pl3, _ex3
+del _ct.WinDLL
+_base = _tf3.mkdtemp()
+
+
+def _mk(name, marker=True, age=3600):
+    pth = os.path.join(_base, name)
+    os.makedirs(pth, exist_ok=True)
+    if marker:
+        open(os.path.join(pth, _up3.TEMP_MARKER), "wb").close()
+    tt = time.time() - age
+    os.utime(pth, (tt, tt))
+    return pth
+
+
+_cur, _old = _mk("_MEIcur"), _mk("_MEIold")
+_other, _fresh = _mk("_MEIother", marker=False), _mk("_MEIfresh", age=5)
+_planner = os.path.join(_base, "_MEIplanner")
+os.makedirs(_planner)
+open(os.path.join(_planner, "planner.ico"), "wb").close()
+os.utime(_planner, (time.time() - 3600, time.time() - 3600))
+_sys._MEIPASS = _cur
+ok("표시 파일은 kbsearch.ico(일정관리기 것과 다르다)", _up3.TEMP_MARKER == "kbsearch.ico")
+ok("남은 우리 폴더만 지운다", _up3.cleanup_old_temp(120) == 1 and not os.path.exists(_old)
+   and os.path.isdir(_cur) and os.path.isdir(_other) and os.path.isdir(_fresh) and os.path.isdir(_planner))
+del _sys._MEIPASS
+_up3.is_frozen = _fz3
+_sh.rmtree(_base, ignore_errors=True)
+_asrc = _insp.getsource(_kapp._hard_exit)
+ok("끝낼 때(업데이트·종료 모두 _hard_exit) os._exit 전에 부모를 끝낸다",
+   _asrc.index("updater.release_bootloader()") < _asrc.index("os._exit(rc)"))
+_msrc = _insp.getsource(_kapp.main)
+_i2 = _msrc.index("if not _take_over_after_update(reply):")
+ok("두 번째 실행도 끝나기 전에", _msrc.index("updater.release_bootloader()", _i2) < _msrc.index("return 0", _i2))
+ok("두 번째 실행을 받은 쪽이 몇 분 뒤 정리", "w.schedule_temp_cleanup(180)" in _msrc)
+_kills = [ln for ln in _up3.update_script(*args2).splitlines() if "taskkill" in ln and not ln.lstrip().lower().startswith("rem")]
+ok("교체 배치 강제 종료에 /T 없음(배치 자신까지 끝내지 않게)", _kills and not any("/T" in ln for ln in _kills), _kills)
 
 print()
 print("실패:", FAIL if FAIL else "없음")

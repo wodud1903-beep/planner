@@ -84,6 +84,9 @@ def _hard_exit(rc: int) -> None:
         sys.stderr and sys.stderr.flush()
     except Exception:
         pass
+    # 부모(임시 폴더를 풀어 놓은 쪽)를 먼저 끝낸다 — 끝날 때 그 폴더를 지우려다 막혀(백신 등) 15초 뒤
+    # 'Failed to remove temporary directory' 경고 창을 띄우지 않게(kb-v1.5.1). 남은 폴더는 다음에 켤 때.
+    updater.release_bootloader()
     os._exit(rc)
 
 
@@ -148,6 +151,9 @@ def main() -> int:
     reply = _activate_existing()
     if reply is not None:
         if not _take_over_after_update(reply):
+            # 두 번째 실행 — 있는 창만 띄우고 끝난다. 막 풀어 놓은 임시 폴더를 부모가 지우려다
+            # 경고를 띄우지 않게 부모를 먼저 끝낸다(kb-v1.5.1). 남은 폴더는 켜져 있는 쪽이 조금 뒤 지운다.
+            updater.release_bootloader()
             return 0
         time.sleep(1.5)                 # 끝낸 옛 판이 소켓·파일을 놓을 때까지
     # 켜 둔 채로(트레이) 조용히 업데이트한 뒤 다시 켜진 판이면 트레이로(updater.mark_resume)
@@ -193,6 +199,7 @@ def main() -> int:
         w = win_box.get("win")
         if w is not None:
             w.show_window()
+            w.schedule_temp_cleanup(180)   # 방금 두 번째 실행이 남긴 임시 폴더를 몇 분 뒤(kb-v1.5.1)
         elif not config.SERVICE_ON:
             pass                     # 곧 안내를 띄우고 끝난다
     server.newConnection.connect(on_second)
@@ -215,6 +222,7 @@ def main() -> int:
                                     switch.off_message(remote) if config.SERVICE_ON
                                     else config.SERVICE_OFF_MESSAGE)
         crashlog.clean_exit()
+        updater.release_bootloader()  # 끝날 때 임시 폴더 경고를 띄우지 않게(kb-v1.5.1)
         return 0
 
     startup.refresh()                # exe 를 옮겼으면 자동 실행 경로를 고친다
