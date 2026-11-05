@@ -89,6 +89,26 @@ class _NoWheelOnCombo(QObject):
         return super().eventFilter(obj, ev)
 
 
+def _startup_theme() -> str:
+    """켤 때 먼저 그릴 테마 — 지난번 계정의 설정(그 사람이 고른 테마), 없으면 공용 폴더 설정.
+
+    ⚠️ 예전엔 계정이 정해지기 전이라 늘 공용 폴더의 설정(대개 옛 기본값)을 읽었다. 그 테마로 앱
+       전체 배색(스타일시트·팔레트)을 칠해 두고, 본창은 계정 설정의 테마로 제 칸들만 칠해서 둘이
+       섞였다 — '설정에는 내 테마인데 화면은 다른 테마'(지점장, 업데이트로 다시 켤 때마다).
+       v1.26 전에는 몇 초 뒤 계정 확인이 끝나면 다시 칠해져 가려져 있었다.
+    """
+    from .models import AppSettings
+    acct = config.last_account()
+    for p in ([config.account_file(acct, "plan_cfg.json")] if acct else []) + [config.base_dir() / "plan_cfg.json"]:
+        try:
+            if p.exists():
+                s = AppSettings.load(p)
+                return getattr(s, "theme", "") or ("dark" if s.dark_mode else "light")
+        except Exception:
+            continue
+    return "light"
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
@@ -99,6 +119,10 @@ def main() -> int:
     reply = _activate_existing()
     if reply is not None:
         if not _take_over_after_update(reply):
+            # 두 번째 실행 — 있는 창만 띄우고 끝난다. 막 풀어 놓은 임시 폴더를 부모가 지우려다
+            # (백신이 아직 검사 중) 'Failed to remove temporary directory' 경고를 띄우지 않게
+            # 부모를 먼저 끝낸다(v1.28.1). 남은 폴더는 켜져 있는 쪽이 조금 뒤 지운다.
+            updater.release_bootloader()
             return 0
         import time as _time
         _time.sleep(1.5)                # 끝낸 옛 판이 소켓·파일을 놓을 때까지
@@ -128,11 +152,10 @@ def main() -> int:
     # 드롭다운은 휠로 바뀌지 않게 (앱 전체에 적용)
     _nowheel = _NoWheelOnCombo(app)
     app.installEventFilter(_nowheel)
-    # 저장된 테마(라이트/다크) 선호를 미리 반영 (계정별 설정은 로그인 후 재적용)
+    # 저장된 테마를 미리 반영 — **지난번 계정의 설정**에서(v1.28, _startup_theme).
+    # 본창(MainWindow)이 계정 설정을 읽은 뒤 앱 전체에 다시 칠한다.
     try:
-        from .models import AppSettings
-        _s = AppSettings.load(config.data_file("plan_cfg.json"))
-        theme.set_theme(getattr(_s, 'theme', '') or ('dark' if _s.dark_mode else 'light'))
+        theme.set_theme(_startup_theme())
     except Exception:
         theme.set_theme(False)
     # 스타일시트 + 팔레트를 함께 적용 (팔레트를 안 주면 윈도우 시스템 다크 테마가
@@ -158,6 +181,8 @@ def main() -> int:
                 pass
             conn.disconnectFromServer()
         win.show_window()
+        # 방금 두 번째 실행이 남긴 임시 폴더를 몇 분 뒤 지운다(v1.28.1, updater.cleanup_old_temp)
+        win.schedule_temp_cleanup(180)
 
     _server.newConnection.connect(_on_second_instance)
 
@@ -184,6 +209,9 @@ def main() -> int:
         sys.stderr and sys.stderr.flush()
     except Exception:
         pass
+    # 부모(임시 폴더를 풀어 놓은 쪽)를 먼저 끝낸다 — 지우다 막혀 경고 창을 띄우지 않게(v1.28.1).
+    # 남은 폴더는 다음에 켤 때 지운다.
+    updater.release_bootloader()
     os._exit(rc)
 
 

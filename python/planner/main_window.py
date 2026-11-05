@@ -29,13 +29,12 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, auto_rules, backup_dialog, board_view, changelog, config, contacts, crashlog,
+    alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
     customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
     google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheet_cache, sheets, sync,
     theme, updater, weekly,
 )
-from .auto_rules_dialog import AutoRulesDialog
 from .update_progress import UpdateProgress
 from .monthly_dialog import MonthlyDialog
 from .calendar_window import CalendarWindow
@@ -149,7 +148,7 @@ class MainWindow(QMainWindow):
     # 방금 만든 출고 일정 (CalEvent) — 재조회 없이 목록에 얹는다
     sig_deliver_new = Signal(object)
     sig_account = Signal(str, str)     # 로그인 계정 이메일 확인됨 (이메일, 실패 이유 "auth"|"net")
-    sig_sheet_done = Signal(int)       # 시트 읽기가 고객ID 까지 다 끝났다(그때의 epoch) — 자동 규칙
+    sig_sheet_done = Signal(int)       # 시트 읽기가 고객ID 까지 다 끝났다(그때의 epoch) — 월 마감
     sig_monthly = Signal(str, str, bool)   # 월 마감 시트 쓰기 끝 (YYYY-MM, 오류, 저절로였나)
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
@@ -295,9 +294,15 @@ class MainWindow(QMainWindow):
         # 만기 재계약 상태(v1.26) — {고객열쇠|만기일: {s, at}}
         self._renewals: dict = renewals.load()
 
-        # 저장된 테마 반영
+        # 저장된 테마 반영 — 이 계정 설정의 테마로 **앱 전체 배색까지** 다시 칠한다(v1.28).
+        # ⚠️ 예전엔 테마 이름만 바꾸고 앱 전체(스타일시트·팔레트)는 app.py 가 계정 전에 칠한 것이
+        #    그대로 남아, 설정과 다른 테마로 보였다(업데이트로 다시 켤 때마다). v1.26 부터 같은
+        #    계정이면 reload_data(→ apply_theme)를 다시 부르지 않아 끝까지 그대로였다.
         theme.set_theme(getattr(self.settings, 'theme', '')
                         or ('dark' if self.settings.dark_mode else 'light'))
+        _app = QApplication.instance()
+        if _app is not None:
+            theme.apply_to_app(_app)
 
         self.setWindowIcon(self._app_icon)
         self._build_ui()
@@ -395,6 +400,8 @@ class MainWindow(QMainWindow):
         self._upd_timer.start(int(self.UPDATE_CHECK_HOURS * 3600 * 1000))
         self._upd_idle_timer = QTimer(self)
         self._upd_idle_timer.timeout.connect(self._try_pending_update)
+        # 지난번 실행(업데이트 · 종료 · 두 번째 실행)이 남긴 임시 폴더를 켜고 1분 뒤 조용히 지운다(v1.28.1)
+        self.schedule_temp_cleanup(60)
 
         # 창이 뜬 직후 고객관리 시트를 자동으로 불러온다.
         # (백그라운드 스레드라 시작이 느려지지 않는다. 브리핑의 '안내멘트 미발송'
@@ -630,6 +637,8 @@ class MainWindow(QMainWindow):
         self._syncing = False
         if changed:
             self.reload_data()
+            # 아직 옛 판인 다른 PC 가 그사이 자동 규칙으로 만든 할일도 거둔다(v1.28)
+            QTimer.singleShot(0, self._cleanup_auto_rule_todos)
             self.refresh_calendar()
             self.refresh_todo()
             self.refresh_alarm()
@@ -652,9 +661,10 @@ class MainWindow(QMainWindow):
         if changed:
             self.reload_data()
             self.sig_toast.emit(config.APP_NAME, "다른 PC의 변경사항을 동기화했습니다.")
-        # 받기 전에 시트를 먼저 다 읽었으면 그때 미뤄 둔 자동 규칙·월 마감을 지금(v1.27)
+        # 자동 규칙을 없앴다(v1.28) — 그것이 만든, 아직 안 한 할일을 거둔다(받은 뒤라 덮어쓰지 않는다)
+        QTimer.singleShot(0, self._cleanup_auto_rule_todos)
+        # 받기 전에 시트를 먼저 다 읽었으면 그때 미뤄 둔 월 마감을 지금(v1.27)
         if self._sheet_loaded:
-            QTimer.singleShot(0, self._run_auto_rules)
             QTimer.singleShot(0, self._maybe_auto_monthly)
         # 원격 초기 시드/수렴을 위해 로컬 상태를 한 번 업로드 예약
         self._touch_sync()
@@ -875,6 +885,10 @@ class MainWindow(QMainWindow):
             self._shutdown()
             crashlog.clean_exit()
             crashlog.shutdown()
+            # 부모(임시 폴더를 풀어 놓은 쪽)를 먼저 끝낸다 — 끝날 때 그 폴더를 지우려다 막혀(백신 등)
+            # 15초 뒤 'Failed to remove temporary directory' 경고 창을 띄웠다(v1.28.1, 지점장 PC).
+            # 남은 폴더는 새 판이 켜지고 1분 뒤 지운다(cleanup_old_temp).
+            updater.release_bootloader()
             os._exit(0)
             return                          # (끝나지 않는 경우는 없지만 — 아래로 흘러가지 않게)
         if err:
@@ -930,6 +944,12 @@ class MainWindow(QMainWindow):
         # [업데이트 확인] 을 눌렀다 — 묻지 않고 바로 받는다(v1.26, 요청)
         self._auto_updating = True
         self._begin_update(res, manual=True)
+
+    def schedule_temp_cleanup(self, after_sec: int = 60) -> None:
+        """남은 우리 임시 폴더(_MEI…)를 after_sec 뒤 뒤에서 지운다(updater.cleanup_old_temp)."""
+        def run():
+            threading.Thread(target=updater.cleanup_old_temp, daemon=True).start()
+        QTimer.singleShot(int(after_sec * 1000), run)
 
     # ---- 업데이트 진행 창(v1.27, update_progress) ----
     def _show_update_progress(self, ver: str) -> UpdateProgress:
@@ -1492,12 +1512,6 @@ class MainWindow(QMainWindow):
             row.addWidget(b)
         self.btn_view_board.setToolTip("진행현황별 칸에 고객 카드 — 끌어 옮기면 시트 진행현황이 바뀝니다")
         self.btn_view_renew.setToolTip("만기가 다가오는 고객 — 상태(연락함·상담중·재계약…)와 안내 멘트 복사")
-        # [자동 규칙] — 진행현황·출고일·만기일이 되면 [내 할일] 이 저절로(v1.26)
-        self.btn_auto_rules = QPushButton("자동 규칙")
-        self.btn_auto_rules.setToolTip("'가결' 이 되면 승인 안내, 출고 전날 준비, 출고 다음 날 감사 인사, "
-                                       "만기 90·30일 전 재계약 안내 — 할일이 저절로 생깁니다")
-        self.btn_auto_rules.clicked.connect(self._open_auto_rules)
-        row.addWidget(self.btn_auto_rules)
         for b in (self.btn_view_list, self.btn_view_board, self.btn_view_renew):
             # 지금 보고 있는 쪽이 눌린 모양으로(왼쪽 메뉴의 고른 칸과 같은 색)
             b.setStyleSheet(f"QPushButton:checked {{ background:{theme.c('select_bg')};"
@@ -1616,15 +1630,10 @@ class MainWindow(QMainWindow):
         self._save_renewals()
         # ⚠️ 상태 칸(콤보)의 신호 안에서 표를 다시 그리면 그 콤보를 지우게 된다 — 한 박자 뒤에
         QTimer.singleShot(0, self._paint_renewals)
-        if s in renewals.CLOSED:
-            QTimer.singleShot(0, self._run_auto_rules)   # 남은 만기 할일(D-30 등)을 거둔다
 
     def _renew_template(self) -> str:
-        """[멘트 복사] 의 글 — 자동 규칙의 첫 만기 규칙 멘트(고쳐 쓰셨으면 그것)."""
-        for r in auto_rules.rules_of(self.settings):
-            if r["kind"] == "expiry" and (r.get("ment") or "").strip():
-                return r["ment"]
-        return auto_rules.RENEW_MENT
+        """[멘트 복사] 의 글(재계약 안내)."""
+        return renewals.RENEW_MENT
 
     def _on_renew_copy(self, cr, d):
         QApplication.clipboard().setText(renewals.ment(cr, d, self._renew_template()))
@@ -1632,7 +1641,7 @@ class MainWindow(QMainWindow):
             renewals.set_status(self._renewals, cr, d, "연락함")
             self._save_renewals()
             QTimer.singleShot(0, self._paint_renewals)
-        self.sig_toast.emit(config.APP_NAME, f"{auto_rules.short_name(cr)} 고객님 재계약 안내 멘트를 "
+        self.sig_toast.emit(config.APP_NAME, f"{renewals.short_name(cr)} 고객님 재계약 안내 멘트를 "
                                              "복사했습니다 — 카카오톡에 붙여 넣으세요.")
 
     def _on_renew_months(self, months: int):
@@ -1640,10 +1649,8 @@ class MainWindow(QMainWindow):
         self._save_settings_quiet()
         self._paint_renewals()
 
-    # ---- 진행현황 자동 규칙(v1.26, auto_rules.py) ----
     def _on_sheet_done(self, epoch: int):
         if epoch == self._sheet_epoch:
-            self._run_auto_rules()
             self._maybe_auto_monthly()
 
     # ---- 월 마감 리포트(v1.26, monthly.py) ----
@@ -1711,100 +1718,22 @@ class MainWindow(QMainWindow):
             self.sig_toast.emit("월 마감", f"{int(y)}년 {int(m)}월 마감 리포트를 시트 '{monthly.TAB}' 탭에 "
                                          "적었습니다 — 대시보드 [월 마감] 에서 복사할 수 있습니다.")
 
-    def _run_auto_rules(self) -> int:
-        """새로 읽은 시트로 규칙을 돌려 [내 할일] 을 만든다·옮긴다·거둔다. 바꾼 개수를 돌려준다.
-
-        ⚠️ 저장해 둔 목록(sheet_cache)으로는 돌리지 않는다 — 어제 것을 보고 할일을 만들면 안 된다.
-        """
-        if not getattr(self.settings, "auto_on", True) or not self._sheet_loaded or not self.sheet_rows:
-            return 0
+    # ---- 진행현황 자동 규칙 — 없앴다(v1.28, 지점장 요청 "자동규칙을 삭제해줘") ----
+    def _cleanup_auto_rule_todos(self) -> int:
+        """자동 규칙이 만든, 아직 안 한 할일을 거둔다(지점장 선택 — autorule_cleanup). 거둔 개수."""
         if not self._pulled_once:
-            # ⚠️ 다른 PC 기록을 받기 전이다(v1.27). 할일 목록(todos.json)은 PC 사이에서 '나중에 고친
-            #    파일이 이긴다'. 켜자마자 여기서 할일을 하나라도 만들면 이 PC 의 옛 목록이 더 새것으로
-            #    보여, 다른 PC 에서 고친 할일을 덮어쓴다. 받고 나면 _on_synced 가 다시 부른다.
+            return 0                     # 다른 PC 기록을 받기 전에는 할일을 고치지 않는다
+        gone = autorule_cleanup.pick(self.todos, autorule_cleanup.load_done())
+        if not gone:
             return 0
-        try:
-            done = auto_rules.load_done()
-            seen = auto_rules.load_seen()
-            acts, seen2 = auto_rules.plan(
-                self.sheet_rows, auto_rules.rules_of(self.settings), done, seen, date.today(),
-                closed=lambda cr, d: renewals.closed(self._renewals, cr, d))
-            auto_rules.save_seen(seen2)
-        except Exception as e:                       # 규칙이 탈나도 앱은 계속
-            crashlog.note(f"자동 규칙 계산 실패: {e}")
-            return 0
-        if not acts:
-            return 0
-        ts = auto_rules.now_stamp()
-
-        def find(old):
-            old = old or {}
-            title = old.get("title") or ""
-            if not title:
-                return None
-            same = [t for t in self.todos if not t.done and t.title == title]
-            for t in same:
-                if t.run_date.isoformat() == old.get("date"):
-                    return t
-            return same[0] if same else None       # 날짜를 손으로 바꿨어도 같은 할일
-
-        added, moved, removed = [], 0, 0
-        for a in acts:
-            op, key = a["op"], a["key"]
-            if op == "mark":
-                done[key] = {"skip": 1, "date": a["date"].isoformat(), "base": a.get("base", ""), "at": ts}
-                continue
-            if op == "remove":
-                t = find(a.get("old"))
-                if t is not None:
-                    self.todos.remove(t)
-                    removed += 1
-                rec = dict(a.get("old") or {})
-                rec.update({"gone": 1, "at": ts})
-                if not a.get("keep"):
-                    rec["base"] = ""                # 출고일을 다시 정하면 새로 만든다
-                done[key] = rec
-                continue
-            t = find(a.get("old")) if op == "move" else None
-            if t is not None:
-                t.run_date, t.title, t.ment = a["date"], a["title"], a["ment"]
-                t.last_alarm = None
-                moved += 1
-            else:
-                t = TodoItem(title=a["title"], run_date=a["date"], run_time=self.settings.follow_time,
-                             has_time=True, alarm=self.settings.follow_alarm, repeats=False,
-                             ment=a["ment"])
-                self.todos.append(t)
-                added.append(t)
-            done[key] = {"title": a["title"], "date": a["date"].isoformat(),
-                         "base": a.get("base", ""), "at": ts}
-        try:
-            auto_rules.save_done(done)
-        except OSError:
-            pass
-        if added or moved or removed:
-            self._save_todos()
-            self.refresh_todo()
-            parts = []
-            if added:
-                parts.append(f"{len(added)}건 추가(" + ", ".join(t.title for t in added[:3])
-                             + (" …" if len(added) > 3 else "") + ")")
-            if moved:
-                parts.append(f"{moved}건 날짜 옮김")
-            if removed:
-                parts.append(f"{removed}건 거둠")
-            self.sig_toast.emit("자동 규칙", "[내 할일] " + " · ".join(parts))
-        self._touch_sync()
-        return len(added) + moved + removed
-
-    def _open_auto_rules(self):
-        got = AutoRulesDialog.run(auto_rules.rules_of(self.settings),
-                                  getattr(self.settings, "auto_on", True), self)
-        if got is None:
-            return
-        self.settings.auto_rules, self.settings.auto_on = got
-        self._save_settings()
-        self._run_auto_rules()
+        autorule_cleanup.keep_removed(gone)          # 되살릴 수 있게 이 PC 에 남겨 둔다
+        ids = {id(t) for t in gone}
+        self.todos = [t for t in self.todos if id(t) not in ids]
+        self._save_todos()
+        self.refresh_todo()
+        self.sig_toast.emit(config.APP_NAME, f"자동 규칙을 없애며, 자동 규칙이 만든 할일 {len(gone)}건"
+                                             "(아직 안 한 것)을 지웠습니다.")
+        return len(gone)
 
     def _open_customer_from_board(self, rownum: int):
         """보드 카드를 두 번 누르면 — 표에서 그 고객을 골라 [수정] 을 연다."""
@@ -2161,7 +2090,7 @@ class MainWindow(QMainWindow):
                 # 5) 다음에 켤 때 바로 보이게 받은 그대로 둔다(v1.26 — sheet_cache)
                 if raw and live():
                     sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs)
-                # 6) 고객ID 까지 다 왔다 — 자동 규칙은 이때 본다(ID 가 오기 전엔 고객 열쇠가 다르다)
+                # 6) 고객ID 까지 다 왔다 — 월 마감은 이때 본다
                 if live():
                     self.sig_sheet_done.emit(epoch)
             except Exception as e:
@@ -4231,8 +4160,6 @@ class MainWindow(QMainWindow):
         if getattr(self, "_today_shown", None) != today:     # 자정이 지나면 제목줄 날짜도
             self._today_shown = today
             self._paint_today()
-            # 날짜 규칙(출고 전날·만기 D-30 …)은 날이 바뀌면 다시 본다(v1.26)
-            QTimer.singleShot(0, self._run_auto_rules)
             self.refresh_dashboard()        # 오늘·이번 주·다음 주가 바뀐다
         self._paint_page_title()            # 인사말은 시간대 따라(바뀔 때만 다시 쓴다)
         if self.last_backup != today and self._tick_backup_ok():
