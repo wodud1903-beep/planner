@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import auto_rules, renewals, theme
+from . import renewals, theme
 
 COLS = ["만기일", "남은 날", "고객", "차종", "금융사", "상태", "안내"]
 
@@ -128,6 +128,6 @@ class RenewalView(QWidget):
     # 시험용
     def row_of(self, name: str) -> int:
         for r, (cr, _d, _l, _s) in enumerate(self.items):
-            if auto_rules.short_name(cr) == name or (cr.get("customer") or "").strip() == name:
+            if renewals.short_name(cr) == name or (cr.get("customer") or "").strip() == name:
                 return r
         return -1

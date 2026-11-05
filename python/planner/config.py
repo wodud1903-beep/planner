@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.27.0"
+APP_VERSION = "1.28.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -257,6 +257,15 @@ def data_dir() -> Path:
 
 def data_file(name: str) -> Path:
     return data_dir() / name
+
+
+def account_file(email: str, name: str) -> Path:
+    """그 계정 폴더의 파일 경로 — 지금 계정을 바꾸지 않고 본다(폴더를 만들지 않는다).
+
+    켤 때 계정이 정해지기 전에 '지난번 계정' 의 테마를 미리 읽는 데 쓴다(app.py, v1.28).
+    """
+    email = (email or "").strip().lower()
+    return (base_dir() / "accounts" / _safe(email) / name) if email else (base_dir() / name)
 
 
 SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
