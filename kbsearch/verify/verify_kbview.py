@@ -437,6 +437,44 @@ av1 = AttachViewer(NA, png_bytes("#AA0000", 30, 20), parent=vn)
 ok("첨부가 하나면 넘기기 단추를 숨긴다", not av1.btn_next_att.isVisibleTo(av1) and not av1.lbl_count.isVisibleTo(av1))
 av1.done(0)
 
+print("\n[빠른검색 창 크게] 창 1120×720 · 목록 1 : 내용(메모) 2 (kb-v1.5.2, 지점장 요청)")
+from PySide6.QtCore import QRect as _QR  # noqa: E402
+from PySide6.QtGui import QGuiApplication as _QGA  # noqa: E402
+from kbsearch import kb_view as _kv  # noqa: E402
+
+
+class _Scr:
+    def __init__(self, w, h):
+        self.g = _QR(0, 0, w, h)
+
+    def availableGeometry(self):
+        return self.g
+
+
+_rps = _QGA.primaryScreen
+_QGA.primaryScreen = staticmethod(lambda: _Scr(1920, 1040))
+_q = _kv.QuickSearch()
+ok("창 크기 1120×720(예전 860×520)", (_q.width(), _q.height()) == (1120, 720), (_q.width(), _q.height()))
+_q.show()
+for _ in range(10):
+    QApplication.processEvents()
+_lw, _rw = _q.view.split.sizes()
+ok("내용(메모) 칸이 목록의 두 배쯤", _rw >= 1.8 * _lw, (_lw, _rw))
+_nb = _q.view.txt_body.size()
+_q.resize(860, 520)
+_q.view.split.setSizes([344, 516])
+for _ in range(10):
+    QApplication.processEvents()
+_ob = _q.view.txt_body.size()
+ok("메모 칸이 가로·세로 모두 커졌다", _nb.width() >= _ob.width() + 150 and _nb.height() >= _ob.height() + 150,
+   ((_ob.width(), _ob.height()), (_nb.width(), _nb.height())))
+_q.close()
+_QGA.primaryScreen = staticmethod(lambda: _Scr(1280, 680))
+_q2 = _kv.QuickSearch()
+ok("작은 화면이면 화면 안으로", _q2.width() <= int(1280 * 0.92) and _q2.height() <= int(680 * 0.9))
+_q2.close()
+_QGA.primaryScreen = _rps
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)
