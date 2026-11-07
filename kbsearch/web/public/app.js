@@ -1,4 +1,5 @@
-// 업무자료검색 웹 — 회사 공통 자료를 로그인 없이 검색(읽기 전용) + 관리자 서버 on/off.
+// 업무자료검색 웹 — 회사 공통 자료를 로그인 없이 검색 + 관리자 서버 on/off.
+// 공통 자료를 **이 기기에서만** 고칠 수 있다(팩스번호·내 연락처 등 — PC 의 '이 PC 에서 고침' 과 같다).
 // 검색·본문 모양은 일정관리기 폰 웹앱의 kb.js · hangul.js 를 그대로 쓴다(초성 검색 포함).
 //
 // 첫 화면을 빨리:
@@ -19,6 +20,7 @@ const colorOf = (cat) => "c-" + (COLORS[cat] || "gray");
 const initial = (cat) => (cat || "자").trim().charAt(0) || "자";
 
 let items = [], idx = [], q = "", cat = "", cur = -1, timer = 0;
+let shared = [];                   // 받은 회사 원본(고친 것을 덮기 전)
 
 // ------------------------------------------------------------------ 브라우저에 받아 둔 자료
 function readCache() {
@@ -34,6 +36,63 @@ function dropCache() {
   try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* 무시 */ }
 }
 
+// ------------------------------------------------------------------ 이 기기에서만 고친 공통 자료
+// 지점장 요청: "PC 버전은 자료수정이 잘 되는데 웹 버전은 안 돼 — 개인적으로 들어가 있는 팩스번호 등".
+// PC 프로그램의 kb_local.json('공통 · 이 PC 에서 고침')과 같은 생각이다 — 회사 원본(시트)과 다른
+// 사람에게는 가지 않고 **이 브라우저에만** 남는다. 회사 자료를 새로 받아도 그대로 덮어 보여 준다.
+// 열쇠는 PC 와 같다 — [제목, 같은 제목 중 몇 번째](kb.shared_keys).
+const LOCAL_KEY = "kbsearch:local:v1";
+const keyStr = (k) => JSON.stringify(k);
+
+function loadLocal() {
+  try {
+    const a = JSON.parse(localStorage.getItem(LOCAL_KEY) || "[]");
+    return Array.isArray(a) ? a.filter((r) => r && Array.isArray(r.key) && r.key.length === 2
+                                              && r.item && typeof r.item === "object") : [];
+  } catch (e) { return []; }
+}
+function saveLocal(recs) {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(recs)); return true; } catch (e) { return false; }
+}
+function sharedKeys(list) {
+  const seen = {};
+  return list.map((it) => {
+    const t = String(it.title || "").trim();
+    const n = seen[t] || 0;
+    seen[t] = n + 1;
+    return [t, n];
+  });
+}
+/** 회사 원본 위에 이 기기에서 고친 것을 덮은 목록. 꼬리표: _key · _local · _base · _stale · _orphan */
+function merged(list) {
+  const recs = new Map(loadLocal().map((r) => [keyStr(r.key), r]));
+  const keys = sharedKeys(list);
+  const out = list.map((it, i) => {
+    const r = recs.get(keyStr(keys[i]));
+    if (!r) return { ...it, _key: keys[i] };
+    recs.delete(keyStr(keys[i]));
+    const x = { ...it, body: String(r.item.body ?? ""), _key: keys[i], _local: true, _base: it };
+    if (r.base && String(r.base.body ?? "") !== String(it.body ?? "")) x._stale = true;   // 회사가 원본을 또 고쳤다
+    return x;
+  });
+  for (const r of recs.values()) {     // 회사 자료에서 없어졌거나 제목이 바뀌었다 — 고친 것은 남긴다
+    out.push({ ...r.item, body: String(r.item.body ?? ""), _key: r.key, _local: true, _orphan: true });
+  }
+  return out;
+}
+const localCount = () => loadLocal().length;
+
+/** 고친 것을 다시 덮어 그리고, 보던 자료를 다시 보여 준다. */
+function remerge(key) {
+  items = merged(shared);
+  idx = kb.index(items);
+  paintCats();
+  paintList();
+  paintFoot();
+  const i = key ? items.findIndex((x) => keyStr(x._key) === keyStr(key)) : -1;
+  if (i >= 0) show(i, false);
+}
+
 // ------------------------------------------------------------------ 자료 받기
 const timeText = (iso) => {
   const t = iso ? new Date(iso) : null;
@@ -44,16 +103,24 @@ function setFoot(text, kind = "") {
   $("#foot-text").textContent = text;
 }
 
+let footAt = "", footCache = false;
+function paintFoot() {
+  const t = timeText(footAt), n = localCount();
+  setFoot(`회사 공통 자료 ${shared.length}건` + (n ? ` · 이 기기에서 고친 것 ${n}건` : "")
+          + (footCache ? " · 새로 받는 중…" : t ? ` · ${t} 받음` : ""), footCache ? "" : "live");
+}
+
 function setItems(list, at, fromCache) {
   const painted = items.length > 0;
-  const same = painted && JSON.stringify(list) === JSON.stringify(items);
+  const same = painted && JSON.stringify(list) === JSON.stringify(shared);
   // 보던 자료는 새 목록에서도 제목으로 다시 찾는다(바꾸기 **전에** 적어 둔다)
   const keep = cur >= 0 ? (items[cur] || {}).title : decodeURIComponent(location.hash.slice(1));
-  items = list;
+  shared = list;
+  items = merged(list);
   idx = kb.index(items);
-  const t = timeText(at);
-  setFoot(`회사 공통 자료 ${items.length}건` + (fromCache ? " · 새로 받는 중…" : t ? ` · ${t} 받음` : ""),
-          fromCache ? "" : "live");
+  footAt = at;
+  footCache = fromCache;
+  paintFoot();
   if (same) return;                        // 받아 둔 것과 같으면 화면을 다시 그리지 않는다
   cur = -1;
   paintCats();
@@ -147,6 +214,7 @@ const view = (id) => `https://drive.google.com/file/d/${encodeURIComponent(id)}/
 const down = (id) => `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`;
 const isPdf = (f) => /\.pdf$/i.test(f.name || "") || /pdf/.test(f.mime || "");
 const COPY_ICON = '<svg viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></svg>';
+const EDIT_ICON = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>';
 const CHECK_ICON = '<svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
 
 function show(i, push) {
@@ -167,13 +235,17 @@ function show(i, push) {
         <div class="tags">
           ${it.category ? `<span class="tag ${colorOf(it.category)}">${esc(it.category)}</span>` : ""}
           ${fin ? `<span class="tag plain">${esc(fin)}</span>` : ""}
-          <span class="tag plain">회사 공통</span>
+          ${it._local ? '<span class="tag edited">공통 · 이 기기에서 고침</span>' : '<span class="tag plain">회사 공통</span>'}
         </div>
       </div>
     </div>
-    ${kb.bodyToHtml(it.body || "")}
-    <div class="actions">
+    ${it._stale ? '<p class="note">고친 뒤에 회사가 이 자료의 원본을 바꿨습니다. 새 원본을 보려면 [회사 자료로 되돌리기] 를 누르세요.</p>' : ""}
+    ${it._orphan ? '<p class="note">회사 자료에서 없어졌거나 제목이 바뀐 자료입니다 — 이 기기에서 고친 것만 남아 있습니다.</p>' : ""}
+    <div id="bodybox">${kb.bodyToHtml(it.body || "")}</div>
+    <div class="actions" id="acts">
       <button type="button" class="btn primary" id="copy" ${(it.body || "").trim() ? "" : "disabled"}>${COPY_ICON}<span>본문 복사</span></button>
+      <button type="button" class="btn ghost" id="edit">${EDIT_ICON}<span>수정</span></button>
+      ${it._local ? '<button type="button" class="btn ghost" id="revert">회사 자료로 되돌리기</button>' : ""}
     </div>
     ${files.length ? `<p class="sec">첨부 <span class="n">${files.length}</span></p><div class="atts">${files.map((f, k) => `
       <div class="att">
@@ -195,6 +267,8 @@ function show(i, push) {
     setTimeout(() => { copy.classList.remove("done"); copy.innerHTML = `${COPY_ICON}<span>본문 복사</span>`; }, 1400);
   };
   $("#back").onclick = () => history.back();
+  $("#edit").onclick = () => startEdit(i);
+  if ($("#revert")) $("#revert").onclick = () => revert(i);
   // 크게 보기는 이 화면 안에서 — 드라이브 새 탭으로 가면 다음 첨부를 보려고 닫았다 열어야 했다
   for (const a of $("#detail").querySelectorAll("a[data-k]")) {
     a.onclick = (e) => {
@@ -204,6 +278,71 @@ function show(i, push) {
     };
   }
   if (push) history.pushState({ i }, "", "#" + encodeURIComponent(it.title));
+}
+
+// ------------------------------------------------------------------ 이 기기에서 고치기
+function startEdit(i) {
+  const it = items[i];
+  if (!it) return;
+  $("#bodybox").innerHTML = `
+    <div class="editor">
+      <label for="ed-body">본문 — 팩스번호·내 연락처처럼 나에게 맞게 고쳐 쓰세요</label>
+      <textarea id="ed-body" rows="14" spellcheck="false"></textarea>
+      <p class="hint">이 기기(이 브라우저)에서만 바뀝니다. 회사 자료와 다른 사람 화면에는 그대로입니다.</p>
+    </div>`;
+  const ta = $("#ed-body");
+  ta.value = it.body || "";
+  ta.style.height = Math.min(560, Math.max(260, ta.scrollHeight + 8)) + "px";
+  $("#acts").innerHTML = `
+    <button type="button" class="btn primary" id="ed-save">${CHECK_ICON}<span>저장</span></button>
+    <button type="button" class="btn ghost" id="ed-cancel">취소</button>`;
+  $("#ed-cancel").onclick = () => show(i, false);
+  $("#ed-save").onclick = () => saveEdit(i, ta.value);
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); show(i, false); }
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(i, ta.value); }
+  });
+  ta.focus();
+}
+
+function saveEdit(i, text) {
+  const it = items[i];
+  if (!it) return;
+  const body = String(text || "").replace(/\r\n?/g, "\n").split("\n").map((l) => l.trimEnd()).join("\n").trim();
+  const recs = loadLocal();
+  const k = keyStr(it._key);
+  const prev = recs.find((r) => keyStr(r.key) === k);
+  const rest = recs.filter((r) => keyStr(r.key) !== k);
+  const base = it._orphan ? (prev && prev.base) || null : (it._local ? it._base : it);
+  if (!it._orphan && body === String((base || {}).body || "").trim()) {
+    // 회사 원본과 같아졌다 — 고친 것을 지운다(= 회사 자료로 되돌림)
+  } else {
+    const keepItem = {};
+    for (const f of ["category", "finance", "title", "tags", "files"]) if (it[f] !== undefined) keepItem[f] = it[f];
+    rest.push({ key: it._key, base: base ? { title: base.title || "", body: String(base.body || "") } : null,
+                item: { ...keepItem, body } });
+  }
+  if (!saveLocal(rest)) {
+    alert("저장하지 못했습니다 — 이 브라우저의 저장 공간을 쓸 수 없습니다(사생활 보호 창 등).");
+    return;
+  }
+  remerge(it._key);
+}
+
+function revert(i) {
+  const it = items[i];
+  if (!it || !it._local) return;
+  if (!confirm(it._orphan ? "이 기기에서 고친 자료를 지울까요?\n(회사 자료에서는 이미 없어진 자료입니다)"
+                          : "이 기기에서 고친 것을 지우고 회사 자료로 되돌릴까요?")) return;
+  saveLocal(loadLocal().filter((r) => keyStr(r.key) !== keyStr(it._key)));
+  if (it._orphan) {
+    items = merged(shared); idx = kb.index(items); paintCats(); paintList(); paintFoot();
+    $("#split").classList.remove("detail");
+    $("#detail").innerHTML = '<div class="hello"><h2>지웠습니다</h2><p>왼쪽 목록에서 다른 자료를 골라 주세요.</p></div>';
+    cur = -1;
+    return;
+  }
+  remerge(it._key);
 }
 
 // ------------------------------------------------------------------ 첨부 크게 보기

@@ -295,3 +295,16 @@ dialog input:focus, dialog textarea:focus { border-color: var(--accent); box-sha
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* 이 기기에서 고친 공통 자료(팩스번호 등) — PC 의 '공통 · 이 PC 에서 고침' */
+.tag.edited { background: #FFF1E0; color: #A85A0C; }
+.note { margin: 12px 0 0; padding: 10px 13px; border-radius: var(--r-sm); background: #FFF6E8; color: #8A4B0A;
+        font-size: 13.5px; line-height: 1.55; }
+.editor { display: grid; gap: 8px; margin-top: 14px; }
+.editor label { font-size: 13px; font-weight: 600; color: var(--sub); }
+.editor textarea {
+  width: 100%; min-height: 260px; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--line-strong);
+  background: var(--card); outline: none; resize: vertical; line-height: 1.6; font-size: 15px;
+}
+.editor textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgb(106 90 224 / .14); }
+.editor .hint { margin: 0; color: var(--sub); font-size: 12.5px; }

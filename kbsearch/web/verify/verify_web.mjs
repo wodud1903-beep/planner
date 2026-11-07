@@ -213,6 +213,70 @@ for (const [label, vp] of [["넓은 화면", { width: 1280, height: 800 }], ["�
   await page.close();
 }
 
+console.log("[4] 이 기기에서만 고치기 — 팩스번호 등(PC 의 '이 PC 에서 고침' 과 같다)");
+{
+  const target = live.find((it) => /0504-214-5287/.test(it.body || ""));
+  ok("팩스번호가 든 공통 자료가 있다", !!target, target && target.title);
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const pg = await ctx.newPage();
+  const errs = [];
+  pg.on("pageerror", (e) => errs.push(String(e)));
+  pg.on("dialog", (d) => d.accept());
+  const open = async (title) => {
+    await pg.fill("#q", title);
+    await pg.waitForTimeout(400);
+    await pg.locator("#list button.row").first().click();
+    await pg.waitForSelector("#detail #edit");
+  };
+  await pg.goto(BASE + "/");
+  await pg.waitForSelector("#list button.row");
+  await open(target.title);
+  ok("[수정] 단추가 있다", await pg.locator("#edit").isVisible());
+  await pg.click("#edit");
+  const ta = pg.locator("#ed-body");
+  ok("누르면 본문을 고치는 칸(지금 본문이 들어 있다)", await ta.isVisible() && /0504-214-5287/.test(await ta.inputValue()));
+  ok("이 기기에서만 바뀐다는 안내", /이 기기/.test(await pg.locator(".editor .hint").innerText()));
+  await ta.fill((await ta.inputValue()).replaceAll("0504-214-5287", "0504-000-1111"));
+  await pg.click("#ed-save");
+  await pg.waitForSelector("#detail .kbbody");
+  const body = await pg.locator("#detail .kbbody").innerText();
+  ok("저장하면 고친 본문이 보인다", /0504-000-1111/.test(body) && !/0504-214-5287/.test(body));
+  ok("'공통 · 이 기기에서 고침' 표시 · [회사 자료로 되돌리기]", /이 기기에서 고침/.test(await pg.locator("#detail .tags").innerText())
+     && await pg.locator("#revert").isVisible());
+  ok("아래 줄에 고친 건수", /이 기기에서 고친 것 1건/.test(await pg.locator("#foot").innerText()));
+  await pg.reload();
+  await pg.waitForSelector("#list button.row");
+  await open("0504-000-1111");
+  ok("다시 열어도 남아 있고 고친 내용으로도 찾는다", (await pg.locator("#detail h2").innerText()) === target.title
+     && /0504-000-1111/.test(await pg.locator("#detail .kbbody").innerText()));
+  const other = await browser.newContext();
+  const op = await other.newPage();
+  await op.goto(BASE + "/");
+  await op.waitForSelector("#list button.row");
+  await op.fill("#q", target.title);
+  await op.waitForTimeout(400);
+  await op.locator("#list button.row").first().click();
+  ok("다른 사람(다른 브라우저)에게는 회사 원본 그대로", /0504-214-5287/.test(await op.locator("#detail .kbbody").innerText()));
+  await other.close();
+  await pg.screenshot({ path: path.join(process.env.SHOT_DIR || "/tmp", "kbweb-edited.png") });
+  await pg.click("#revert");
+  await pg.waitForSelector("#detail .tags");
+  ok("되돌리면 회사 원본", /0504-214-5287/.test(await pg.locator("#detail .kbbody").innerText())
+     && !/이 기기에서 고침/.test(await pg.locator("#detail .tags").innerText()));
+  await pg.click("#edit");
+  await pg.click("#ed-save");                       // 그대로 저장 — 고친 것이 없다
+  ok("원본과 같으면 따로 남기지 않는다", await pg.evaluate(() => JSON.parse(localStorage.getItem("kbsearch:local:v1") || "[]").length) === 0);
+  await pg.click("#edit");
+  await pg.keyboard.press("Escape");
+  ok("Esc 로 고치기를 그만둔다", !(await pg.locator("#ed-body").count()));
+  await pg.setViewportSize({ width: 390, height: 800 });
+  await pg.click("#edit");
+  ok("폰 — 고치는 칸이 가로로 넘치지 않는다", !(await pg.evaluate(() => document.documentElement.scrollWidth > innerWidth)));
+  await pg.screenshot({ path: path.join(process.env.SHOT_DIR || "/tmp", "kbweb-edit-phone.png") });
+  ok("고치기 — 스크립트 오류 없음", errs.length === 0, errs.join(" | "));
+  await ctx.close();
+}
+
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on("dialog", (d) => d.accept());
 await page.goto(BASE + "/");
