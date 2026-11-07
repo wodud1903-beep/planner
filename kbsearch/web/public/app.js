@@ -7,6 +7,7 @@
 //   · 이 브라우저가 전에 받아 둔 자료가 있으면 그것부터 바로 그리고, 새 자료가 오면 바꾼다.
 //   · 처음이면 목록 모양의 빈 자리(skeleton)를 먼저 보여 준다.
 import * as kb from "./kb.js";
+import * as sync from "./sync.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -81,6 +82,22 @@ function merged(list) {
   return out;
 }
 const localCount = () => loadLocal().length;
+
+// 되돌린 세 심사서류 {제목: 시각} — 구글 동기화가 '되돌림' 도 PC 에 전하게(sync.js)
+const DEAD_KEY = "kbsearch:dead:v1";
+function loadDead() {
+  try { const o = JSON.parse(localStorage.getItem(DEAD_KEY) || "{}"); return o && typeof o === "object" ? o : {}; }
+  catch (e) { return {}; }
+}
+function saveDead(o) {
+  try { localStorage.setItem(DEAD_KEY, JSON.stringify(o)); return true; } catch (e) { return false; }
+}
+function markDead(key, on) {
+  if (!sync.isSyncKey(key)) return;
+  const d = loadDead();
+  if (on) d[key[0]] = sync.stamp(); else delete d[key[0]];
+  saveDead(d);
+}
 
 /** 고친 것을 다시 덮어 그리고, 보던 자료를 다시 보여 준다. */
 function remerge(key) {
@@ -235,7 +252,8 @@ function show(i, push) {
         <div class="tags">
           ${it.category ? `<span class="tag ${colorOf(it.category)}">${esc(it.category)}</span>` : ""}
           ${fin ? `<span class="tag plain">${esc(fin)}</span>` : ""}
-          ${it._local ? '<span class="tag edited">공통 · 이 기기에서 고침</span>' : '<span class="tag plain">회사 공통</span>'}
+          ${it._local ? `<span class="tag edited">${syncedHere(it) ? "공통 · 내 계정에서 고침" : "공통 · 이 기기에서 고침"}</span>`
+                      : '<span class="tag plain">회사 공통</span>'}
         </div>
       </div>
     </div>
@@ -288,7 +306,7 @@ function startEdit(i) {
     <div class="editor">
       <label for="ed-body">본문 — 팩스번호·내 연락처처럼 나에게 맞게 고쳐 쓰세요</label>
       <textarea id="ed-body" rows="14" spellcheck="false"></textarea>
-      <p class="hint">이 기기(이 브라우저)에서만 바뀝니다. 회사 자료와 다른 사람 화면에는 그대로입니다.</p>
+      <p class="hint">${esc(editHint(it))}</p>
     </div>`;
   const ta = $("#ed-body");
   ta.value = it.body || "";
@@ -296,10 +314,10 @@ function startEdit(i) {
   $("#acts").innerHTML = `
     <button type="button" class="btn primary" id="ed-save">${CHECK_ICON}<span>저장</span></button>
     <button type="button" class="btn ghost" id="ed-cancel">취소</button>`;
-  $("#ed-cancel").onclick = () => show(i, false);
+  $("#ed-cancel").onclick = () => remerge(it._key);
   $("#ed-save").onclick = () => saveEdit(i, ta.value);
   ta.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { e.preventDefault(); show(i, false); }
+    if (e.key === "Escape") { e.preventDefault(); remerge(it._key); }
     else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(i, ta.value); }
   });
   ta.focus();
@@ -314,19 +332,24 @@ function saveEdit(i, text) {
   const prev = recs.find((r) => keyStr(r.key) === k);
   const rest = recs.filter((r) => keyStr(r.key) !== k);
   const base = it._orphan ? (prev && prev.base) || null : (it._local ? it._base : it);
+  let reverted = false;
   if (!it._orphan && body === String((base || {}).body || "").trim()) {
     // 회사 원본과 같아졌다 — 고친 것을 지운다(= 회사 자료로 되돌림)
+    reverted = !!prev;
   } else {
     const keepItem = {};
     for (const f of ["category", "finance", "title", "tags", "files"]) if (it[f] !== undefined) keepItem[f] = it[f];
     rest.push({ key: it._key, base: base ? { title: base.title || "", body: String(base.body || "") } : null,
-                item: { ...keepItem, body } });
+                item: { ...keepItem, body }, at: sync.stamp() });
   }
   if (!saveLocal(rest)) {
     alert("저장하지 못했습니다 — 이 브라우저의 저장 공간을 쓸 수 없습니다(사생활 보호 창 등).");
     return;
   }
+  if (reverted) markDead(it._key, true);
+  else if (rest.length > recs.length - (prev ? 1 : 0)) markDead(it._key, false);   // 새로 고친 것을 남겼다
   remerge(it._key);
+  if (sync.isSyncKey(it._key)) soonSync();
 }
 
 function revert(i) {
@@ -335,6 +358,8 @@ function revert(i) {
   if (!confirm(it._orphan ? "이 기기에서 고친 자료를 지울까요?\n(회사 자료에서는 이미 없어진 자료입니다)"
                           : "이 기기에서 고친 것을 지우고 회사 자료로 되돌릴까요?")) return;
   saveLocal(loadLocal().filter((r) => keyStr(r.key) !== keyStr(it._key)));
+  markDead(it._key, true);
+  if (sync.isSyncKey(it._key)) soonSync();
   if (it._orphan) {
     items = merged(shared); idx = kb.index(items); paintCats(); paintList(); paintFoot();
     $("#split").classList.remove("detail");
@@ -425,6 +450,155 @@ document.addEventListener("keydown", (e) => {
   $("#q").select();
 });
 
+// ------------------------------------------------------------------ 구글 동기화(심사서류 3종)
+// 개인·개인사업자·법인 심사서류에서 고친 것을 같은 구글 계정의 PC 업무자료검색과 맞춘다(sync.js).
+// 한 번 로그인하면 이 브라우저는 계속 로그인돼 있다(서버 쿠키). 그 뒤로는 켤 때 · 세 자료를 고칠 때 ·
+// 다시 이 창으로 돌아올 때 저절로 맞춘다. [구글 동기화] 를 누르면 바로 맞춘다.
+const ACCT_KEY = "kbsearch:acct:v1";          // 마지막으로 동기화한 계정(로그인 여부를 빨리 알려고)
+const sdlg = $("#syncdlg");
+let syncing = false, syncAgain = false, lastSync = 0, syncMsg = "", syncBad = false, soonTimer = 0;
+
+const savedAcct = () => { try { return localStorage.getItem(ACCT_KEY) || ""; } catch (e) { return ""; } };
+const setAcct = (v) => { try { v ? localStorage.setItem(ACCT_KEY, v) : localStorage.removeItem(ACCT_KEY); } catch (e) { /* 무시 */ } };
+const signedIn = () => !!(sync.account() || savedAcct());
+const syncedHere = (it) => signedIn() && sync.isSyncKey(it._key);
+
+function editHint(it) {
+  if (!sync.isSyncKey(it._key)) return "이 기기(이 브라우저)에서만 바뀝니다. 회사 자료와 다른 사람 화면에는 그대로입니다.";
+  return signedIn()
+    ? `저장하면 내 구글 계정(${sync.account() || savedAcct()})으로 PC 업무자료검색에도 반영됩니다. 회사 자료와 다른 사람 화면은 그대로입니다.`
+    : "지금은 이 기기에서만 바뀝니다. 위의 [구글 동기화] 로 로그인하면 같은 계정의 PC 업무자료검색에도 반영됩니다.";
+}
+
+function paintSync() {
+  const who = sync.account() || savedAcct();
+  const b = $("#btn-sync");
+  b.classList.toggle("on", !!who);
+  b.classList.toggle("busy", syncing);
+  b.title = who ? `${who}${lastSync ? " · " + timeText(new Date(lastSync).toISOString()) + " 동기화" : ""}` : "구글 로그인하고 PC 와 맞추기";
+  $("#sync-label").textContent = syncing ? "동기화 중…" : "구글 동기화";
+  const st = $("#sync-state");
+  st.className = "state " + (who ? "on" : "off");
+  st.innerHTML = who
+    ? `<div>${esc(who)}<small>${syncing ? "맞추는 중…" : lastSync ? `${esc(timeText(new Date(lastSync).toISOString()))} 에 맞췄습니다` : "로그인돼 있습니다"}</small></div>`
+    : "<div>로그인하지 않았습니다<small>PC 업무자료검색에서 쓰는 구글 계정으로 로그인하세요.</small></div>";
+  $("#sync-err").textContent = syncMsg;
+  $("#sync-err").classList.toggle("ok", !!syncMsg && !syncBad);
+  $("#sync-go").hidden = !who;
+  $("#sync-login").hidden = !!who;
+  $("#sync-out").hidden = !who;
+  $("#sync-go").disabled = syncing;
+}
+
+function login(choose = false) {
+  const p = new URLSearchParams();
+  const hint = savedAcct();
+  if (choose) p.set("prompt", "select_account");
+  else if (hint) p.set("hint", hint);
+  location.href = "/api/auth/login" + (p.toString() ? "?" + p : "");
+}
+
+/** 한 번 맞춘다. quiet=true 면 실패해도 창을 띄우지 않는다(저절로 맞출 때). */
+async function syncNow(quiet = false) {
+  if (syncing) { syncAgain = true; return; }
+  syncing = true; syncMsg = ""; syncBad = false;
+  paintSync();
+  try {
+    const signedOut = () => {                   // 로그인 전이거나 구글에서 권한을 뺐다
+      const had = savedAcct();
+      setAcct("");
+      if (had) { syncMsg = "로그인이 끝났습니다 — [구글 로그인] 을 다시 눌러 주세요."; syncBad = true; }
+    };
+    let t = await sync.token();
+    if (!t) { signedOut(); return; }
+    setAcct(t.email);
+    if ((t.missing || []).length) {
+      syncMsg = "구글 동의 화면에서 권한 항목을 체크하지 않았습니다 — 다시 로그인해 모두 체크해 주세요.";
+      syncBad = true;
+      return;
+    }
+    let got;
+    try { got = await sync.readRemote(t); } catch (e) {
+      if (!e.auth) throw e;
+      t = await sync.token(true);                 // 토큰이 막 끝났을 수 있다 — 한 번만 새로 받아 다시
+      if (!t) { signedOut(); return; }
+      got = await sync.readRemote(t);
+    }
+    const before = JSON.stringify(loadLocal()) + JSON.stringify(loadDead());
+    const m = sync.mergeEdits(loadLocal(), loadDead(), got.edits);
+    if (JSON.stringify(loadLocal()) + JSON.stringify(loadDead()) !== before) { syncAgain = true; return; }  // 그새 고쳤다
+    if (m.pushNeeded) await sync.writeRemote(t, got.fid, m.edits);
+    saveLocal(m.recs);
+    saveDead(m.dead);
+    lastSync = Date.now();
+    syncMsg = m.changedTitles.length ? `PC 등에서 고친 ${m.changedTitles.join(" · ")} 을(를) 받았습니다.` : "맞췄습니다.";
+    if (m.changedTitles.length) {
+      const key = cur >= 0 && items[cur] ? items[cur]._key : null;
+      if ($("#ed-body")) { items = merged(shared); idx = kb.index(items); paintList(); paintFoot(); }  // 고치는 중이면 칸은 그대로
+      else remerge(key);
+    }
+  } catch (e) {
+    syncMsg = e.message || "동기화하지 못했습니다.";
+    syncBad = true;
+    if (!quiet && !sdlg.open) sdlg.showModal();
+  } finally {
+    syncing = false;
+    paintSync();
+    if (syncAgain) { syncAgain = false; setTimeout(() => syncNow(quiet), 300); }
+  }
+}
+
+/** 세 자료를 고친 뒤 — 로그인돼 있으면 곧 맞춘다(여러 번 고쳐도 한 번). */
+function soonSync() {
+  paintSync();
+  if (!signedIn()) return;
+  clearTimeout(soonTimer);
+  soonTimer = setTimeout(() => syncNow(true), 600);
+}
+
+$("#btn-sync").onclick = () => {
+  syncMsg = ""; syncBad = false;
+  paintSync();
+  if (!sdlg.open) sdlg.showModal();
+  if (signedIn()) syncNow(false);
+};
+$("#sync-go").onclick = () => syncNow(false);
+$("#sync-login").onclick = () => login(false);
+$("#sync-switch").onclick = () => login(true);
+$("#sync-out").onclick = async () => {
+  if (!confirm("구글 로그아웃할까요?\n이 기기에서 고친 것은 그대로 남습니다.")) return;
+  await sync.logout();
+  setAcct(""); lastSync = 0; syncMsg = "로그아웃했습니다."; syncBad = false;
+  paintSync();
+  if (cur >= 0) remerge(items[cur]._key);
+};
+$("#sync-close").onclick = () => sdlg.close();
+sdlg.addEventListener("click", (e) => { if (e.target === sdlg) sdlg.close(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && signedIn() && Date.now() - lastSync > 60e3) syncNow(true);
+});
+
+/** 로그인에서 돌아왔을 때(?auth=…) — 알리고 주소에서 지운다. */
+function takeAuthFlag() {
+  const u = new URL(location.href);
+  const f = u.searchParams.get("auth");
+  if (!f) return "";
+  u.searchParams.delete("auth");
+  history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+  const MSG = {
+    partial: "구글 동의 화면에서 권한 항목을 체크하지 않았습니다 — [구글 로그인] 을 다시 눌러 모두 체크해 주세요.",
+    denied: "로그인을 취소했습니다.",
+    expired: "로그인이 너무 오래 걸렸거나 다른 창에서 시작한 것입니다 — 다시 해 주세요.",
+    norefresh: "구글이 로그인 정보를 주지 않았습니다 — 다시 해 주세요.",
+    unconfigured: "로그인 서버 설정이 아직 끝나지 않았습니다.",
+    error: "로그인하지 못했습니다 — 잠시 뒤 다시 해 주세요.",
+  };
+  if (f === "ok") return "ok";
+  syncMsg = MSG[f] || MSG.error;
+  syncBad = true;
+  return f;
+}
+
 // ------------------------------------------------------------------ 관리자 — 서버 on/off
 const dlg = $("#admin");
 let pw = "";
@@ -500,4 +674,11 @@ $("#btn-on").onclick = () => flip(true);
 const cached = readCache();
 if (cached) setItems(cached.items, cached.at, true);
 else paintSkeleton();
-load(window.__boot);
+const authFlag = takeAuthFlag();
+paintSync();
+if (authFlag && authFlag !== "ok") sdlg.showModal();
+load(window.__boot).then(() => {
+  // 방금 로그인했거나 전에 로그인해 둔 브라우저면 바로 맞춘다
+  if (authFlag === "ok") { if (!sdlg.open) sdlg.showModal(); syncNow(false); }
+  else if (savedAcct()) syncNow(true);
+});

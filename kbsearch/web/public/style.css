@@ -308,3 +308,21 @@ dialog input:focus, dialog textarea:focus { border-color: var(--accent); box-sha
 }
 .editor textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgb(106 90 224 / .14); }
 .editor .hint { margin: 0; color: var(--sub); font-size: 12.5px; }
+
+/* 구글 동기화(심사서류 3종을 PC 와 맞추기) */
+.topbtns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.syncbtn { position: relative; }
+.syncbtn .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.syncbtn.on .sdot { background: var(--ok); }
+.syncbtn.busy svg { animation: kbspin 1s linear infinite; }
+@keyframes kbspin { to { transform: rotate(360deg); } }
+#syncdlg { padding: 24px; }
+#syncdlg[open] { display: grid; gap: 16px; }
+.dlg-icon.sync { background: var(--ok-bg); color: var(--ok); }
+#syncdlg .state.off { background: var(--soft); color: var(--sub); }
+#sync-err.ok { color: var(--ok); }
+@media (max-width: 760px) {
+  .syncbtn #sync-label { font-size: 13px; }
+  #btn-admin span { display: none; }
+  #btn-admin { padding: 0 12px; }
+}

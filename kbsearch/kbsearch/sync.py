@@ -21,6 +21,12 @@
   더해서, 이 PC 에서 지우거나 이름을 바꾼 메모(kb_meta.deleted)는 다른 쪽에 남아 있어도
   되살리지 않는다.
 
+**고친 심사서류**(kb-v1.6.0) — 개인 · 개인사업자 · 법인 심사서류(kb.SYNC_TITLES)를 이 PC 에서만 고친 것
+  (팩스번호 등)을 내 구글 계정으로 **웹 업무자료검색**(kbsearch.vercel.app)과 주고받는다.
+  같은 앱 전용 공간의 `kb_edits.json` 하나 — 웹 public/sync.js 와 **같은 모양 · 같은 규칙**:
+    {"v": 1, "edits": {제목: {"item": 고친 것 | null(되돌림), "base": 고칠 때 본 원본, "at": UTC}}}
+  제목마다 나중에 고친 쪽(at)이 이긴다(같으면 드라이브 쪽). 일정관리기 묶음과는 따로라 서로 건드리지 않는다.
+
 **첨부** — 이 PC 에만 두었던 첨부(local-…)를 먼저 드라이브에 올린 뒤에 내보낸다.
   하나라도 못 올리면 그 묶음은 내보내지 않는다(다른 PC 가 받을 수 없는 첨부를 싣지 않게).
 """
@@ -35,6 +41,7 @@ from dataclasses import dataclass, field
 from . import config, google_auth, kb, kb_files, sheets_kb
 
 MINE_KEY = kb.MINE_FILE             # 묶음 안의 칸 이름 — 일정관리기와 같다(kb_mine.json)
+EDITS_FILE = "kb_edits.json"        # 고친 심사서류 3종 — 웹 업무자료검색과 주고받는다(kb-v1.6.0)
 TOMBS_KEY = "deleted.json"          # 지운 표식 칸 — 일정관리기 tombs.FILE 과 같다(kb-v1.4.0)
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"      # 일정관리기 sync.py 와 같은 꼴(문자열로 크기를 견준다)
 
@@ -52,6 +59,7 @@ class Result:
     mine_count: int = 0
     mine_added: int = 0             # 다른 곳에서 새로 들어온 메모 수
     uploaded: int = 0               # 올린 첨부 수
+    edits_in: list = field(default_factory=list)   # 웹 등에서 고쳐 받은 심사서류 제목
     notes: list = field(default_factory=list)
 
     def summary(self) -> str:
@@ -64,6 +72,8 @@ class Result:
                     + (f"(새로 {self.mine_added}건)" if self.mine_added else ""))
         if self.uploaded:
             bits.append(f"첨부 {self.uploaded}개 올림")
+        if self.edits_in:
+            bits.append("고친 심사서류 받음(" + ", ".join(self.edits_in) + ")")
         return " · ".join(bits)
 
 
@@ -245,6 +255,117 @@ def put_mine(bundle, items: list, stamp: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 고친 심사서류 3종 — 웹 업무자료검색과(kb_edits.json)
+# ---------------------------------------------------------------------------
+def _good_rec(r) -> bool:
+    return isinstance(r, dict) and isinstance(r.get("at"), str) and (
+        r.get("item") is None or isinstance(r.get("item"), dict))
+
+
+def _upload_item(item: dict) -> dict:
+    """올릴 모양 — 이 PC 에만 있는 첨부(local-)는 다른 곳에서 못 여니 뺀다."""
+    out = dict(kb._clean(item) or {})
+    files = [f for f in (out.get("files") or []) if not kb_files.is_local(f)]
+    if files:
+        out["files"] = files
+    else:
+        out.pop("files", None)
+    out.pop("at", None)
+    return out
+
+
+def _apply_item(remote_item: dict, shared_item) -> dict:
+    """받은 것을 이 PC 모양으로 — 원본 위에 덮는다(웹은 체크리스트 등을 싣지 않는다)."""
+    base = dict(shared_item or {})
+    base.update({k: v for k, v in (remote_item or {}).items() if v is not None})
+    return kb._clean(base) or kb._clean(remote_item) or {}
+
+
+def merge_edits(recs: list, dead: dict, remote: dict, now: str, shared: list) -> dict:
+    """이 PC 것과 드라이브 것을 합친다(계산만). 웹 public/sync.js 의 mergeEdits 와 같은 규칙.
+
+    recs  : kb.load_local() (세 자료 말고 것도 섞여 있다 — 그것들은 그대로 둔다)
+    dead  : kb.load_local_dead() {제목: 되돌린 시각}
+    remote: 드라이브 파일의 edits
+    돌려줌 {recs, dead, edits, changed(받아서 바뀐 제목), push(올려야 하나)}
+    """
+    by_key = dict(zip(kb.shared_keys(shared), shared))
+    out_recs = [r for r in recs if not kb.is_sync_key(r["key"])]
+    out_dead, edits, changed, push = {}, dict(remote or {}), [], False
+    for t in kb.SYNC_TITLES:
+        key = (t, 0)
+        lr = next((r for r in recs if tuple(r["key"]) == key), None)
+        R = remote.get(t) if _good_rec((remote or {}).get(t)) else None
+        if lr is not None:
+            L = {"item": _upload_item(lr["item"]), "base": lr.get("base"), "at": lr.get("at") or ""}
+        elif (dead or {}).get(t):
+            L = {"item": None, "base": None, "at": str(dead[t])}
+        else:
+            L = None
+        # 동기화 전에 고친 것(시각 없음) — 드라이브가 비었을 때만 지금 고친 것으로 올린다
+        if L is not None and not L["at"]:
+            L["at"] = "" if R else now
+        if L is None and R is None:
+            continue
+        # 나중 쪽이 이긴다. 시각이 같으면 드라이브 쪽 — 단, 내용까지 같으면 이 PC 것을 그대로 둔다
+        if R is None or L is None:
+            W = L if R is None else R
+        elif R["at"] > L["at"] or (R["at"] == L["at"] and R.get("item") != L["item"]):
+            W = R
+        else:
+            W = L
+        if W is L:
+            if W["item"] is not None:
+                out_recs.append(lr if lr.get("at") else dict(lr, at=W["at"]))
+            else:
+                out_dead[t] = W["at"]
+        else:
+            if W["item"] is not None:
+                item = _apply_item(W["item"], by_key.get(key))
+                cur = by_key.get(key)
+                rb = kb._clean(W.get("base")) if isinstance(W.get("base"), dict) else None
+                # 웹은 원본을 {제목, 본문} 만 적는다 — 본문이 지금 원본과 같으면 지금 원본을 쓴다
+                if cur is not None and (rb is None or rb.get("body") == kb._clean(cur).get("body")):
+                    rb = kb._clean(cur)
+                out_recs.append({"key": key, "base": rb, "item": item, "at": W["at"]})
+            else:
+                out_dead[t] = W["at"]
+            before = (lr["item"].get("body") if lr else None)
+            after = (W["item"] or {}).get("body") if W["item"] is not None else None
+            if before != after:
+                changed.append(t)
+        rec = {"item": W["item"], "base": W.get("base"), "at": W["at"]}
+        if R is None or rec != {"item": R.get("item"), "base": R.get("base"), "at": R["at"]}:
+            edits[t] = rec
+            push = True
+    return {"recs": out_recs, "dead": out_dead, "edits": edits, "changed": changed, "push": push}
+
+
+def sync_edits(auth) -> list:
+    """고친 심사서류 3종을 드라이브와 맞춘다. 받아서 바뀐 제목 목록. 못 읽으면 SyncError(쓰지 않는다)."""
+    try:
+        fid = google_auth.appdata_find(auth, EDITS_FILE)
+        text = google_auth.appdata_read(auth, fid) if fid else ""
+    except google_auth.GoogleError as e:
+        raise SyncError(f"고친 심사서류를 받지 못했습니다: {e}")
+    try:
+        o = json.loads(text) if text.strip() else {}
+    except Exception:
+        raise SyncError("드라이브의 고친 심사서류 파일이 깨져 있어 주고받지 않았습니다.")
+    remote = o.get("edits") if isinstance(o, dict) and isinstance(o.get("edits"), dict) else {}
+    stamp = now_stamp()
+    m = merge_edits(kb.load_local(), kb.load_local_dead(), remote, stamp, kb.load_shared())
+    if m["push"]:
+        try:
+            google_auth.appdata_write(auth, EDITS_FILE, json.dumps(
+                {"v": 1, "updatedAt": stamp, "edits": m["edits"]}, ensure_ascii=False, indent=1), fid)
+        except google_auth.GoogleError as e:
+            raise SyncError(f"고친 심사서류를 올리지 못했습니다: {e}")
+    kb.replace_local(m["recs"], m["dead"])
+    return m["changed"]
+
+
+# ---------------------------------------------------------------------------
 # 첨부
 # ---------------------------------------------------------------------------
 def _upload_locals(auth, items: list, public: bool, done: dict) -> tuple:
@@ -385,6 +506,9 @@ def run(auth, push_shared: bool = False) -> Result:
         stamp = rstamp or now_stamp()
     kb.save_mine(merged, track=False)
     _set_mine_stamp(stamp)
+
+    # 2-2) 고친 심사서류 3종 — 웹 업무자료검색과
+    res.edits_in = sync_edits(auth)
 
     # 3) 정리 — 올린 첨부의 이 PC 사본(local-)과 미뤄 둔 드라이브 일.
     #    이 PC 에서만 고친 공통 자료는 올리지 않으므로, 같은 그림을 쓰면 사본을 남긴다.

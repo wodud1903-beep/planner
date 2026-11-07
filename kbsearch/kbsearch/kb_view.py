@@ -677,7 +677,9 @@ class KbEditDialog(QDialog):
         if not self.admin:
             lbl = QLabel("회사 공통 자료는 고쳐도 이 PC 에서만 바뀝니다 — 시트·다른 직원에게는 가지 않습니다.\n"
                          "팩스번호·내 연락처처럼 나만 다르게 쓸 것을 고치세요. "
-                         "[회사 자료로 되돌리기] 를 누르면 회사 원본으로 돌아갑니다.")
+                         "[회사 자료로 되돌리기] 를 누르면 회사 원본으로 돌아갑니다.\n"
+                         "개인 · 개인사업자 · 법인 심사서류는 [동기화] 하면 같은 구글 계정의 "
+                         "웹 업무자료검색에도 반영됩니다.")
             lbl.setWordWrap(True)
             lbl.setStyleSheet(f"color:{theme.c('subtext')};")
             root.addWidget(lbl)

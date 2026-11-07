@@ -19,6 +19,7 @@
 <link rel="modulepreload" href="app.js">
 <link rel="modulepreload" href="kb.js">
 <link rel="modulepreload" href="hangul.js">
+<link rel="modulepreload" href="sync.js">
 <link rel="stylesheet" href="style.css">
 <!-- 글꼴(Pretendard)은 화면을 막지 않고 뒤에서 받는다. 받기 전에는 기기 글꼴로 보인다. -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
@@ -37,10 +38,16 @@
         <p>회사 공통 자료 · 로그인 없이</p>
       </div>
     </div>
+    <div class="topbtns">
+    <button class="btn ghost small syncbtn" id="btn-sync" type="button" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M17.8 3.6v3.6h-3.6"/><path d="M6.2 20.4v-3.6h3.6"/></svg>
+      <span id="sync-label">구글 동기화</span><i class="sdot" aria-hidden="true"></i>
+    </button>
     <button class="btn ghost small" id="btn-admin" type="button" aria-label="관리 — 서버 켜기/끄기">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>
       <span>관리</span>
     </button>
+    </div>
   </header>
 
   <main class="wrap" id="main">
@@ -112,6 +119,30 @@
       </div>
     </div>
   </form>
+</dialog>
+
+<dialog id="syncdlg" aria-labelledby="sync-title">
+  <div class="dlg-head">
+    <span class="dlg-icon sync" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M17.8 3.6v3.6h-3.6"/><path d="M6.2 20.4v-3.6h3.6"/></svg>
+    </span>
+    <div>
+      <h2 id="sync-title">구글 동기화</h2>
+      <p class="sub"><b>개인 · 개인사업자 · 법인 심사서류</b>에서 고친 내용(팩스번호 등)을 같은 구글 계정의
+        PC 업무자료검색과 맞춥니다. 어느 쪽에서 고쳐도 양쪽에 반영됩니다. 회사 자료와 다른 사람 화면은 그대로입니다.</p>
+    </div>
+  </div>
+  <div class="dlg-body">
+    <div class="state" id="sync-state"></div>
+    <p class="err" id="sync-err" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="sync-close">닫기</button>
+      <button type="button" class="btn ghost" id="sync-out" hidden>로그아웃</button>
+      <button type="button" class="btn ghost" id="sync-switch">다른 계정</button>
+      <button type="button" class="btn primary" id="sync-go" hidden>지금 동기화</button>
+      <button type="button" class="btn primary" id="sync-login">구글 로그인</button>
+    </div>
+  </div>
 </dialog>
 
 <!-- 첨부 크게 보기 — 같은 자료의 다른 첨부로 바로 넘긴다(◀ ▶ · 키보드 ← → · 폰은 옆으로 밀기) -->

@@ -11,6 +11,8 @@
   자료를 고치면 원본은 그대로 두고 고친 것만 여기 둔다. 팩스번호·내 연락처처럼 사람마다 다른 것을
   고쳐 쓰라고 있다. 시트·드라이브·다른 PC 로는 **가지 않고**, 공통 자료를 새로 받아도 남는다.
   검색 화면은 원본 위에 이것을 덮어 보여 준다(local_view).
+  단, **개인 · 개인사업자 · 법인 심사서류**(SYNC_TITLES) 셋은 [동기화] 때 내 구글 계정으로 웹
+  업무자료검색과 주고받는다(kb-v1.6.0, sync.sync_edits) — 고친 시각(at)과 되돌린 표식(local_dead)을 둔다.
 
 `kb_meta.json` 에는 동기화가 알아야 할 것을 둔다:
   shared_dirty  : 이 PC 에서 공통 자료를 고쳤고 아직 시트로 안 올렸다(관리자)
@@ -19,6 +21,7 @@
   account       : 이 PC 의 메모가 마지막으로 동기화된 구글 계정
   last_sync     : 마지막으로 동기화한 때
   trash/renames : 로그인하지 않은 채 빼거나 이름을 바꾼 '이미 올린' 첨부 — 동기화 때 드라이브에 반영
+  local_dead    : 되돌린 심사서류 3종 {제목: 되돌린 시각(UTC)} — 동기화가 웹에도 되돌림을 전하게
 """
 
 from __future__ import annotations
@@ -38,6 +41,17 @@ SRC_SHARED = "shared"
 SRC_MINE = "mine"
 SRC_LOCAL = "local"             # 이 PC 에서만 고친 공통 자료
 SRC_NAMES = {SRC_SHARED: "공통", SRC_MINE: "내 메모", SRC_LOCAL: "공통 · 이 PC 에서 고침"}
+
+# 고친 것을 내 구글 계정으로 웹과 주고받는 공통 자료(지점장 요청 2026-11-07 — 이 셋만)
+SYNC_TITLES = ("개인 심사서류", "개인사업자 심사서류", "법인 심사서류")
+
+
+def is_sync_key(key) -> bool:
+    try:
+        return int(key[1]) == 0 and str(key[0]).strip() in SYNC_TITLES
+    except (TypeError, ValueError, IndexError):
+        return False
+
 
 # 자주 쓰는 분류 — 새로 만들 때 고르라고 제안하는 값(자유 입력도 된다)
 CATEGORIES = ["심사서류", "캐피탈", "전자약정", "연락처", "진행절차", "기타"]
@@ -299,12 +313,14 @@ def load_local() -> list:
             key = (str(k[0]).strip(), int(k[1]))
         except (TypeError, ValueError):
             continue
-        out.append({"key": key, "base": _clean(r.get("base")), "item": item})
+        out.append({"key": key, "base": _clean(r.get("base")), "item": item,
+                    "at": str(r.get("at") or "")})
     return out
 
 
 def _save_local(recs: list) -> None:
-    data = [{"key": list(r["key"]), "base": r.get("base"), "item": r["item"]} for r in recs]
+    data = [{"key": list(r["key"]), "base": r.get("base"), "item": r["item"],
+             **({"at": r["at"]} if r.get("at") else {})} for r in recs]
     config.atomic_write(config.data_file(LOCAL_FILE),
                         json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -363,14 +379,40 @@ def set_local(items: list) -> bool:
             continue
         if base is None and prev is None:
             continue
-        new[k] = {"key": k, "base": base if base is not None else prev.get("base"), "item": c}
+        new[k] = {"key": k, "base": base if base is not None else prev.get("base"), "item": c,
+                  "at": utc_stamp()}
 
     def shape(d):
         return {k: (r["item"], r.get("base")) for k, r in d.items()}
     if shape(new) == shape(old):
         return False
     _save_local(list(new.values()))
+    # 심사서류 3종 — 되돌린 것은 표식을 남기고(웹에도 되돌림을 전한다), 다시 고치면 표식을 지운다
+    dead = dict(load_meta().get("local_dead") or {})
+    touched = False
+    for k in set(old) | set(new):
+        if not is_sync_key(k):
+            continue
+        if k in old and k not in new:
+            dead[k[0]] = utc_stamp()
+            touched = True
+        elif k in new and (k not in old or shape({k: new[k]}) != shape({k: old[k]})):
+            dead.pop(k[0], None)
+            touched = True
+    if touched:
+        update_meta(local_dead=dead)
     return True
+
+
+def load_local_dead() -> dict:
+    d = load_meta().get("local_dead") or {}
+    return {str(t): str(v) for t, v in d.items() if t and v} if isinstance(d, dict) else {}
+
+
+def replace_local(recs: list, dead: dict) -> None:
+    """동기화가 합친 결과를 그대로 저장한다(sync.sync_edits)."""
+    _save_local(recs)
+    update_meta(local_dead=dict(dead or {}))
 
 
 def local_file_ids() -> set:

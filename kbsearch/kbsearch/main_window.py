@@ -46,6 +46,7 @@ def _file_ids(items: list) -> dict:
 class MainWindow(QMainWindow):
     sig_login = Signal(str, str)             # (이메일, 오류)
     sig_sync = Signal(object, str)           # (sync.Result | None, 오류)
+    sig_edits = Signal(object, str)     # 고친 심사서류 3종을 조용히 맞춘 결과(kb-v1.6.0)
     sig_update = Signal(object, str, bool)   # (새 판 정보 | None, 오류, 직접 눌렀나)
     sig_public = Signal(object, str)         # (공개로 받은 공통 자료 | None, 오류)
     sig_switch = Signal(object)              # 웹 스위치 상태(switch.fetch_state) | None
@@ -82,6 +83,7 @@ class MainWindow(QMainWindow):
 
         self.sig_login.connect(self._on_login)
         self.sig_sync.connect(self._on_sync)
+        self.sig_edits.connect(self._on_edits)
         self.sig_update.connect(self._on_update)
         self.sig_public.connect(self._on_public)
         self.sig_switch.connect(self._on_switch)
@@ -111,6 +113,9 @@ class MainWindow(QMainWindow):
         self._auto_timer.timeout.connect(self.auto_pull)
         self._auto_timer.start(int(config.KB_AUTO_MINUTES * 60 * 1000))
         QTimer.singleShot(1500, self._pull_if_stale)     # 창을 띄우며 이미 받았으면 건너뛴다
+        # 고친 심사서류 3종 — 로그인돼 있으면 켤 때와 몇 분마다 웹과 조용히 맞춘다(kb-v1.6.0)
+        self._auto_timer.timeout.connect(self.sync_edits_quiet)
+        QTimer.singleShot(8000, self.sync_edits_quiet)
         # 웹 스위치 — 켜 둔 채로 지내도 관리자가 끄면 몇 분 안에 멈춘다
         self._switch_checking = False
         if config.SWITCH_URL:
@@ -522,6 +527,37 @@ class MainWindow(QMainWindow):
                           + (" — 다른 곳과 맞추려면 [동기화]" if config.SYNC_ON else ""), "ok")
         elif local_changed:
             self._set_msg("이 PC 에 저장했습니다 — 회사 공통 자료는 이 PC 에서만 바뀝니다", "ok")
+        if local_changed and self.gauth.is_connected():
+            QTimer.singleShot(500, self.sync_edits_quiet)     # 심사서류 3종이면 웹에도 곧 반영
+
+    # ------------------------------------------------------------ 고친 심사서류 3종 — 조용히 맞추기
+    def sync_edits_quiet(self) -> None:
+        """개인·개인사업자·법인 심사서류에서 고친 것을 웹 업무자료검색과 맞춘다(sync.sync_edits).
+
+        로그인돼 있을 때만, 조용히 한다(실패해도 창을 띄우지 않는다 — [동기화] 때 다시 한다).
+        편집 창이 떠 있거나 동기화 중이면 건너뛴다.
+        """
+        if (not config.SYNC_ON or self._busy or self._editing or self._login_cancel is not None
+                or not self.gauth.is_connected()):
+            return
+        self._busy = True
+        self.refresh_account()
+
+        def work():
+            try:
+                self.sig_edits.emit(sync.sync_edits(self.gauth), "")
+            except Exception as e:
+                self.sig_edits.emit([], str(e) or "실패")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_edits(self, changed, err: str) -> None:
+        self._busy = False
+        if changed:
+            self.view.reload()
+            if self._quick is not None and self._quick.isVisible():
+                self._quick.view.reload()
+            self._set_msg("웹에서 고친 " + ", ".join(changed) + " 을(를) 받았습니다", "ok")
+        self.refresh_account()
 
     # ------------------------------------------------------------ 로그인 · 동기화
     def sync_clicked(self) -> None:

@@ -413,6 +413,148 @@ ok("다시 만든 메모는 지워지지 않는다", "여기서 지울 메모" i
 ok("안 바뀐 메모의 고친 시각은 그대로", at0 and
    [x for x in kb.load_mine() if x["title"] == "남길 메모"][0].get("at") == at0)
 
+print("[18] 고친 심사서류 3종 — 내 구글 계정으로 웹 업무자료검색과 주고받기(kb-v1.6.0)")
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+
+g = fresh()
+put_bundle(g, planner_bundle([]))
+FAX_OLD = "0504-214-5287"
+docs = [{"category": "심사서류", "finance": "", "title": t, "tags": "", "checklist": ["신분증"],
+         "body": f"1. 신분증\n팩스 {FAX_OLD}"} for t in kb.SYNC_TITLES]
+kb.save_shared(docs + [memo("메리츠캐피탈", "메리츠 본문")])
+
+
+def edits_file():
+    for f in g.appdata.values():
+        if f["name"] == sync.EDITS_FILE:
+            return json.loads(f["content"])
+    return None
+
+
+def set_body(title, body):
+    v = kb.local_view()
+    for x in v:
+        if x["title"] == title or (x.get("_key") or ("",))[0] == title:
+            x["body"] = body
+    return kb.set_local(v)
+
+
+T1, T2, T3 = kb.SYNC_TITLES
+set_body(T1, "1. 신분증\n팩스 0504-000-1111")
+set_body("메리츠캐피탈", "나만 쓰는 메리츠")
+r1 = kb.load_local()
+ok("고친 것에 고친 시각(at)", all(r.get("at") for r in r1))
+w0 = g.appdata_writes
+res = sync.run(FakeAuth())
+ef = edits_file()
+ok("[동기화] 하면 드라이브 앱 공간의 kb_edits.json 에 올린다", ef and ef["v"] == 1
+   and "0504-000-1111" in ef["edits"][T1]["item"]["body"])
+ok("세 자료 말고 고친 것은 올리지 않는다", "메리츠캐피탈" not in ef["edits"] and len(ef["edits"]) == 1)
+ok("일정관리기 묶음은 그대로(따로 쓰는 파일)", "kb_edits.json" not in get_bundle(g)["files"])
+w1 = g.appdata_writes
+sync.run(FakeAuth())
+ok("바뀐 게 없으면 다시 쓰지 않는다", g.appdata_writes == w1, (w0, w1, g.appdata_writes))
+
+# 웹에서 개인사업자 심사서류를 고치고, 개인 심사서류는 되돌림(웹 모양 — base 는 {title, body})
+fid = next(i for i, f in g.appdata.items() if f["name"] == sync.EDITS_FILE)
+o = edits_file()
+o["edits"][T2] = {"item": {"category": "심사서류", "finance": "", "title": T2, "tags": "",
+                           "body": "1. 신분증\n팩스 0504-555-6666"},
+                  "base": {"title": T2, "body": f"1. 신분증\n팩스 {FAX_OLD}"}, "at": "2026-01-01T00:00:00Z"}
+o["edits"][T1] = {"item": None, "base": None, "at": "2099-01-01T00:00:01Z"}
+g.appdata[fid]["content"] = json.dumps(o, ensure_ascii=False)
+changed = sync.sync_edits(FakeAuth())
+v = {x["title"]: x for x in kb.local_view()}
+ok("웹에서 고친 것을 받는다", FAX_OLD not in v[T2]["body"] and "0504-555-6666" in v[T2]["body"]
+   and v[T2].get("_local"), changed)
+ok("받은 제목을 알려 준다", sorted(changed) == sorted([T1, T2]), changed)
+ok("체크리스트 등은 회사 원본 것을 그대로", v[T2].get("checklist") == ["신분증"])
+ok("웹 원본 모양({제목, 본문})이어도 '회사가 또 고침' 으로 보지 않는다", not v[T2].get("_stale"))
+ok("웹에서 되돌린 것은 이 PC 도 되돌린다", not v[T1].get("_local") and FAX_OLD in v[T1]["body"])
+ok("이 PC 에서만 고친 다른 자료는 그대로", v["메리츠캐피탈"]["body"] == "나만 쓰는 메리츠")
+w2 = g.appdata_writes
+sync.sync_edits(FakeAuth())
+ok("받은 뒤 다시 맞춰도 오가며 다시 쓰지 않는다", g.appdata_writes == w2)
+
+# 이 PC 에서 되돌리면 웹에도 되돌림을 전한다
+v = kb.local_view()
+for x in v:
+    if x.get("_key") == (T2, 0):
+        x.update({k: x["_base"][k] for k in ("body",)})
+kb.set_local(v)
+ok("되돌린 표식", T2 in kb.load_local_dead())
+sync.sync_edits(FakeAuth())
+ok("되돌림도 올린다(item=null · 나중 시각)", edits_file()["edits"][T2]["item"] is None
+   and edits_file()["edits"][T2]["at"] > "2026")
+# 웹이 더 나중에 같은 자료를 다시 고침 → 받음 / 이 PC 가 나중이면 올림
+o = edits_file()
+o["edits"][T3] = {"item": {"title": T3, "body": "옛 웹"}, "base": None, "at": "2000-01-01T00:00:00Z"}
+g.appdata[fid]["content"] = json.dumps(o, ensure_ascii=False)
+set_body(T3, "1. 신분증\n팩스 0504-999-0000")
+sync.sync_edits(FakeAuth())
+ok("이 PC 가 나중에 고쳤으면 이 PC 것이 이긴다", "0504-999-0000" in edits_file()["edits"][T3]["item"]["body"]
+   and "0504-999-0000" in [x for x in kb.local_view() if x["title"] == T3][0]["body"])
+# 이 PC 에만 둔 첨부는 올리지 않는다
+la = kb_files.store_local(b"\x89PNG\r\n\x1a\n" + b"Q" * 50, "명함.png")
+v = kb.local_view()
+for x in v:
+    if x["title"] == T3:
+        x["files"] = [la]
+kb.set_local(v)
+sync.sync_edits(FakeAuth())
+ok("이 PC 에만 있는 첨부(local-)는 드라이브 쪽에 싣지 않는다",
+   not edits_file()["edits"][T3]["item"].get("files")
+   and [x for x in kb.local_view() if x["title"] == T3][0].get("files"))
+# 못 읽으면 쓰지 않는다
+g.appdata_read_code = 500
+w3 = g.appdata_writes
+try:
+    sync.sync_edits(FakeAuth())
+    ok("못 읽으면 SyncError", False)
+except sync.SyncError:
+    ok("못 읽으면 SyncError · 쓰지 않는다", g.appdata_writes == w3)
+g.appdata_read_code = 200
+g.appdata[fid]["content"] = "{깨짐"
+try:
+    sync.sync_edits(FakeAuth())
+    ok("깨진 파일이면 SyncError", False)
+except sync.SyncError:
+    ok("깨진 파일이면 SyncError · 덮어쓰지 않는다", g.appdata[fid]["content"] == "{깨짐")
+
+# 웹(public/sync.js)과 같은 규칙인지 — 같은 상황을 두 쪽에 넣어 본다
+node = shutil.which("node")
+js = _HERE.parent / "web" / "public" / "sync.js"
+if node and js.exists():
+    cases = [
+        ([{"key": [T1, 0], "base": None, "item": {"title": T1, "body": "웹"}, "at": "2026-11-07T01:00:00Z"}], {},
+         {T1: {"item": {"title": T1, "body": "PC"}, "base": None, "at": "2026-11-07T02:00:00Z"}}),
+        ([{"key": [T1, 0], "base": None, "item": {"title": T1, "body": "웹"}, "at": "2026-11-07T05:00:00Z"}], {},
+         {T1: {"item": {"title": T1, "body": "PC"}, "base": None, "at": "2026-11-07T02:00:00Z"}}),
+        ([], {T2: "2026-11-07T05:00:00Z"},
+         {T2: {"item": {"title": T2, "body": "PC"}, "base": None, "at": "2026-11-07T02:00:00Z"}}),
+        ([{"key": [T3, 0], "base": None, "item": {"title": T3, "body": "옛"}, "at": ""}], {},
+         {T3: {"item": {"title": T3, "body": "PC"}, "base": None, "at": "2026-11-01T00:00:00Z"}}),
+        ([{"key": [T3, 0], "base": None, "item": {"title": T3, "body": "옛"}, "at": ""}], {}, {}),
+    ]
+    code = ("import('" + js.as_uri() + "').then((S) => { const cs = JSON.parse(process.argv[1]);"
+            " console.log(JSON.stringify(cs.map(([r, d, e]) => { const m = S.mergeEdits(r, d, e, 'NOW');"
+            " return [m.recs.map((x) => [x.key[0], x.item.body]), Object.keys(m.dead), m.pushNeeded,"
+            " m.changedTitles]; }))); })")
+    out = subprocess.run([node, "-e", code, json.dumps(cases, ensure_ascii=False)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
+    js_res = json.loads(out.stdout or "null")
+    py_res = []
+    for recs, dead, rem in cases:
+        recs = [dict(r, key=tuple(r["key"]), item=kb._clean(r["item"])) for r in recs]
+        m = sync.merge_edits(recs, dead, rem, "NOW", [])
+        py_res.append([[[r["key"][0], r["item"]["body"]] for r in m["recs"]], list(m["dead"]), m["push"],
+                       m["changed"]])
+    ok("웹과 같은 규칙(누가 이기나 · 되돌림 · 올릴지 · 받은 제목)", js_res == py_res,
+       out.stderr[-300:] if js_res != py_res else "")
+else:
+    print("   (node 없음 — 웹 규칙 대조 건너뜀)")
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)
