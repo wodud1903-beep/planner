@@ -9,9 +9,52 @@
 //   error / unconfigured
 const s = require("../_session.js");
 
+const escAttr = (v) => String(v).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// 업무자료검색 웹의 로그인(start.js 의 app=kb) — 잠근 쪽지를 그쪽 서버로 **POST** 로 건넨다.
+// 주소창(?…)에 실으면 방문 기록에 남으므로 폼으로 보낸다. 받는 쪽은 위조 방지 값(n)을 맞춰 본다.
+async function finishKb(q, saved, res) {
+  const back = (flag) => {
+    s.setCookies(res, [s.clearState()]);
+    s.redirect(res, `${s.KB_ORIGIN}/?auth=${flag}`);
+  };
+  if (!s.configured()) { back("unconfigured"); return; }
+  if (q.get("error")) { back(q.get("error") === "access_denied" ? "denied" : "error"); return; }
+  if (!saved.st || saved.st !== q.get("state") || Date.now() - (saved.at || 0) > 10 * 60e3) {
+    back("expired");
+    return;
+  }
+  const code = q.get("code");
+  if (!code) { back("error"); return; }
+  let g;
+  try {
+    g = await s.google({ code, grant_type: "authorization_code", redirect_uri: s.REDIRECT });
+  } catch (e) { back("error"); return; }
+  if (!g.ok || !g.j.access_token) { back("error"); return; }
+  if (!g.j.refresh_token) { back("norefresh"); return; }
+  const email = s.emailOf(g.j.id_token);
+  const h = s.sealKb({ rt: g.j.refresh_token, email, at: Date.now() });
+  const f = s.missingScopes(g.j.scope, s.KB_SCOPES).length ? "partial" : "ok";
+  s.setCookies(res, [s.clearState()]);
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.end(`<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>업무자료검색으로 돌아가는 중</title></head>
+<body style="font-family:sans-serif;text-align:center;padding-top:60px">
+<form id="f" method="post" action="${escAttr(s.KB_ORIGIN)}/api/auth/accept">
+<input type="hidden" name="h" value="${escAttr(h)}"><input type="hidden" name="n" value="${escAttr(saved.n || "")}">
+<input type="hidden" name="f" value="${f}">
+<p>로그인했습니다. 업무자료검색으로 돌아갑니다…</p><button type="submit">돌아가기</button></form>
+<script>document.getElementById("f").submit();</script></body></html>`);
+}
+
 module.exports = async (req, res) => {
   const q = new URL(req.url, s.ORIGIN).searchParams;
   const saved = s.unseal(s.cookie(req, s.STATE)) || {};
+  if (saved.app === "kb") { await finishKb(q, saved, res); return; }
   const ret = s.safeReturn(saved.ret);
   const back = (flag, extra = []) => {
     s.setCookies(res, [s.clearState(), ...extra]);

@@ -40,6 +40,15 @@ const SCOPES = [
   "https://www.googleapis.com/auth/drive.appdata",
 ];
 
+// 업무자료검색 웹(kbsearch.vercel.app)의 로그인도 여기서 대신 받아 준다(v1.29) — 그 주소는 구글
+// 콘솔에 따로 등록하지 않아도 되게. 그쪽에는 갱신 토큰을 **잠근 쪽지**(sealKb)만 건네고, 쓸 토큰은
+// 그쪽 서버가 쪽지를 들고 /api/auth/kb-token 에 와서 받는다. 클라이언트 비밀은 여기에만 있다.
+//   · 권한은 드라이브 '앱 전용 공간' 하나(고친 심사서류를 PC 와 주고받는 파일)만 묻는다.
+//   · 쪽지는 일정관리기 로그인 쿠키와 다른 열쇠로 잠근다 — 서로 바꿔 쓸 수 없다.
+//   · 쪽지는 정해 둔 주소(KB_ORIGIN)로만 보낸다.
+const KB_ORIGIN = (process.env.KB_ORIGIN || "https://kbsearch.vercel.app").replace(/\/$/, "");
+const KB_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/drive.appdata"];
+
 const SESSION = "__Host-jyp";        // 갱신 토큰
 const STATE = "__Host-jyp_st";       // 로그인 도중 잠깐(위조 방지 값 + 돌아갈 화면)
 const SESSION_AGE = 400 * 24 * 3600; // 크롬이 쿠키 수명을 400일로 자른다 — 쓸 때마다 다시 늘린다
@@ -58,23 +67,34 @@ function configured() {
   return !!(process.env.GOOGLE_CLIENT_SECRET && key());
 }
 
-function seal(obj) {
+function kbKey() {
+  const k = key();
+  return k ? Buffer.from(crypto.hkdfSync("sha256", k, "jyplanner", "kbsearch-handoff-v1", 32)) : null;
+}
+
+function seal(obj, k = key()) {
   const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv("aes-256-gcm", key(), iv);
+  const c = crypto.createCipheriv("aes-256-gcm", k, iv);
   const ct = Buffer.concat([c.update(JSON.stringify(obj), "utf8"), c.final()]);
   return Buffer.concat([iv, c.getAuthTag(), ct]).toString("base64url");
 }
 
-function unseal(s) {
+function unseal(s, k = key()) {
   try {
     const b = Buffer.from(String(s || ""), "base64url");
     if (b.length < 29) return null;
-    const d = crypto.createDecipheriv("aes-256-gcm", key(), b.subarray(0, 12));
+    const d = crypto.createDecipheriv("aes-256-gcm", k, b.subarray(0, 12));
     d.setAuthTag(b.subarray(12, 28));
     return JSON.parse(Buffer.concat([d.update(b.subarray(28)), d.final()]).toString("utf8"));
   } catch (e) {
     return null;                     // 열쇠가 바뀌었거나 누가 고친 쿠키
   }
+}
+
+const sealKb = (obj) => seal({ ...obj, app: "kb" }, kbKey());
+function unsealKb(s) {
+  const o = kbKey() ? unseal(s, kbKey()) : null;
+  return o && o.app === "kb" ? o : null;
 }
 
 function cookie(req, name) {
@@ -141,10 +161,10 @@ function emailOf(idToken) {
 }
 
 /** 받은 권한에서 빠진 것 (구글은 동의 화면에서 항목마다 체크를 받는다). */
-function missingScopes(granted) {
+function missingScopes(granted, want = SCOPES) {
   const have = new Set(String(granted || "").split(/\s+/).filter(Boolean));
   // openid·email 은 다른 이름(…/userinfo.email)으로 돌아오기도 해서 따지지 않는다
-  return SCOPES.filter((s) => s.startsWith("https://") && !have.has(s));
+  return want.filter((s) => s.startsWith("https://") && !have.has(s));
 }
 
 /** 돌아갈 화면 — '#/화면' 모양만 받는다(엉뚱한 주소로 보내지 않게). */
@@ -155,6 +175,7 @@ function safeReturn(r) {
 
 module.exports = {
   CLIENT_ID, ORIGIN, REDIRECT, TOKEN_URL, AUTH_URL, SCOPES, SESSION, STATE,
+  KB_ORIGIN, KB_SCOPES, sealKb, unsealKb,
   configured, seal, unseal, cookie, setCookies, sessionCookie, clearSession,
   stateCookie, clearState, send, redirect, guard, google, emailOf, missingScopes, safeReturn,
 };

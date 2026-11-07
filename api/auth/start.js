@@ -10,8 +10,34 @@
 const crypto = require("node:crypto");
 const s = require("../_session.js");
 
+// 업무자료검색 웹의 [구글 동기화] — GET /api/auth/start?app=kb&n=그쪽이 정한 위조 방지 값
+// 권한은 드라이브 앱 전용 공간 하나만 묻고, 끝나면 그쪽 주소로 돌아간다(callback.js).
+function startKb(q, res) {
+  const n = q.get("n") || "";
+  if (!s.configured() || !/^[\w-]{16,64}$/.test(n)) {
+    s.redirect(res, `${s.KB_ORIGIN}/?auth=${s.configured() ? "error" : "unconfigured"}`);
+    return;
+  }
+  const st = crypto.randomBytes(18).toString("base64url");
+  const p = new URLSearchParams({
+    client_id: s.CLIENT_ID,
+    redirect_uri: s.REDIRECT,
+    response_type: "code",
+    scope: s.KB_SCOPES.join(" "),
+    access_type: "offline",
+    include_granted_scopes: "false",       // 일정관리기 권한(캘린더 등)은 그쪽 토큰에 싣지 않는다
+    prompt: q.get("prompt") === "select_account" ? "select_account consent" : "consent",
+    state: st,
+  });
+  const hint = q.get("hint") || "";
+  if (hint && q.get("prompt") !== "select_account" && /^[^\s@]+@[^\s@]+$/.test(hint)) p.set("login_hint", hint);
+  s.setCookies(res, [s.stateCookie({ st, app: "kb", n, at: Date.now() })]);
+  s.redirect(res, `${s.AUTH_URL}?${p}`);
+}
+
 module.exports = (req, res) => {
   const q = new URL(req.url, s.ORIGIN).searchParams;
+  if (q.get("app") === "kb") { startKb(q, res); return; }
   const ret = s.safeReturn(q.get("r"));
   if (!s.configured()) { s.redirect(res, `${s.ORIGIN}/?auth=unconfigured${ret}`); return; }
   const st = crypto.randomBytes(18).toString("base64url");
