@@ -192,6 +192,69 @@ r = res();
 logout(req({ method: "POST", cookie: sessCookie }), r);
 ok("쿠키를 지운다", r.statusCode === 200 && r.cookies().some((c) => c.startsWith("__Host-jyp=;")));
 
+console.log("\n[7-2] 업무자료검색 웹 로그인 대신 받기(app=kb)");
+const kbTok = load("auth/kb-token.js");
+r = res();
+start(req({ url: "/api/auth/start?app=kb&n=short" }), r);
+ok("위조 방지 값이 이상하면 그쪽으로 돌려보낸다", r.headers.location === "https://kbsearch.vercel.app/?auth=error",
+   r.headers.location);
+const NONCE = "nonce-abcdefghijklmnop";
+r = res();
+start(req({ url: `/api/auth/start?app=kb&n=${NONCE}&hint=me%40x.com`, origin: "" }), r);
+const KL = new URL(r.headers.location || "http://x/");
+const KP = KL.searchParams;
+ok("구글 화면으로 · 드라이브 앱 공간 권한만", KL.host === "accounts.google.com"
+   && KP.get("scope") === "openid email https://www.googleapis.com/auth/drive.appdata"
+   && KP.get("include_granted_scopes") === "false", KP.get("scope"));
+ok("돌아올 곳은 이미 등록된 일정관리기 주소", KP.get("redirect_uri") === "https://jyplanner.vercel.app/api/auth/callback");
+ok("갱신 토큰 받게(offline · consent) · 지난 계정", KP.get("access_type") === "offline"
+   && KP.get("prompt") === "consent" && KP.get("login_hint") === "me@x.com");
+const kbSt = r.cookieHeader();
+const KST = KP.get("state");
+googleReply = { json: { access_token: "at-k", refresh_token: "rt-kb", id_token: idToken("me@x.com"),
+                        scope: "openid https://www.googleapis.com/auth/drive.appdata" } };
+r = res();
+await callback(req({ url: `/api/auth/callback?code=ck&state=${KST}`, cookie: kbSt + "; " + sessCookie }), r);
+const html = String(r.body);
+ok("폼으로 업무자료검색 서버에 건넨다(주소창에 싣지 않음)", r.statusCode === 200
+   && html.includes('action="https://kbsearch.vercel.app/api/auth/accept"') && html.includes('method="post"'));
+const hVal = (html.match(/name="h" value="([^"]+)"/) || [])[1] || "";
+ok("위조 방지 값(n)도 함께 · 결과 ok", html.includes(`name="n" value="${NONCE}"`) && html.includes('name="f" value="ok"'));
+ok("쪽지에 갱신 토큰이 그대로 보이지 않는다", hVal && !hVal.includes("rt-kb"));
+ok("일정관리기 로그인 쿠키는 건드리지 않는다", !r.cookies().some((c) => c.startsWith("__Host-jyp=")));
+ok("방문 기록에 주소를 남기지 않게(no-referrer · no-store)", r.headers["referrer-policy"] === "no-referrer"
+   && r.headers["cache-control"] === "no-store");
+ok("쪽지는 일정관리기 쿠키로 쓸 수 없다", S.unseal(hVal) === null && S.unsealKb(sessCookie.split("=")[1]) === null);
+r = res();
+await callback(req({ url: `/api/auth/callback?error=access_denied&state=${KST}`, cookie: kbSt }), r);
+ok("[취소] 는 그쪽으로 denied", r.headers.location === "https://kbsearch.vercel.app/?auth=denied", r.headers.location);
+r = res();
+await callback(req({ url: `/api/auth/callback?code=ck&state=BAD`, cookie: kbSt }), r);
+ok("위조된 귀환은 expired", r.headers.location === "https://kbsearch.vercel.app/?auth=expired");
+googleReply = { json: { access_token: "at-k", refresh_token: "rt-kb", id_token: idToken("me@x.com"), scope: "openid" } };
+r = res();
+await callback(req({ url: `/api/auth/callback?code=ck&state=${KST}`, cookie: kbSt }), r);
+ok("앱 공간 체크를 안 했으면 partial", String(r.body).includes('name="f" value="partial"'));
+googleReply = { json: { access_token: "kb-fresh", expires_in: 3599, scope: "https://www.googleapis.com/auth/drive.appdata" } };
+r = res();
+await kbTok({ method: "POST", url: "/api/auth/kb-token", headers: {}, body: { h: hVal } }, r);
+ok("쪽지로 쓸 토큰을 받는다", r.statusCode === 200 && r.json().access_token === "kb-fresh"
+   && r.json().email === "me@x.com" && r.json().missing.length === 0, r.body);
+ok("구글에 그 갱신 토큰으로 묻는다", sent.at(-1).body.refresh_token === "rt-kb");
+r = res();
+await kbTok({ method: "POST", headers: {}, body: { h: sessCookie.split("=")[1] } }, r);
+ok("일정관리기 쿠키를 들고 오면 401", r.statusCode === 401);
+r = res();
+await kbTok({ method: "POST", headers: {}, body: JSON.stringify({ h: "garbage" }) }, r);
+ok("엉터리 쪽지는 401", r.statusCode === 401);
+r = res();
+await kbTok({ method: "GET", headers: {}, body: {} }, r);
+ok("GET 은 405", r.statusCode === 405);
+googleReply = { status: 400, json: { error: "invalid_grant" } };
+r = res();
+await kbTok({ method: "POST", headers: {}, body: { h: hVal } }, r);
+ok("권한을 뺐으면 401(revoked)", r.statusCode === 401 && r.json().reason === "revoked");
+
 console.log("\n[8] 아침 브리핑 알림 — 열쇠 · 구독 · 하루 한 번 · 내용");
 const PU = load("_push.js");
 const keyA = PU.vapid(), keyB = PU.vapid();
