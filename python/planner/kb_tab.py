@@ -219,8 +219,10 @@ class KbView(QWidget):
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self.lst)
         split.addWidget(right)
-        split.setStretchFactor(0, 2)
-        split.setStretchFactor(1, 3)
+        # 빠른검색(compact)은 내용(메모) 칸을 더 넓게 — 목록 1 : 내용 2 (지점장 요청, v1.28.2)
+        split.setStretchFactor(0, 1 if compact else 2)
+        split.setStretchFactor(1, 2 if compact else 3)
+        self.split = split
         v.addWidget(split, 1)
 
         self.lbl_status = QLabel("")
@@ -616,11 +618,22 @@ class QuickSearch(QDialog):
     Enter 로 본문을 복사한 뒤 곧바로 닫는다.
     """
 
+    # 창 크기 — 예전 860×520 은 내용(메모) 칸이 작아 한눈에 보기 어려웠다(지점장 요청, v1.28.2).
+    # 화면이 작으면 화면 안에 들어오게 줄인다.
+    WIDTH, HEIGHT = 1120, 720
+    LIST_SHARE = 0.34              # 왼쪽 목록 몫 — 나머지(약 2/3)는 내용(메모) 칸
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("업무자료 빠른검색")
         self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint)
-        self.resize(860, 520)
+        w, h = self.WIDTH, self.HEIGHT
+        scr = QGuiApplication.primaryScreen()
+        if scr is not None:
+            av = scr.availableGeometry()
+            w, h = min(w, int(av.width() * 0.92)), min(h, int(av.height() * 0.9))
+        self.resize(w, h)
+        self._placed = False
 
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 12, 12, 12)
@@ -629,6 +642,8 @@ class QuickSearch(QDialog):
         self.view.set_auth(getattr(parent, "gauth", None))
         self.view.picked.connect(self._pick)
         v.addWidget(self.view, 1)
+        left = int(w * self.LIST_SHARE)
+        self.view.split.setSizes([left, max(1, w - left)])
         self.lbl = QLabel("Enter = 본문 복사 후 닫기   ·   Esc = 닫기")
         self.lbl.setStyleSheet(f"color:{theme.c('subtext')};")
         v.addWidget(self.lbl)
@@ -648,6 +663,13 @@ class QuickSearch(QDialog):
 
     def popup(self) -> None:
         self.view.reload()
+        if not self._placed:            # 처음 뜰 때 화면 한가운데(그 뒤로는 옮긴 자리 그대로)
+            scr = QGuiApplication.primaryScreen()
+            if scr is not None:
+                g = self.frameGeometry()
+                g.moveCenter(scr.availableGeometry().center())
+                self.move(g.topLeft())
+            self._placed = True
         self.show()
         self.raise_()
         self.activateWindow()
