@@ -362,6 +362,7 @@ class MainWindow(QMainWindow):
         self._otp_busy = False
         self._otp_skip = 0
         self._otp_errs = 0
+        self._otp_tick = 0
         self._otp_timer = QTimer(self)
         self._otp_timer.timeout.connect(self._poll_otp)
         self._otp_timer.start(otp.POLL_MS)
@@ -3260,6 +3261,9 @@ class MainWindow(QMainWindow):
         if self._otp_skip > 0:               # 방금 못 읽었다 — 조금 쉬었다가
             self._otp_skip -= 1
             return
+        self._otp_tick += 1
+        if otp.idle_seconds() > otp.IDLE_SEC and self._otp_tick % otp.IDLE_EVERY:
+            return                           # 자리 비움 — 20초에 한 번만(시트 읽기 한도를 아낀다)
         self._otp_busy = True
         tab = str(getattr(s, "otp_tab", "") or "").strip()
 

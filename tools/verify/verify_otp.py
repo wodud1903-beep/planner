@@ -139,6 +139,10 @@ ok("항상 위 · 포커스를 뺏지 않는다", bool(p1.windowFlags() & Qt.Win
    and p1.testAttribute(Qt.WA_ShowWithoutActivating))
 ok("복사해 두었다고 알린다", "Ctrl+V" in p1.lbl_state.text())
 geo = otp_popup._screen().availableGeometry()
+ok("언제나 주 모니터(듀얼 모니터에서 마우스 따라 다니지 않게)",
+   otp_popup._screen() is __import__("PySide6.QtGui", fromlist=["QGuiApplication"]).QGuiApplication.primaryScreen())
+from planner import alarm_window  # noqa: E402
+ok("일정 알람도 주 모니터", alarm_window._pick_screen() is otp_popup._screen())
 ok("화면 오른쪽 아래(화면 안)", p1.x() + p1.width() <= geo.right() + 1 and p1.y() + p1.height() <= geo.bottom() + 1
    and p1.x() > geo.center().x() - 10, (p1.x(), p1.y(), geo.right(), geo.bottom()))
 p1.copy()
@@ -150,11 +154,30 @@ ok("쌓이면 위로(새 것이 맨 아래)", otp_popup._open[-1].y() > otp_popu
 for x in list(otp_popup._open):
     x.close()
 ok("닫으면 목록에서 빠진다", otp_popup._open == [])
-ok("2분 뒤 저절로 닫힌다", otp_popup.LIFE_MS == 120000 and ps[-1]._life.isSingleShot())
+ok("10초 뒤 저절로 닫힌다(v1.31.1)", otp_popup.LIFE_MS == 10000 and ps[-1]._life.isSingleShot())
+from PySide6.QtCore import QEvent, QPointF  # noqa: E402
+from PySide6.QtGui import QEnterEvent  # noqa: E402
+ph = otp_popup.show({"code": "121212", "body": ""})
+ph.enterEvent(QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5)))
+ok("마우스를 올려 두면 닫지 않는다", not ph._life.isActive())
+ph.leaveEvent(QEvent(QEvent.Leave))
+ok("손을 떼면 다시 10초", ph._life.isActive() and ph._life.interval() == 10000)
+ph.close()
 
 print("[5] 설정 — 켜기 · 시트 주소 · 자동 복사(PC 끼리 따라간다)")
 s = AppSettings()
-ok("기본은 꺼짐 · 자동 복사는 켜짐", s.otp_on is False and s.otp_copy is True and s.otp_sheet == "")
+ok("기본은 켜짐 · 지점 공용 인증문자 시트 · 시트1 · 자동 복사(v1.31.1)", s.otp_on is True and s.otp_copy is True
+   and s.otp_sheet == config.OTP_DEF_SHEET_ID == "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw" and s.otp_tab == "시트1")
+import json  # noqa: E402
+pv = config.data_dir() / "plan_cfg_v1310.json"
+pv.write_text(json.dumps({"otpOn": False, "otpSheet": "", "otpTab": "", "otpCopy": True}), encoding="utf-8")
+sv = AppSettings.load(pv)
+ok("v1.31.0 이 적어 둔 기본 꺼짐·빈 주소는 → 켜짐 · 기본 시트", sv.otp_on is True
+   and sv.otp_sheet == config.OTP_DEF_SHEET_ID and sv.otp_tab == "시트1")
+pv.write_text(json.dumps({"otpEnabled": False, "otpSheet": "MYSHEET", "otpTab": ""}), encoding="utf-8")
+sv = AppSettings.load(pv)
+ok("각자 끄거나 다른 시트로 바꾼 것은 그대로(다른 시트는 탭을 비우면 첫 탭)", sv.otp_on is False
+   and sv.otp_sheet == "MYSHEET" and sv.otp_tab == "")
 from planner import settings_dialog  # noqa: E402
 
 
@@ -178,6 +201,12 @@ pth = config.data_dir() / "plan_cfg_otp.json"
 s.save(pth)
 s2 = AppSettings.load(pth)
 ok("설정 파일에 남는다", (s2.otp_on, s2.otp_sheet, s2.otp_tab, s2.otp_copy) == (True, "1AbCdEfGh_ijk-LMN", "시트1", False))
+dlg = settings_dialog.SettingsDialog(_A(), s, account="tester@example.com")
+ok("설정 창에 지금 시트가 보인다", dlg.ed_otp_sheet.text() == "1AbCdEfGh_ijk-LMN")
+dlg.ed_otp_sheet.setText("")
+dlg.ed_otp_tab.setText("")
+dlg._on_ok()
+ok("주소를 비우면 지점 기본 시트로 돌아간다(탭도 시트1)", s.otp_sheet == config.OTP_DEF_SHEET_ID and s.otp_tab == "시트1")
 
 print("[6] 메인 창 — 4초마다 보고, 오면 띄우고 복사 · 못 읽으면 쉬었다가")
 from planner.main_window import MainWindow  # noqa: E402
@@ -202,11 +231,13 @@ class Fake:
         self._otp_busy = False
         self._otp_skip = 0
         self._otp_errs = 0
+        self._otp_tick = 0
         self.sig_otp = Sig()
         self.lbl_status = QLabel("")
 
 
 st = AppSettings()
+st.otp_on = False
 f = Fake(st)
 MainWindow._poll_otp(f)
 ok("꺼져 있으면 읽지 않는다", f.sig_otp.got == [] and not f._otp_busy)
@@ -236,6 +267,24 @@ ok("못 읽으면 약 30초 쉰다 · 세 번째에 한 번 알린다", f._otp_s
 f.sig_otp = Sig()
 MainWindow._poll_otp(f)
 ok("쉬는 동안은 읽지 않는다", f.sig_otp.got == [] and f._otp_skip == otp.BACKOFF_TICKS - 1)
+f._otp_skip = 0
+f._otp_busy = False
+_idle = otp.idle_seconds
+otp.idle_seconds = lambda: 999.0
+got_ticks = []
+for t in range(10):
+    f.sig_otp = Sig()
+    MainWindow._poll_otp(f)
+    if f.sig_otp.ev.wait(3):
+        got_ticks.append(t)
+    f._otp_busy = False
+ok("자리 비움(2분 넘게 안 만짐)이면 다섯 번에 한 번만(약 20초)", len(got_ticks) == 2, got_ticks)
+otp.idle_seconds = lambda: 3.0
+f.sig_otp = Sig()
+MainWindow._poll_otp(f)
+ok("다시 만지면 바로 4초마다", f.sig_otp.ev.wait(3))
+otp.idle_seconds = _idle
+ok("윈도가 아니면(모르면) 쓰는 중으로 본다", _sys.platform == "win32" or otp.idle_seconds() == 0.0)
 src = (_ROOT / "python" / "planner" / "main_window.py").read_text(encoding="utf-8")
 ok("4초마다 본다", "self._otp_timer.start(otp.POLL_MS)" in src and otp.POLL_MS == 4000)
 ok("인증번호를 기록(crashlog)에 남기지 않는다", "crashlog" not in (_ROOT / "python" / "planner" / "otp.py").read_text(encoding="utf-8").split('"""', 2)[2])

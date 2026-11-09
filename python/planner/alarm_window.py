@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
-from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -35,12 +35,11 @@ _EDGE = 8               # 화면 가장자리에서 최소한 띄우는 거리
 
 
 def _pick_screen():
-    """알람을 띄울 모니터 — 마우스가 있는 화면, 모르면 주 모니터."""
-    try:
-        s = QGuiApplication.screenAt(QCursor.pos())
-    except Exception:
-        s = None
-    return s or QGuiApplication.primaryScreen()
+    """알람을 띄울 모니터 — 언제나 **주 모니터**(v1.31.1 지점장 요청).
+
+    예전엔 마우스가 있는 화면에 띄워서, 듀얼 모니터에서는 알람이 어느 쪽에 뜰지 몰랐다.
+    """
+    return QGuiApplication.primaryScreen()
 
 
 class AlarmWindow(QWidget):

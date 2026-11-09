@@ -2,30 +2,27 @@
 
   · 항상 위 · 포커스를 뺏지 않는다(로그인 창에 치던 중이어도 그대로 Ctrl+V 하면 된다).
   · 뜨자마자 클립보드에 넣는다(설정에서 끌 수 있다). 번호를 눌러도 복사된다.
-  · 2분 뒤 저절로 닫힌다 — 인증번호는 몇 분이면 쓸모가 없다.
-  · 여러 개가 오면 위로 쌓인다. 화면(작업표시줄 제외) 밖으로 나가지 않는다.
+  · 10초 뒤 저절로 닫힌다(v1.31.1 지점장 요청 — 이미 복사돼 있다). 마우스를 올려 두면 닫지 않는다.
+  · 여러 개가 오면 위로 쌓인다. 언제나 주 모니터 · 화면(작업표시줄 제외) 밖으로 나가지 않는다.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from . import theme
 
-LIFE_MS = 120 * 1000
+LIFE_MS = 10 * 1000
 _EDGE = 16
 _GAP = 10
 _open: list["OtpPopup"] = []
 
 
 def _screen():
-    try:
-        s = QGuiApplication.screenAt(QCursor.pos())
-    except Exception:
-        s = None
-    return s or QGuiApplication.primaryScreen()
+    """언제나 주 모니터(v1.31.1) — 듀얼 모니터에서 마우스 따라 이쪽저쪽 뜨지 않게."""
+    return QGuiApplication.primaryScreen()
 
 
 class OtpPopup(QWidget):
@@ -87,6 +84,14 @@ class OtpPopup(QWidget):
         self._life.setSingleShot(True)
         self._life.timeout.connect(self.close)
         self._life.start(LIFE_MS)
+
+    def enterEvent(self, e):
+        self._life.stop()                         # 보는 중 — 닫지 않는다
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._life.start(LIFE_MS)                 # 손을 떼면 다시 10초
+        super().leaveEvent(e)
 
     def copy(self) -> None:
         QApplication.clipboard().setText(self.code)

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import urllib.parse
 from datetime import date
 
@@ -26,6 +27,11 @@ from .net import http as _http
 TOP_ROWS = 12            # 머리글 + 맨 위 11줄 — 4초 사이 이보다 많이 오는 일은 없다
 POLL_MS = 4000           # 이만큼마다 본다(같은 계정 PC 두 대여도 구글 읽기 한도 안쪽)
 BACKOFF_TICKS = 7        # 읽기가 탈나면 이만큼 건너뛴다(약 30초)
+# 자리 비움(키보드·마우스를 IDLE_SEC 넘게 안 씀 · 화면 잠금)이면 IDLE_EVERY 번에 한 번만(약 20초) 본다(v1.31.1).
+# 구글 시트 읽기 한도가 프로젝트 전체 분당 300회라, 모든 직원 PC 가 4초마다 읽으면 20대에서 닿는다 —
+# 닿으면 고객 목록 불러오기 등 다른 시트 기능까지 막힌다. 인증번호는 PC 에서 로그인하는 중에 오므로 빠르기는 그대로.
+IDLE_SEC = 120
+IDLE_EVERY = 5
 
 _KEY = r"(?:인증|승인|확인|보안|OTP|otp|Otp|코드|code|Code|CODE|비밀번호)"
 _RE_KEY = re.compile(_KEY + r"[^0-9\n]{0,20}?(?<!\d)(\d{4,8})(?!\d)")
@@ -34,6 +40,27 @@ _RE_SIX = re.compile(r"(?<![\d\-])(\d{6})(?![\d\-])")
 _RE_TAG = re.compile(r"\[([^\[\]\n]{1,24})\]")
 _NOT_SENDER = {"web발신", "국외발신", "국제발신", "광고"}
 _RE_DATE = re.compile(r"(\d{4})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})")
+
+
+def idle_seconds() -> float:
+    """마지막 키보드·마우스 입력 뒤 지난 초(윈도). 모르면 0(= 쓰는 중으로 본다)."""
+    if sys.platform != "win32":
+        return 0.0
+    try:
+        import ctypes
+
+        class _LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+        li = _LII()
+        li.cbSize = ctypes.sizeof(li)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li)):
+            return 0.0
+        k32 = ctypes.windll.kernel32
+        k32.GetTickCount.restype = ctypes.c_uint
+        return ((k32.GetTickCount() - li.dwTime) & 0xFFFFFFFF) / 1000.0
+    except Exception:
+        return 0.0
 
 
 def range_a1(tab: str) -> str:

@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.31.0"
+APP_VERSION = "1.31.1"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -118,6 +118,12 @@ SHEETS_BATCH_UPDATE_URL = SHEETS_BASE_URL + ":batchUpdate"
 #    탭 이름은 주소가 아니라 그냥 이름이라 기본값을 둬도 된다.
 DEF_SHEET_ID = ""
 DEF_SHEET_NAME = "미출고차량"
+# 휴대폰 인증번호 받기(v1.31.1, otp.py) — 지점 공용 '인증문자' 시트(지점장 폰의 MacroDroid 가 쌓는다).
+# 지점장 결정: 모든 직원 PC 의 기본값으로 고정하고, 다른 시트는 각자 설정에서 바꾼다.
+# ⚠️ 저장소·exe 가 공개라 이 ID 도 공개다. 시트가 '링크가 있는 모든 사용자' 공유이면 누구나 열 수 있다는 것을
+#    지점장께 알렸고, 그대로 두기로 하셨다(2026-11-09). 공유를 '제한됨'으로 바꾸면 직원 계정만 열린다.
+OTP_DEF_SHEET_ID = "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw"
+OTP_DEF_TAB = "시트1"
 
 # 차종별 수당율 전용 스프레드시트 — **고정**.
 # 수당율은 회사가 한 곳에서 관리하는 값이라, 각 PC 가 어떤 고객관리 시트를 쓰든
