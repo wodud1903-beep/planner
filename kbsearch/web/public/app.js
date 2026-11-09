@@ -829,9 +829,14 @@ $("#sync-out").onclick = async () => {
 };
 $("#sync-close").onclick = () => sdlg.close();
 sdlg.addEventListener("click", (e) => { if (e.target === sdlg) sdlg.close(); });
+// 내 계정과 맞추기 — 화면으로 돌아올 때(15초 넘었으면)와 켜 둔 동안 1분마다. PC 에서 고친 것(팩스번호 등)이
+// 다시 열지 않아도 곧 보이게(지점장 요청 — "계정에 동기화되는 식으로").
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && signedIn() && Date.now() - lastSync > 60e3) syncNow(true);
+  if (document.visibilityState === "visible" && signedIn() && Date.now() - lastSync > 15e3) syncNow(true);
 });
+setInterval(() => {
+  if (document.visibilityState === "visible" && signedIn() && Date.now() - lastSync > 55e3) syncNow(true);
+}, 60e3);
 
 /** 로그인에서 돌아왔을 때(?auth=…) — 알리고 주소에서 지운다. */
 function takeAuthFlag() {
