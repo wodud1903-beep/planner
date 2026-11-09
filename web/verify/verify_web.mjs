@@ -1490,8 +1490,9 @@ console.log("\n[19] 설정이 계정을 따라다니는지 (드라이브 앱 전
       token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
   });
   const pE = await page(ctxE);
-  const PCCFG = JSON.stringify({ sheetId: "PCSHEET123", sheetName: "미출고차량(PC)",
-                                 filesDriveFolder: "PC 서류함" });
+  let PCCFG = JSON.stringify({ sheetId: "PCSHEET123", sheetName: "미출고차량(PC)",
+                               filesDriveFolder: "PC 서류함" });
+  let PCTIMES = {};
   const wrote = [];
   await ctxE.route("**/accounts.google.com/**", (r) => r.abort());
   await ctxE.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
@@ -1509,7 +1510,7 @@ console.log("\n[19] 설정이 계정을 따라다니는지 (드라이브 앱 전
       return r.fulfill({ json: { files: [{ id: "SYNC1", name: "planner_sync.json" }] } });
     }
     if (u.includes("files/SYNC1") && u.includes("alt=media")) {
-      return r.fulfill({ body: JSON.stringify({ files: { "plan_cfg.json": PCCFG } }),
+      return r.fulfill({ body: JSON.stringify({ files: { "plan_cfg.json": PCCFG }, times: PCTIMES }),
                          contentType: "application/json" });
     }
     return r.fulfill({ json: { files: [] } });
@@ -1553,6 +1554,39 @@ console.log("\n[19] 설정이 계정을 따라다니는지 (드라이브 앱 전
   await pE.waitForTimeout(900);
   ok("폰에서 바꾼 설정을 계정에 올린다",
      wrote.some((b) => b.includes("PHONESHEET9")), wrote.join(" | ").slice(0, 120));
+
+  // v1.29 — 그 뒤 PC 에서 시트·서류 폴더를 바꾸면, 이 기기에 이미 설정이 있어도 로그인만 돼 있으면 따라간다
+  PCCFG = JSON.stringify({ sheetId: "PCSHEET2", sheetName: "새 시트(PC)", filesDriveFolder: "PC 새 서류함" });
+  PCTIMES = { "plan_cfg.json": new Date(Date.now() + 60e3).toISOString().replace(/\.\d{3}Z$/, "Z") };
+  asked.length = 0;
+  await ctxE.route("**/sheets.googleapis.com/**", (r) => {
+    asked.push(decodeURIComponent(r.request().url()));
+    return r.fulfill({ json: { values: [] } });
+  });
+  await pE.reload({ waitUntil: "networkidle" });
+  await pE.waitForTimeout(2500);
+  ok("PC 에서 나중에 바꾼 시트를 따라간다(이 기기에 설정이 있어도)",
+     asked.some((u) => u.includes("PCSHEET2")) && asked.some((u) => u.includes("새 시트(PC)")),
+     asked.filter((u) => u.includes("spreadsheets/")).map((u) => u.slice(46, 60)).join(" "));
+  const folderNow = await pE.evaluate(async () => (await import("./js/store.js")).get("meta", "driveFolder"));
+  ok("서류 폴더도 PC 의 새 것으로", JSON.stringify(folderNow).includes("PC 새 서류함"), JSON.stringify(folderNow));
+  // 어느 쪽을 쓸지 — 나중에 바꾼 쪽(웹에서 나중에 바꿨으면 웹)
+  const pick = await pE.evaluate(async () => {
+    const m = await import("./js/appdata.js");
+    const pc = { files: { "plan_cfg.json": JSON.stringify({ sheetId: "P", sheetName: "PT", filesDriveFolder: "PF" }) },
+                 times: { "plan_cfg.json": "2026-11-09T01:00:00Z" } };
+    return {
+      pcNewer: m.pickSettings({ sheetId: "W", sheetTab: "WT", updatedAt: "2026-11-08T00:00:00.000Z" }, pc),
+      webNewer: m.pickSettings({ sheetId: "W", sheetTab: "WT", updatedAt: "2026-11-10T00:00:00.000Z" }, pc),
+      webFolderOnly: m.pickSettings({ driveFolder: "WF", updatedAt: "2026-11-10T00:00:00.000Z" }, pc),
+      none: m.pickSettings(null, null),
+    };
+  });
+  ok("고르는 규칙 — PC 가 나중이면 PC · 웹이 나중이면 웹 · 칸마다 따로 · 없으면 null",
+     pick.pcNewer.sheetId === "P" && pick.pcNewer.sheetTab === "PT"
+     && pick.webNewer.sheetId === "W" && pick.webNewer.driveFolder === "PF"
+     && pick.webFolderOnly.sheetId === "P" && pick.webFolderOnly.driveFolder === "WF" && pick.none === null,
+     JSON.stringify(pick));
   await ctxE.close();
 }
 

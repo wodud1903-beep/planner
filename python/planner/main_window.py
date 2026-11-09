@@ -1102,6 +1102,8 @@ class MainWindow(QMainWindow):
         self.tab_kb.set_auth(self.gauth)        # 첨부(그림·PDF) 올리기·받기
         self.tab_kb.on_changed = self._touch_sync
         self.tab_kb.on_push_shared = self._push_kb_shared
+        # 내 계정에서만 고친 회사 자료 — 곧 내 계정(kb_edits.json)으로 올린다(v1.29)
+        self.tab_kb.on_local_saved = self._touch_sync
         self.tabs.addTab(self.tab_kb, "자료검색")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")

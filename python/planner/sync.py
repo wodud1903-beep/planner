@@ -382,15 +382,28 @@ def merged_bundle(b) -> dict:
 # ---------------------------------------------------------------------------
 # 주고받기
 # ---------------------------------------------------------------------------
+def _kb_edits(auth) -> bool:
+    """내 계정에서만 고친 회사 공통 자료(kb_edits.json — 업무자료검색과 같은 파일)도 맞춘다(v1.29).
+
+    따로 도는 파일이라 실패해도 일정관리기 동기화는 그대로 끝낸다. 받아서 바뀐 것이 있으면 True.
+    """
+    try:
+        from . import kb_edits
+        return bool(kb_edits.sync(auth))
+    except Exception:
+        return False
+
+
 def pull(auth) -> bool:
     """원격에서 더 최신인 파일을 내려받는다. 바뀌면 True."""
     b = _remote_bundle(auth)
+    kb_changed = _kb_edits(auth)
     if not b:
-        return False
+        return kb_changed
     changed = apply_remote(b)
     if changed:
         _set_local_updated(_now())
-    return changed
+    return changed or kb_changed
 
 
 def push(auth) -> None:
@@ -399,6 +412,7 @@ def push(auth) -> None:
     out = merged_bundle(b)
     google_client.drive_write(auth, SYNC_FILE, json.dumps(out, ensure_ascii=False))
     _set_local_updated(out["updatedAt"])
+    _kb_edits(auth)
 
 
 def sync_now(auth) -> bool:
@@ -411,4 +425,4 @@ def sync_now(auth) -> bool:
     out = merged_bundle(b)
     google_client.drive_write(auth, SYNC_FILE, json.dumps(out, ensure_ascii=False))
     _set_local_updated(out["updatedAt"])
-    return changed
+    return _kb_edits(auth) or changed

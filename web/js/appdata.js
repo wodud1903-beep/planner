@@ -89,26 +89,42 @@ async function writeJson(name, obj) {
 // ---------------------------------------------------------------- 설정
 /** 이 계정의 설정. 없으면 null.
  *
- * 웹앱 파일을 먼저 보고, 없으면 **PC 앱이 올려 둔 것**에서 꺼내 쓴다.
- * 그래서 PC 에서 이미 쓰고 계신 분은 폰에서 아무것도 입력하지 않아도 된다. */
+ * PC 앱이 올려 둔 것(planner_sync.json 의 plan_cfg.json)과 웹앱에서 바꾼 것(planner_web.json)
+ * 가운데 **나중에 바꾼 쪽**을 쓴다(v1.29). 예전엔 웹앱 파일이 한 번 생기면 그것만 봐서, PC 에서
+ * 시트·서류 폴더를 바꿔도 웹은 옛 것을 계속 썼다. 시트(주소+탭)와 서류 폴더는 따로 고른다. */
 export async function loadSettings() {
-  const web = await readJson(WEB_FILE);
-  if (web && (web.sheetId || web.driveFolder)) {
-    return { sheetId: web.sheetId || "", sheetTab: web.sheetTab || "",
-             driveFolder: web.driveFolder || "", from: "web" };
-  }
-  const pc = await readJson(PC_FILE);
+  const [web, pc] = await Promise.all([readJson(WEB_FILE), readJson(PC_FILE)]);
+  return pickSettings(web, pc);
+}
+
+const when = (s) => { const t = Date.parse(String(s || "")); return isNaN(t) ? 0 : t; };
+
+/** 두 곳의 설정 → 쓸 것 {sheetId, sheetTab, driveFolder, from}. 통신 없는 계산(검사용). */
+export function pickSettings(web, pc) {
+  const w = web && typeof web === "object" ? web : null;
+  let cfg = null, pcAt = 0;
   const txt = pc && pc.files && pc.files[PC_CFG];
-  if (!txt) return null;
-  let cfg;
-  try { cfg = JSON.parse(txt); } catch (e) { return null; }
-  if (!cfg || typeof cfg !== "object") return null;
-  const out = {
-    sheetId: String(cfg.sheetId || "").trim(),
-    sheetTab: String(cfg.sheetName || "").trim(),
-    driveFolder: String(cfg.filesDriveFolder || "").trim(),
-    from: "pc",
+  if (txt) {
+    try { cfg = JSON.parse(txt); } catch (e) { cfg = null; }
+    if (!cfg || typeof cfg !== "object") cfg = null;
+    pcAt = when((pc.times || {})[PC_CFG] || pc.updatedAt);
+  }
+  const webAt = w ? when(w.updatedAt) : 0;
+  const P = cfg ? { sheetId: String(cfg.sheetId || "").trim(), sheetTab: String(cfg.sheetName || "").trim(),
+                    driveFolder: String(cfg.filesDriveFolder || "").trim() } : null;
+  const W = w ? { sheetId: String(w.sheetId || "").trim(), sheetTab: String(w.sheetTab || "").trim(),
+                  driveFolder: String(w.driveFolder || "").trim() } : null;
+  // 시각이 같거나 웹앱 파일에 시각이 없으면 PC 쪽 — PC 가 원래 쓰는 곳이다
+  const newer = (has) => {
+    const pOk = P && has(P), wOk = W && has(W);
+    if (pOk && wOk) return webAt > pcAt ? "web" : "pc";
+    return pOk ? "pc" : wOk ? "web" : "";
   };
+  const sheetFrom = newer((x) => !!x.sheetId), folderFrom = newer((x) => !!x.driveFolder);
+  const S = sheetFrom === "pc" ? P : sheetFrom === "web" ? W : null;
+  const F = folderFrom === "pc" ? P : folderFrom === "web" ? W : null;
+  const out = { sheetId: S ? S.sheetId : "", sheetTab: S ? S.sheetTab : "",
+                driveFolder: F ? F.driveFolder : "", from: sheetFrom || folderFrom };
   return (out.sheetId || out.driveFolder) ? out : null;
 }
 
