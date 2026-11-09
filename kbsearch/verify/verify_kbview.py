@@ -475,6 +475,24 @@ ok("작은 화면이면 화면 안으로", _q2.width() <= int(1280 * 0.92) and _
 _q2.close()
 _QGA.primaryScreen = _rps
 
+print("[관리자] 업무자료 관리자 — 일정관리기와 같은 목록(kb-v1.6.1)")
+import ast as _ast  # noqa: E402
+_pcfg = _HERE.parents[1] / "python" / "planner" / "config.py"
+_ptree = _ast.parse(_pcfg.read_text(encoding="utf-8"))
+_pkb = next((_ast.literal_eval(n.value) for n in _ptree.body if isinstance(n, _ast.Assign)
+             and any(getattr(t, "id", "") == "KB_ADMINS" for t in n.targets)), None)
+ok("일정관리기 KB_ADMINS 와 같다", _pkb is not None and tuple(_pkb) == tuple(config.KB_ADMINS),
+   f"{_pkb} / {config.KB_ADMINS}")
+ok("새 관리자 qkrwlsgh7303@gmail.com(대소문자·빈칸 무관)", config.is_admin(" QKRWLSGH7303@gmail.com "))
+ok("목록은 소문자·빈칸 없이", all(e == e.strip().lower() for e in config.KB_ADMINS))
+_dn = KbEditDialog("qkrwlsgh7303@gmail.com", None)
+ok("새 관리자 — 편집 창에 '회사 공통' 묶음", _dn.cmb_src.findData(kb.SRC_SHARED) >= 0)
+_dn.reject()
+_ds = KbEditDialog("staff@gmail.com", None)
+ok("일반 직원 — '회사 공통' 은 없고 '이 PC 에서만' 으로", _ds.cmb_src.findData(kb.SRC_SHARED) < 0
+   and _ds.cmb_src.findData(kb.SRC_LOCAL) >= 0)
+_ds.reject()
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

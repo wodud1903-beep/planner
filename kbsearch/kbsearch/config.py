@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "업무자료검색"
 APP_ID = "KbSearch"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 # ---------------------------------------------------------------------------
 # 서비스 스위치 — **자동 업데이트로 끄고 켠다.**
@@ -94,8 +94,9 @@ KB_TAB = "업무자료"
 # 시트가 '링크가 있는 모든 사용자 — 뷰어' 로 열려 있어야 한다(지금 그렇다).
 KB_AUTO_MINUTES = 10
 
-# 회사 공통 자료를 고칠 수 있는 계정(일정관리기 RATES_ADMINS 와 같다)
-KB_ADMINS = ("wodud1903@gmail.com",)
+# 회사 공통 자료를 고칠 수 있는 계정 — 일정관리기 config.KB_ADMINS 와 **같아야 한다**(검사가 대조한다).
+# ⚠️ 여기에 더한 계정은 '수당연동용' 구글 시트에 편집자로 공유돼 있어야 시트로 올릴 수 있다.
+KB_ADMINS = ("wodud1903@gmail.com", "qkrwlsgh7303@gmail.com")
 
 # 일정관리기의 드라이브 동기화 묶음 — '내 메모'(kb_mine.json) 칸만 같이 쓴다
 PLANNER_SYNC_FILE = "planner_sync.json"
