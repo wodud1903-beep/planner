@@ -450,7 +450,8 @@ res = sync.run(FakeAuth())
 ef = edits_file()
 ok("[동기화] 하면 드라이브 앱 공간의 kb_edits.json 에 올린다", ef and ef["v"] == 1
    and "0504-000-1111" in ef["edits"][T1]["item"]["body"])
-ok("세 자료 말고 고친 것은 올리지 않는다", "메리츠캐피탈" not in ef["edits"] and len(ef["edits"]) == 1)
+ok("심사서류 말고 고친 것도 내 계정으로 올린다(kb-v1.7.0)", ef["edits"].get("메리츠캐피탈", {}).get("item", {}).get("body")
+   == "나만 쓰는 메리츠" and len(ef["edits"]) == 2, list(ef["edits"]))
 ok("일정관리기 묶음은 그대로(따로 쓰는 파일)", "kb_edits.json" not in get_bundle(g)["files"])
 w1 = g.appdata_writes
 sync.run(FakeAuth())
@@ -472,7 +473,7 @@ ok("받은 제목을 알려 준다", sorted(changed) == sorted([T1, T2]), change
 ok("체크리스트 등은 회사 원본 것을 그대로", v[T2].get("checklist") == ["신분증"])
 ok("웹 원본 모양({제목, 본문})이어도 '회사가 또 고침' 으로 보지 않는다", not v[T2].get("_stale"))
 ok("웹에서 되돌린 것은 이 PC 도 되돌린다", not v[T1].get("_local") and FAX_OLD in v[T1]["body"])
-ok("이 PC 에서만 고친 다른 자료는 그대로", v["메리츠캐피탈"]["body"] == "나만 쓰는 메리츠")
+ok("내가 고친 다른 자료도 그대로", v["메리츠캐피탈"]["body"] == "나만 쓰는 메리츠")
 w2 = g.appdata_writes
 sync.sync_edits(FakeAuth())
 ok("받은 뒤 다시 맞춰도 오가며 다시 쓰지 않는다", g.appdata_writes == w2)
@@ -536,6 +537,18 @@ if node and js.exists():
         ([{"key": [T3, 0], "base": None, "item": {"title": T3, "body": "옛"}, "at": ""}], {},
          {T3: {"item": {"title": T3, "body": "PC"}, "base": None, "at": "2026-11-01T00:00:00Z"}}),
         ([{"key": [T3, 0], "base": None, "item": {"title": T3, "body": "옛"}, "at": ""}], {}, {}),
+        # 심사서류 말고 다른 회사 자료(팩스번호 등)도 같은 규칙 · 같은 제목 둘째 것은 이 PC 에만
+        ([{"key": ["메리츠캐피탈", 0], "base": None, "item": {"title": "메리츠캐피탈", "body": "내 팩스"},
+           "at": "2026-11-09T01:00:00Z"},
+          {"key": ["메리츠캐피탈", 1], "base": None, "item": {"title": "메리츠캐피탈", "body": "둘째"},
+           "at": "2026-11-09T01:00:00Z"}], {},
+         {"메리츠캐피탈": {"item": {"title": "메리츠캐피탈", "body": "옛 팩스"}, "base": None,
+                      "at": "2026-11-08T00:00:00Z"}}),
+        ([], {}, {"우리카드": {"item": {"title": "우리카드", "body": "웹에서 고침"}, "base": None,
+                           "at": "2026-11-09T02:00:00Z"}}),
+        ([], {"우리카드": "2026-11-09T03:00:00Z"},
+         {"우리카드": {"item": {"title": "우리카드", "body": "웹에서 고침"}, "base": None,
+                    "at": "2026-11-09T02:00:00Z"}}),
     ]
     code = ("import('" + js.as_uri() + "').then((S) => { const cs = JSON.parse(process.argv[1]);"
             " console.log(JSON.stringify(cs.map(([r, d, e]) => { const m = S.mergeEdits(r, d, e, 'NOW');"
@@ -552,6 +565,18 @@ if node and js.exists():
                        m["changed"]])
     ok("웹과 같은 규칙(누가 이기나 · 되돌림 · 올릴지 · 받은 제목)", js_res == py_res,
        out.stderr[-300:] if js_res != py_res else "")
+    # 일정관리기(python/planner/kb_edits.py)도 같은 파일을 같은 규칙으로 — 실제 코드로 대조
+    from planner import kb_edits as pke  # noqa: E402
+    pl_res = []
+    for recs, dead, rem in cases:
+        recs = [dict(r, key=tuple(r["key"]), item=kb._clean(r["item"])) for r in recs]
+        m = pke.merge(recs, dead, rem, "NOW", [])
+        pl_res.append([[[r["key"][0], r["item"]["body"]] for r in m["recs"]], list(m["dead"]), m["push"],
+                       m["changed"]])
+    same_case = lambda a, b: sorted(map(json.dumps, a[0])) == sorted(map(json.dumps, b[0])) and a[1:] == b[1:]  # noqa: E731
+    ok("일정관리기와 같은 규칙(누가 이기나 · 되돌림 · 올릴지 · 받은 제목)",
+       len(pl_res) == len(py_res) and all(same_case(a, b) for a, b in zip(pl_res, py_res)),
+       (pl_res, py_res) if pl_res != py_res else "")
 else:
     print("   (node 없음 — 웹 규칙 대조 건너뜀)")
 

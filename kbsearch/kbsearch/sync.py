@@ -282,9 +282,10 @@ def _apply_item(remote_item: dict, shared_item) -> dict:
 
 
 def merge_edits(recs: list, dead: dict, remote: dict, now: str, shared: list) -> dict:
-    """이 PC 것과 드라이브 것을 합친다(계산만). 웹 public/sync.js 의 mergeEdits 와 같은 규칙.
+    """이 PC 것과 드라이브 것을 합친다(계산만). 웹 public/sync.js 의 mergeEdits ·
+    일정관리기 kb_edits.merge 와 같은 규칙.
 
-    recs  : kb.load_local() (세 자료 말고 것도 섞여 있다 — 그것들은 그대로 둔다)
+    recs  : kb.load_local() (같은 제목의 둘째 이후 자료는 이 PC 에만 — 그대로 둔다)
     dead  : kb.load_local_dead() {제목: 되돌린 시각}
     remote: 드라이브 파일의 edits
     돌려줌 {recs, dead, edits, changed(받아서 바뀐 제목), push(올려야 하나)}
@@ -292,7 +293,12 @@ def merge_edits(recs: list, dead: dict, remote: dict, now: str, shared: list) ->
     by_key = dict(zip(kb.shared_keys(shared), shared))
     out_recs = [r for r in recs if not kb.is_sync_key(r["key"])]
     out_dead, edits, changed, push = {}, dict(remote or {}), [], False
-    for t in kb.SYNC_TITLES:
+    # 모든 공통 자료(kb-v1.7.0) — 이 PC 에서 고친 것 · 되돌린 것 · 드라이브에 있는 것의 제목을 다 본다
+    titles = []
+    for t in ([r["key"][0] for r in recs if kb.is_sync_key(r["key"])] + list(dead or {}) + list(remote or {})):
+        if t and t not in titles:
+            titles.append(t)
+    for t in titles:
         key = (t, 0)
         lr = next((r for r in recs if tuple(r["key"]) == key), None)
         R = remote.get(t) if _good_rec((remote or {}).get(t)) else None

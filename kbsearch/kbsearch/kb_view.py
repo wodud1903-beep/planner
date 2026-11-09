@@ -9,8 +9,8 @@
 일정관리기와 다른 점: [자료 편집] 이 로그인 없이 된다. 새 첨부는 이 PC 에 두었다가
 [동기화] 때 드라이브로 올라간다(kb_files.store_local / sync.py).
 크게 보기 창에서 같은 자료의 다른 첨부로 바로 넘긴다(open_attachment → AttachViewer atts/load).
-관리자가 아니면 회사 공통 자료를 **이 PC 에서만** 고친다(kb.set_local) — 검색 화면에는
-'공통 · 이 PC 에서 고침' 으로 보이고, 회사가 원본을 또 고쳤으면 그 아래에 알린다.
+회사 공통 자료를 **나만** 고쳐 쓴다(kb.set_local, 관리자도 로그인하면) — 검색 화면에는 '공통 · 내 계정에서
+고침' 으로 보이고, 로그인하면 내 구글 계정으로 내 다른 PC·웹·일정관리기와 맞춘다. 회사가 원본을 또 고쳤으면 알린다.
 """
 
 from __future__ import annotations
@@ -636,7 +636,7 @@ class _BodyEdit(QTextEdit):
 
 
 class KbEditDialog(QDialog):
-    """자료 편집 — 공통(관리자) / 공통을 이 PC 에서만 고침 / 내 메모."""
+    """자료 편집 — 공통(관리자) / 공통을 내 계정에서만 고침 / 내 메모."""
 
     def __init__(self, account: str = "", parent=None, select=None):
         super().__init__(parent)
@@ -666,20 +666,19 @@ class KbEditDialog(QDialog):
         searchcombo.install(self.cmb_src)
         if self.admin:
             self.cmb_src.addItem("회사 공통 (모든 직원이 봅니다)", kb.SRC_SHARED)
-        # 관리자는 시트를 고친다 — 이 PC 에서만 고친 것이 남아 있을 때만 그 묶음을 보여 준다
-        if not self.admin or any(x.get("_local") for x in self.local):
-            self.cmb_src.addItem("회사 공통 — 이 PC 에서만 고침", kb.SRC_LOCAL)
+        # 관리자는 시트를 고친다 — 로그인했거나 나만 고친 것이 있으면 '나만 고침' 묶음도 쓴다(kb-v1.7.0)
+        if not self.admin or account or any(x.get("_local") for x in self.local):
+            self.cmb_src.addItem("회사 공통 — 내 계정에서만 고침 (나만 보입니다)", kb.SRC_LOCAL)
         self.cmb_src.addItem("내 메모 (내 계정에서만)", kb.SRC_MINE)
         self.cmb_src.currentIndexChanged.connect(self._switch)
         srow.addWidget(self.cmb_src, 1)
         root.addLayout(srow)
 
         if not self.admin:
-            lbl = QLabel("회사 공통 자료는 고쳐도 이 PC 에서만 바뀝니다 — 시트·다른 직원에게는 가지 않습니다.\n"
+            lbl = QLabel("회사 공통 자료는 고쳐도 나만 바뀝니다 — 시트·다른 직원에게는 가지 않습니다.\n"
                          "팩스번호·내 연락처처럼 나만 다르게 쓸 것을 고치세요. "
                          "[회사 자료로 되돌리기] 를 누르면 회사 원본으로 돌아갑니다.\n"
-                         "개인 · 개인사업자 · 법인 심사서류는 [동기화] 하면 같은 구글 계정의 "
-                         "웹 업무자료검색에도 반영됩니다.")
+                         "로그인하면 고친 것이 내 구글 계정으로 내 다른 PC·웹 업무자료검색·일정관리기에도 반영됩니다.")
             lbl.setWordWrap(True)
             lbl.setStyleSheet(f"color:{theme.c('subtext')};")
             root.addWidget(lbl)
@@ -780,7 +779,7 @@ class KbEditDialog(QDialog):
         hint = QLabel(
             "고친 내용은 이 PC 에 바로 저장됩니다. 내 메모를 다른 PC·일정관리기와 맞추려면 [동기화] 를 누르세요."
             + ("\n회사 공통 자료는 [동기화] 때 시트로 올라가 모든 직원에게 보입니다." if self.admin
-               else "\n이 PC 에서만 고친 회사 공통 자료는 [동기화] 해도 올라가지 않습니다."))
+               else "\n나만 고친 회사 공통 자료는 시트로 올라가지 않고, 내 구글 계정으로만 맞춥니다."))
         hint.setStyleSheet(f"color:{theme.c('subtext')};")
         root.addWidget(hint)
 
@@ -812,7 +811,7 @@ class KbEditDialog(QDialog):
         src = item.get("source")
         i = self.cmb_src.findData(src)
         if i < 0 and src in (kb.SRC_SHARED, kb.SRC_LOCAL):
-            # 관리자가 아니면 공통 자료는 '이 PC 에서만' 묶음에서 고친다(관리자는 그 반대)
+            # 관리자가 아니면 공통 자료는 '내 계정에서만' 묶음에서 고친다(관리자는 고른 쪽 그대로)
             src = kb.SRC_LOCAL if src == kb.SRC_SHARED else kb.SRC_SHARED
             i = self.cmb_src.findData(src)
         if i < 0:
@@ -870,7 +869,7 @@ class KbEditDialog(QDialog):
     def _row_text(self, it: dict) -> str:
         t = (it.get("title") or "").strip() or "(제목 없음)"
         if self._is_local() and self._changed(it):
-            t += "  (이 PC 에서 고침)"
+            t += "  (내 계정에서 고침)"
         return t
 
     @staticmethod

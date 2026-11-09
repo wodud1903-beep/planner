@@ -1,14 +1,15 @@
-// 구글 동기화 — 개인·개인사업자·법인 심사서류에서 **나만 고친 것**을 내 구글 계정으로 PC 와 맞춘다.
+// 구글 동기화 — 회사 공통 자료에서 **나만 고친 것**(팩스번호 등)을 내 구글 계정으로 PC 와 맞춘다.
 //
 // 지점장 요청: "PC 에서 동기화해서 수정하는 것처럼 웹도 구글 동기화 단추 — 둘 중 한 곳에서 고치면
-// 같은 구글 아이디는 양쪽 모두 반영. 개인/개인사업자/법인 심사서류 세 가지만."
+// 같은 구글 아이디는 양쪽 모두 반영." 처음엔 심사서류 3종만이었고, 이제 모든 회사 자료다(2026-11-09 —
+// "회사 공통 자료도 로그인한 계정에 한해 내 계정에만 수정"). 일정관리기 자료검색도 같은 파일을 쓴다.
 //
 // 주고받는 곳: 내 구글 드라이브의 '앱 전용 공간'(appDataFolder, 일정관리기·업무자료검색 PC 와 같은 곳)의
 // kb_edits.json 하나. PC 프로그램(kbsearch/sync.py)과 **같은 모양 · 같은 규칙**이다.
 //   { "v": 1, "edits": { "개인 심사서류": { "item": {...본문 등} | null, "base": {...}, "at": "UTC" } } }
 //   · item 이 null 이면 '회사 자료로 되돌림' 이다(되돌린 것도 다른 쪽에 전한다).
 //   · 제목마다 **나중에 고친 쪽(at)** 이 이긴다. 시각은 'YYYY-MM-DDTHH:MM:SSZ'(글자로 견준다).
-//   · 세 자료 말고 이 기기에서 고친 것은 지금처럼 이 기기에만 둔다.
+//   · 같은 제목이 여럿인 자료는 첫 번째만 주고받는다(나머지는 이 기기에만).
 // 로그인·토큰은 이 주소의 서버(api/auth/*)가 맡는다 — 화면 코드는 1시간짜리 토큰만 쓴다.
 export const SYNC_TITLES = ["개인 심사서류", "개인사업자 심사서류", "법인 심사서류"];
 export const EDITS_FILE = "kb_edits.json";
@@ -20,7 +21,8 @@ const TOMBS_KEY = "deleted.json";
 const DRIVE = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
-export const isSyncKey = (k) => Array.isArray(k) && k[1] === 0 && SYNC_TITLES.includes(String(k[0]));
+// SYNC_TITLES 는 처음 주고받던 셋(검사가 쓴다). 이제는 같은 제목 중 첫 번째인 자료는 모두 주고받는다.
+export const isSyncKey = (k) => Array.isArray(k) && k[1] === 0 && !!String(k[0] || "").trim();
 export const stamp = (d = new Date()) => d.toISOString().slice(0, 19) + "Z";
 
 const goodRec = (r) => r && typeof r === "object" && typeof r.at === "string"
@@ -39,7 +41,13 @@ export function mergeEdits(recs, dead, remote, now = stamp()) {
   const edits = { ...(remote || {}) };
   const changedTitles = [];
   let pushNeeded = false;
-  for (const t of SYNC_TITLES) {
+  // 이 기기에서 고친 것 · 되돌린 것 · 드라이브에 있는 것의 제목을 다 본다(PC 와 같은 차례)
+  const titles = [];
+  for (const t of [...(recs || []).filter((r) => isSyncKey(r.key)).map((r) => r.key[0]),
+                   ...Object.keys(dead || {}), ...Object.keys(remote || {})]) {
+    if (t && !titles.includes(t)) titles.push(t);
+  }
+  for (const t of titles) {
     const lr = (recs || []).find((r) => Array.isArray(r.key) && r.key[0] === t && r.key[1] === 0);
     let L = lr ? { item: lr.item, base: lr.base || null, at: String(lr.at || "") }
               : (dead || {})[t] ? { item: null, base: null, at: String(dead[t]) } : null;

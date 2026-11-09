@@ -337,7 +337,7 @@ async function googleCtx(G, opts = {}) {
   return ctx;
 }
 
-console.log("[5] 구글 동기화 — 심사서류 3종을 같은 계정의 PC 와 맞추기");
+console.log("[5] 구글 동기화 — 나만 고친 회사 자료를 같은 계정의 PC 와 맞추기");
 {
   const S = await import("../public/sync.js");
   // ---- 합치기 규칙(PC kbsearch/sync.py 와 같다)
@@ -346,8 +346,11 @@ console.log("[5] 구글 동기화 — 심사서류 3종을 같은 계정의 PC �
   let m = S.mergeEdits([rec(T1, "웹", "2026-11-07T01:00:00Z"), rec("캐피탈A", "내것", "")], {},
                        { [T1]: { item: { title: T1, body: "PC" }, base: null, at: "2026-11-07T02:00:00Z" } }, "2026-11-07T03:00:00Z");
   ok("나중에 고친 쪽이 이긴다(PC 가 나중)", m.recs.find((r) => r.key[0] === T1).item.body === "PC"
-     && m.changedTitles.join() === T1 && !m.pushNeeded);
-  ok("세 자료 말고 고친 것은 이 기기에만(드라이브에 안 감)", m.recs.some((r) => r.key[0] === "캐피탈A") && !("캐피탈A" in m.edits));
+     && m.changedTitles.join() === T1);
+  ok("심사서류 말고 고친 것도 내 계정으로(모든 회사 자료 — 2026-11-09)", m.recs.some((r) => r.key[0] === "캐피탈A")
+     && m.edits["캐피탈A"] && m.edits["캐피탈A"].item.body === "내것" && m.pushNeeded);
+  m = S.mergeEdits([{ key: ["캐피탈A", 1], base: null, item: { title: "캐피탈A", body: "둘째" }, at: "" }], {}, {});
+  ok("같은 제목 두 번째 자료는 이 기기에만", m.recs.length === 1 && !("캐피탈A" in m.edits) && !m.pushNeeded);
   m = S.mergeEdits([rec(T1, "웹", "2026-11-07T05:00:00Z")], {},
                    { [T1]: { item: { title: T1, body: "PC" }, base: null, at: "2026-11-07T02:00:00Z" } });
   ok("이 기기가 나중이면 올린다", m.pushNeeded && m.edits[T1].item.body === "웹" && !m.changedTitles.length);
@@ -456,7 +459,7 @@ console.log("[5] 구글 동기화 — 심사서류 3종을 같은 계정의 PC �
   ok("[구글 동기화] 단추가 위에 있다", await pg.locator("#btn-sync").isVisible());
   await pg.click("#btn-sync");
   ok("로그인 전 — 설명과 [구글 로그인]", await pg.locator("#syncdlg[open]").count() === 1
-     && await pg.locator("#sync-login").isVisible() && /개인 · 개인사업자 · 법인 심사서류/.test(await pg.locator("#syncdlg .sub").innerText()));
+     && await pg.locator("#sync-login").isVisible() && /나만 고친 내용/.test(await pg.locator("#syncdlg .sub").innerText()));
   const [navReq] = await Promise.all([pg.waitForRequest((q) => q.url().includes("/api/auth/login")), pg.click("#sync-login")]);
   ok("[구글 로그인] 은 로그인 길로 간다", !!navReq);
 
@@ -476,20 +479,20 @@ console.log("[5] 구글 동기화 — 심사서류 3종을 같은 계정의 PC �
   // 웹에서 개인사업자 심사서류를 고치면 드라이브(→ PC)로 간다
   await open(T2);
   await pg.click("#edit");
-  ok("고치는 칸 안내 — PC 에도 반영된다", /PC 업무자료검색에도 반영/.test(await pg.locator(".editor .hint").innerText()));
+  ok("고치는 칸 안내 — PC 에도 반영된다", /PC 업무자료검색·일정관리기에도 반영/.test(await pg.locator(".editor .hint").innerText()));
   await pg.fill("#ed-body", (await pg.locator("#ed-body").inputValue()) + "\n웹에서 덧붙임 0504-123-4567");
   await pg.click("#ed-save");
   ok("저장하면 곧 드라이브에 올라간다", await until(() => /0504-123-4567/.test((remote()[T2] || {}).item?.body || "")));
   ok("올린 것에 고친 시각", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(remote()[T2].at));
-  // 세 자료 말고는 가지 않는다
-  const nonSync = live.find((it) => ![T1, T2, T3].includes(it.title) && (it.body || "").trim());
+  // 심사서류 말고 다른 회사 자료도 내 계정으로 간다(2026-11-09 — 모든 회사 자료)
+  const nonSync = live.find((it) => ![T1, T2, T3].includes(it.title) && (it.body || "").trim()
+                                    && live.filter((x) => x.title === it.title).length === 1);
   await open(nonSync.title);
   await pg.click("#edit");
   await pg.fill("#ed-body", "나만 쓰는 메모");
-  const w0 = drive.writes;
   await pg.click("#ed-save");
-  await pg.waitForTimeout(1200);
-  ok("다른 자료를 고친 것은 드라이브에 가지 않는다", drive.writes === w0 && !(nonSync.title in remote()));
+  ok("다른 회사 자료를 고친 것도 내 계정(드라이브)으로", await until(() =>
+     ((remote()[nonSync.title] || {}).item || {}).body === "나만 쓰는 메모"), nonSync.title);
   // 되돌리면 되돌림도 전한다
   await open(T1);
   await pg.click("#revert");

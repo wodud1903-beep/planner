@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
     def _shared_state(self, meta: dict) -> str:
         """아래 줄에 붙는 '회사 공통 자료' 상태."""
         n = len(kb.load_local())
-        mine = f"  ·  이 PC 에서만 고친 공통 자료 {n}건" if n else ""
+        mine = f"  ·  내 계정에서 고친 공통 자료 {n}건" if n else ""
         return self._shared_pull_state(meta) + mine
 
     def _shared_pull_state(self, meta: dict) -> str:
@@ -526,7 +526,8 @@ class MainWindow(QMainWindow):
             self._set_msg("이 PC 에 저장했습니다"
                           + (" — 다른 곳과 맞추려면 [동기화]" if config.SYNC_ON else ""), "ok")
         elif local_changed:
-            self._set_msg("이 PC 에 저장했습니다 — 회사 공통 자료는 이 PC 에서만 바뀝니다", "ok")
+            self._set_msg("저장했습니다 — 회사 공통 자료는 나만 바뀝니다"
+                          + (" (내 계정으로 곧 맞춥니다)" if self.gauth.is_connected() else ""), "ok")
         if local_changed and self.gauth.is_connected():
             QTimer.singleShot(500, self.sync_edits_quiet)     # 심사서류 3종이면 웹에도 곧 반영
 

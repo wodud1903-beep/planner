@@ -379,14 +379,14 @@ ok("이 PC 에만 적힘 · 첨부도 이 PC 에", len(rec) == 1 and FAX_NEW in 
    and str(rec[0]["item"]["files"][0]["id"]).startswith(kb_files.LOCAL_PREFIX))
 lat = rec[0]["item"]["files"][0] if rec else {}
 ok("첨부 파일이 PC 에 있다", kb_files.cached(lat) is not None)
-ok("저장 안내", "이 PC 에서만" in w.lbl_msg.text(), w.lbl_msg.text())
+ok("저장 안내", "나만 바뀝니다" in w.lbl_msg.text(), w.lbl_msg.text())
 w.view.ed_find.setText("개인 심사서류")
 w.view.flush_search()
 pump(0.3)
 cur = w.view.lst.current_item_data() or {}
 ok("검색 화면은 고친 팩스번호 · '이 PC 에서 고침' 배지", FAX_NEW in cur.get("body", "")
-   and "이 PC 에서 고침" in w.view.lbl_title.text(), w.view.lbl_title.text())
-ok("아래 줄에 건수", "이 PC 에서만 고친 공통 자료 1건" in w.lbl_account.text(), w.lbl_account.text())
+   and "내 계정에서 고침" in w.view.lbl_title.text(), w.view.lbl_title.text())
+ok("아래 줄에 건수", "내 계정에서 고친 공통 자료 1건" in w.lbl_account.text(), w.lbl_account.text())
 
 g.kb_rows[0][4] = f"1. 면허증\n2. 등본\n팩스- {FAX_OLD}"
 w._pulled_at = None

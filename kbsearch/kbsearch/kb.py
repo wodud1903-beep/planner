@@ -11,8 +11,9 @@
   자료를 고치면 원본은 그대로 두고 고친 것만 여기 둔다. 팩스번호·내 연락처처럼 사람마다 다른 것을
   고쳐 쓰라고 있다. 시트·드라이브·다른 PC 로는 **가지 않고**, 공통 자료를 새로 받아도 남는다.
   검색 화면은 원본 위에 이것을 덮어 보여 준다(local_view).
-  단, **개인 · 개인사업자 · 법인 심사서류**(SYNC_TITLES) 셋은 [동기화] 때 내 구글 계정으로 웹
-  업무자료검색과 주고받는다(kb-v1.6.0, sync.sync_edits) — 고친 시각(at)과 되돌린 표식(local_dead)을 둔다.
+  로그인하면 고친 것을 **모두** 내 구글 계정으로 주고받는다(kb-v1.7.0 — 예전엔 심사서류 3종만, sync.sync_edits):
+  웹 업무자료검색 · 일정관리기 자료검색과 같은 kb_edits.json. 그래서 화면에는 '내 계정에서 고침' 으로 보인다.
+  고친 시각(at)과 되돌린 표식(local_dead)을 둔다.
 
 `kb_meta.json` 에는 동기화가 알아야 할 것을 둔다:
   shared_dirty  : 이 PC 에서 공통 자료를 고쳤고 아직 시트로 안 올렸다(관리자)
@@ -40,15 +41,19 @@ META_FILE = "kb_meta.json"
 SRC_SHARED = "shared"
 SRC_MINE = "mine"
 SRC_LOCAL = "local"             # 이 PC 에서만 고친 공통 자료
-SRC_NAMES = {SRC_SHARED: "공통", SRC_MINE: "내 메모", SRC_LOCAL: "공통 · 이 PC 에서 고침"}
+SRC_NAMES = {SRC_SHARED: "공통", SRC_MINE: "내 메모", SRC_LOCAL: "공통 · 내 계정에서 고침"}
 
 # 고친 것을 내 구글 계정으로 웹과 주고받는 공통 자료(지점장 요청 2026-11-07 — 이 셋만)
 SYNC_TITLES = ("개인 심사서류", "개인사업자 심사서류", "법인 심사서류")
 
 
 def is_sync_key(key) -> bool:
+    """내 계정으로 주고받는 자료인가 — 모든 공통 자료(같은 제목이 여럿이면 첫 번째만, kb-v1.7.0).
+
+    SYNC_TITLES 는 kb-v1.6 때 주고받던 셋(검사가 쓴다).
+    """
     try:
-        return int(key[1]) == 0 and str(key[0]).strip() in SYNC_TITLES
+        return int(key[1]) == 0 and bool(str(key[0]).strip())
     except (TypeError, ValueError, IndexError):
         return False
 
