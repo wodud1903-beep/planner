@@ -9,8 +9,12 @@ import * as router from "../router.js";
 import * as drive from "../drive.js";
 import * as viewer from "./viewer.js";
 import { attach } from "./split.js";
+import * as kbedits from "../kbedits.js";
+import { toast } from "./chrome.js";
 
-let _items = [];
+let _shared = [];        // 회사 공통 자료(시트 그대로)
+let _edits = {};         // 내 계정에서 고친 것 {제목: 기록} — kb_edits.json(v1.30)
+let _items = [];         // 화면에 보이는 것 = 회사 자료 + 내가 고친 것
 let _idx = [];
 let _q = "";
 let _cat = "";
@@ -20,24 +24,49 @@ const SEARCH_DELAY = 130;   // 타자가 멎으면 찾는다. 한 자마다 훑�
 
 export async function load({ refresh = true } = {}) {
   const cached = await store.get("data", "kb");
-  if (cached && cached.length) setItems(cached);
-  else if (!refresh) setItems([]);      // 계정이 바뀌어 지운 뒤 — 앞사람 것을 남기지 않는다
+  _edits = (await store.get("data", "kbEdits")) || {};
+  if (cached && cached.length) { _shared = cached; setItems(); }
+  else if (!refresh) { _shared = []; setItems(); }   // 계정이 바뀌어 지운 뒤 — 앞사람 것을 남기지 않는다
   if (!refresh) return;
+  let ok = false, cut = false;
   try {
     const got = await sheets.readKb(RATES_SHEET_ID, KB_TAB);
     if (got && got.length) {
       await store.put("data", "kb", got);
       await store.put("meta", "kbSyncedAt", Date.now());
-      setItems(got);
-      return true;
+      _shared = got;
+      setItems();
+      ok = true;
     }
   } catch (e) {
+    cut = e instanceof sheets.Offline || e instanceof sheets.NeedSignIn;
     paintState();               // 로그인·오프라인 상태만 바꾸고 화면은 그대로 둔다
   }
-  return false;
+  // 통신이 끊겼거나 로그인 전이면 건너뛴다 — 다시 붙으면 처음부터 다시 받는다(boot.js)
+  if (!cut) await refreshEdits();
+  return ok;
 }
 
-function setItems(items) {
+/** 내 계정에서 고친 자료를 다시 본다(바뀌었을 때만 받는다 — 30초마다 · 돌아올 때 boot.js). 바뀌면 true. */
+export async function refreshEdits() {
+  try {
+    const { edits, changed } = await kbedits.read();
+    if (!changed) return false;
+    if (JSON.stringify(edits) === JSON.stringify(_edits)) return false;
+    _edits = edits;
+    await store.put("data", "kbEdits", edits);
+    setItems();
+    const cur = router.current();
+    const m = cur && cur.path.match(/^\/kb\/(\d+)$/);
+    if (m && !$("#kbeditor")) showDetail(parseInt(m[1], 10));   // 보고 있던 자료도 새 내용으로(고치는 중이면 그대로)
+    return true;
+  } catch (e) {
+    return false;               // 로그인 전 · 오프라인 — 저장본으로 계속 보인다
+  }
+}
+
+function setItems() {
+  const items = kbedits.overlay(_shared, _edits);
   _items = items;
   _idx = kb.index(items);
   if (router.current() && router.current().path.startsWith("/kb")) paintList();
@@ -111,7 +140,7 @@ function paintList() {
   }
   render(el, hits.map((it) => {
     const i = _items.indexOf(it);
-    const sub = [it.finance, it.category].filter(Boolean).join(" · ");
+    const sub = [it.finance, it.category, it._local ? "내 계정에서 고침" : ""].filter(Boolean).join(" · ");
     return html`<li><button class="row" data-i="${i}">
         <span class="t">${it.title}</span>
         ${raw(sub ? `<span class="s">${esc2(sub)}</span>` : "")}
@@ -135,13 +164,21 @@ export function showDetail(i) {
     <h2 style="margin:10px 0 2px">${it.title}</h2>
     <p class="s" style="color:var(--sub);margin:0 0 10px">
       ${[it.finance, it.category].filter(Boolean).join(" · ")}</p>
-    ${raw(kb.bodyToHtml(it.body))}
+    ${raw(it._local ? `<p class="s" id="kbmine" style="color:var(--accent);margin:0 0 10px">회사 공통 · 내 계정에서 고침 — 나만 보입니다</p>` : "")}
+    ${raw(it._stale ? `<p class="s" style="color:var(--sub);margin:0 0 10px">회사에서 이 자료를 새로 고쳤습니다. 새 내용으로 바꾸려면 [회사 자료로 되돌리기] 를 누르세요.</p>` : "")}
+    <div id="kbbodybox">${raw(kb.bodyToHtml(it.body))}</div>
     <p style="margin-top:16px">
       <button class="chip" id="kbcopy">본문 복사</button>
+      <button class="chip" id="kbedit">내 계정에서만 고치기</button>
+      ${raw(it._local ? `<button class="chip" id="kbrevert">회사 자료로 되돌리기</button>` : "")}
     </p>
     ${raw(attachHtml(it.files || []))}
     <div id="kbview"></div>`);
   paintAttachments(it.files || []);
+  const ed = $("#kbedit");
+  if (ed) ed.onclick = () => openEditor(i);
+  const rv = $("#kbrevert");
+  if (rv) rv.onclick = () => saveMine(i, null);
   const back = $("#kbback");
   if (back) back.onclick = () => { split.classList.remove("detail"); router.go("/kb"); };
   const copy = (text, btn) => {
@@ -153,6 +190,54 @@ export function showDetail(i) {
   const c1 = $("#kbcopy");
   if (c1) { c1.dataset.t = c1.textContent; c1.onclick = () => copy(it.body, c1); }
   // 체크리스트는 자료검색에 보여 주지 않는다(PC 와 같게) — 고객관리 서류 체크의 재료로만 쓴다
+}
+
+// ---------------------------------------------------------------- 내 계정에서만 고치기(v1.30)
+//
+// 회사 공통 자료를 나만 바꿔 쓴다(예: 팩스번호를 내 것으로). 이 기기가 아니라 **내 구글 계정**에
+// 저장되어(kb_edits.json) PC 일정관리기·업무자료검색에도 그대로 보인다. 회사 자료·다른 사람 화면은 그대로다.
+async function openEditor(i) {
+  const it = _items[i];
+  const box = $("#kbbodybox");
+  if (!it || !box) return;
+  const who = (await store.account()) || "";
+  render(box, html`
+    <div id="kbeditor">
+      <p class="kbhead">내 계정에서만 고치기 — 나만 보입니다</p>
+      <textarea id="kbbody" class="bigin" rows="14" style="width:100%;box-sizing:border-box">${it.body || ""}</textarea>
+      <p class="s" style="color:var(--sub)">저장하면 내 구글 계정${who ? `(${who})` : ""}으로 PC 일정관리기·업무자료검색에도
+        반영됩니다. 회사 자료와 다른 사람 화면은 그대로입니다.</p>
+      <p><button class="chip" id="kbsave">저장</button> <button class="chip" id="kbcancel">취소</button>
+         <span class="s" id="kbmsg" style="color:var(--sub)"></span></p>
+    </div>`);
+  const ta = $("#kbbody");
+  if (ta) ta.focus();
+  $("#kbcancel").onclick = () => showDetail(i);
+  $("#kbsave").onclick = () => saveMine(i, $("#kbbody").value);
+}
+
+async function saveMine(i, body) {
+  const it = _items[i];
+  if (!it) return;
+  const msg = $("#kbmsg");
+  const btns = [$("#kbsave"), $("#kbrevert")].filter(Boolean);
+  for (const b of btns) b.disabled = true;
+  if (msg) msg.textContent = "내 계정에 저장하는 중…";
+  try {
+    _edits = body === null ? await kbedits.revert(it) : await kbedits.save(it, body);
+    await store.put("data", "kbEdits", _edits);
+    setItems();
+    showDetail(i);
+    toast(body === null ? "회사 자료로 되돌렸어요 — PC 에도 반영됩니다."
+                        : "내 계정에 저장했어요 — PC 일정관리기·업무자료검색에도 반영됩니다.");
+  } catch (e) {
+    for (const b of btns) b.disabled = false;
+    const why = e instanceof sheets.NeedSignIn ? "구글 로그인이 필요합니다."
+      : e instanceof sheets.Offline ? "인터넷에 연결되지 않았습니다."
+      : (e && e.message) || "저장하지 못했습니다.";
+    if (msg) msg.textContent = "저장하지 못했습니다 — " + why;
+    else toast("저장하지 못했습니다 — " + why, { tone: "bad" });
+  }
 }
 
 // ---------------------------------------------------------------- 첨부(그림·PDF)

@@ -169,7 +169,8 @@ ok("받기·올리기·지금 동기화 모두 kb_edits 도 맞춘다", all("_kb
                                                      for f in (sync.pull, sync.push, sync.sync_now)))
 ok("실패해도 일정관리기 동기화는 그대로(따로 감싼다)", "except Exception" in inspect.getsource(sync._kb_edits))
 src = (_ROOT / "python" / "planner" / "main_window.py").read_text(encoding="utf-8")
-ok("고쳐 저장하면 곧 올린다", "self.tab_kb.on_local_saved = self._touch_sync" in src)
+ok("고쳐 저장하면 곧 올린다(v1.30 — 그 자리에서 내 계정으로)",
+   "self.tab_kb.on_local_saved = self._on_kb_local_saved" in src)
 
 print()
 if FAIL:

@@ -12,7 +12,8 @@ import { NeedSignIn, WrongAccount, Offline, NeedScope } from "./sheets.js";
 const FILES = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
-const WEB_FILE = "planner_web.json";     // 웹앱이 쓰는 파일
+const WEB_FILE = "planner_web.json";     // 웹앱이 쓰던 파일(v1.29 까지 — 이제 읽기만)
+const ACCT_FILE = "account_settings.json"; // PC·웹이 같이 쓰는 시트·서류 폴더(v1.30, planner/account_settings.py)
 const PC_FILE = "planner_sync.json";     // PC 앱이 올리는 묶음
 const PC_CFG = "plan_cfg.json";          // 그 묶음 안의 설정 파일
 
@@ -53,14 +54,42 @@ async function call(url, { method = "GET", body = null, raw = null, type = null 
   return r;
 }
 
-async function findId(name) {
+async function findMeta(name) {
   const r = await call(`${FILES}?spaces=appDataFolder`
     + `&q=${encodeURIComponent(`name='${name}'`)}`
     + `&fields=${encodeURIComponent("files(id,name,modifiedTime)")}`);
-  if (!r) return "";
+  if (!r) return null;
   const j = await r.json();
-  const f = (j.files || [])[0];
+  return (j.files || [])[0] || null;
+}
+
+async function findId(name) {
+  const f = await findMeta(name);
   return f ? f.id : "";
+}
+
+// 작은 파일을 자주 들여다볼 때(30초마다 · 화면으로 돌아올 때) — 목록 한 번으로 바뀌었는지 보고,
+// 바뀌었을 때만 내용을 받는다. {data, changed}. 파일이 없으면 data=null.
+const _seen = new Map();     // 이름 → {mod, data}
+export async function readIfChanged(name) {
+  const f = await findMeta(name);
+  const mod = f ? `${f.id}@${f.modifiedTime || ""}` : "";
+  const had = _seen.get(name);
+  if (had && had.mod === mod && mod) return { data: had.data, changed: false };
+  let data = null;
+  if (f) {
+    const r = await call(`${FILES}/${f.id}?alt=media`);
+    if (r) { try { data = JSON.parse(await r.text()); } catch (e) { data = null; } }
+  }
+  _seen.set(name, { mod, data });
+  return { data, changed: !had || had.mod !== mod };
+}
+
+/** 앱 전용 공간의 JSON 파일을 통째로 쓴다(없으면 만든다). 다음 확인 때 다시 읽게 해 둔다. */
+export async function writeAppJson(name, obj) {
+  const id = await writeJson(name, obj);
+  _seen.delete(name);
+  return id;
 }
 
 async function readJson(name) {
@@ -87,20 +116,27 @@ async function writeJson(name, obj) {
 }
 
 // ---------------------------------------------------------------- 설정
-/** 이 계정의 설정. 없으면 null.
+/** 이 계정의 설정 {sheetId, sheetTab, driveFolder, from}. 없으면 null.
  *
- * PC 앱이 올려 둔 것(planner_sync.json 의 plan_cfg.json)과 웹앱에서 바꾼 것(planner_web.json)
- * 가운데 **나중에 바꾼 쪽**을 쓴다(v1.29). 예전엔 웹앱 파일이 한 번 생기면 그것만 봐서, PC 에서
- * 시트·서류 폴더를 바꿔도 웹은 옛 것을 계속 썼다. 시트(주소+탭)와 서류 폴더는 따로 고른다. */
-export async function loadSettings() {
-  const [web, pc] = await Promise.all([readJson(WEB_FILE), readJson(PC_FILE)]);
-  return pickSettings(web, pc);
+ * v1.30: PC 와 웹이 같이 쓰는 **계정 설정 파일(account_settings.json)** 이 기준이다 — PC 는 설정 창에서
+ * 시트·서류 폴더를 바꾸면 그 자리에서 이 파일에 쓰고, 웹도 바꾸면 여기에 쓴다(항목마다 나중에 바꾼 쪽).
+ * 파일에 없는 항목만 예전 곳(PC 묶음의 plan_cfg.json · 웹 파일 planner_web.json)에서 고른다.
+ *
+ * light=true(30초마다 · 화면으로 돌아올 때): 계정 설정 파일만, 바뀌었을 때만 본다 — 안 바뀌었으면 null. */
+export async function loadSettings({ light = false } = {}) {
+  if (light) {
+    const { data, changed } = await readIfChanged(ACCT_FILE);
+    return changed ? pickSettings(null, null, data) : null;
+  }
+  const [web, pc, acct] = await Promise.all([
+    readJson(WEB_FILE), readJson(PC_FILE), readIfChanged(ACCT_FILE).then((x) => x.data)]);
+  return pickSettings(web, pc, acct);
 }
 
 const when = (s) => { const t = Date.parse(String(s || "")); return isNaN(t) ? 0 : t; };
 
-/** 두 곳의 설정 → 쓸 것 {sheetId, sheetTab, driveFolder, from}. 통신 없는 계산(검사용). */
-export function pickSettings(web, pc) {
+/** 세 곳의 설정 → 쓸 것 {sheetId, sheetTab, driveFolder, from}. 통신 없는 계산(검사용). */
+export function pickSettings(web, pc, acct = null) {
   const w = web && typeof web === "object" ? web : null;
   let cfg = null, pcAt = 0;
   const txt = pc && pc.files && pc.files[PC_CFG];
@@ -120,20 +156,39 @@ export function pickSettings(web, pc) {
     if (pOk && wOk) return webAt > pcAt ? "web" : "pc";
     return pOk ? "pc" : wOk ? "web" : "";
   };
-  const sheetFrom = newer((x) => !!x.sheetId), folderFrom = newer((x) => !!x.driveFolder);
-  const S = sheetFrom === "pc" ? P : sheetFrom === "web" ? W : null;
-  const F = folderFrom === "pc" ? P : folderFrom === "web" ? W : null;
+  let sheetFrom = newer((x) => !!x.sheetId), folderFrom = newer((x) => !!x.driveFolder);
+  let S = sheetFrom === "pc" ? P : sheetFrom === "web" ? W : null;
+  let F = folderFrom === "pc" ? P : folderFrom === "web" ? W : null;
+  // 계정 설정 파일에 있는 항목이 언제나 먼저다(v1.30)
+  const A = acct && typeof acct === "object" ? acct : null;
+  const as = A && A.sheet && typeof A.sheet === "object" ? A.sheet : null;
+  const af = A && A.folder && typeof A.folder === "object" ? A.folder : null;
+  if (as && String(as.id || "").trim()) {
+    S = { sheetId: String(as.id).trim(), sheetTab: String(as.tab || "").trim() };
+    sheetFrom = "account";
+  }
+  if (af && String(af.ref || "").trim()) {
+    F = { driveFolder: String(af.ref).trim() };
+    folderFrom = "account";
+  }
   const out = { sheetId: S ? S.sheetId : "", sheetTab: S ? S.sheetTab : "",
                 driveFolder: F ? F.driveFolder : "", from: sheetFrom || folderFrom };
   return (out.sheetId || out.driveFolder) ? out : null;
 }
 
-/** 설정을 계정에 저장한다. 실패해도 화면은 그대로 — 이 기기에는 이미 저장돼 있다. */
+/** 이 기기에서 바꾼 설정을 계정 설정 파일에 저장한다 — PC·다른 기기가 따라온다.
+ *  patch: {sheetId, sheetTab} 또는 {driveFolder}. 실패해도 화면은 그대로 — 이 기기에는 이미 저장돼 있다.
+ *  ⚠️ 못 읽으면 쓰지 않는다(다른 항목을 덮지 않게 — 예외가 그대로 올라간다). */
 export async function saveSettings(patch) {
-  const cur = (await readJson(WEB_FILE)) || {};
-  const next = { ...cur, ...patch, updatedAt: new Date().toISOString() };
-  await writeJson(WEB_FILE, next);
-  return next;
+  const { data } = await readIfChanged(ACCT_FILE);
+  const cur = data && typeof data === "object" ? { ...data } : {};
+  const at = stamp();
+  if ("sheetId" in patch) cur.sheet = { id: String(patch.sheetId || ""), tab: String(patch.sheetTab || ""), at, by: "web" };
+  if ("driveFolder" in patch) cur.folder = { ref: String(patch.driveFolder || ""), at, by: "web" };
+  cur.v = 1;
+  cur.updatedAt = at;
+  await writeAppJson(ACCT_FILE, cur);
+  return cur;
 }
 
 // ---------------------------------------------------------------- PC 묶음 안의 파일

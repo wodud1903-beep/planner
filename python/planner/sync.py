@@ -394,6 +394,19 @@ def _kb_edits(auth) -> bool:
         return False
 
 
+def _account_settings(auth) -> bool:
+    """시트·서류 폴더를 계정 설정 파일(account_settings.json — 웹이 읽는 곳)에도 맞춘다(v1.30).
+
+    설정 창에서 바꾸면 그 자리에서 바로 올리지만(main_window), 다른 PC 에서 바꾼 것을 받았거나
+    그때 인터넷이 끊겨 있었으면 여기서 올린다. 실패해도 일정관리기 동기화는 그대로 끝낸다.
+    """
+    try:
+        from . import account_settings
+        return bool(account_settings.push_saved(auth))
+    except Exception:
+        return False
+
+
 def pull(auth) -> bool:
     """원격에서 더 최신인 파일을 내려받는다. 바뀌면 True."""
     b = _remote_bundle(auth)
@@ -413,6 +426,7 @@ def push(auth) -> None:
     google_client.drive_write(auth, SYNC_FILE, json.dumps(out, ensure_ascii=False))
     _set_local_updated(out["updatedAt"])
     _kb_edits(auth)
+    _account_settings(auth)
 
 
 def sync_now(auth) -> bool:
@@ -425,4 +439,6 @@ def sync_now(auth) -> bool:
     out = merged_bundle(b)
     google_client.drive_write(auth, SYNC_FILE, json.dumps(out, ensure_ascii=False))
     _set_local_updated(out["updatedAt"])
-    return _kb_edits(auth) or changed
+    kb_changed = _kb_edits(auth)
+    _account_settings(auth)
+    return kb_changed or changed

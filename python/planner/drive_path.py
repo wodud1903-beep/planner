@@ -17,6 +17,7 @@ PC 를 바꿀 때마다 [폴더 선택]을 다시 해 주던 일을 없애려는
 from __future__ import annotations
 
 import os
+import re
 import time
 
 # 드라이브 데스크톱이 만드는 내 드라이브 폴더 이름 (한국어/영어 윈도)
@@ -239,3 +240,23 @@ def resolve(settings, sub: str = CUSTOMER_DIR) -> tuple:
     if manual:
         why = (f"지정해 두신 폴더가 이 PC 에는 없습니다:\n{manual}\n\n" + why)
     return "", False, why
+
+
+# ---------------------------------------------------------------- 웹이 찾을 수 있는 이름(v1.30)
+def web_ref(files_dir: str, default: str = CUSTOMER_DIR) -> str:
+    """이 PC 의 서류 폴더 → 웹(jyplanner)이 같은 폴더를 찾을 수 있는 '내 드라이브' 기준 경로.
+
+    PC 설정의 서류 폴더는 이 PC 의 경로(G:\\내 드라이브\\영업\\고객정보)라 웹은 쓸 수 없다.
+    '내 드라이브'(My Drive · 옛 Google Drive) 뒤만 '/' 로 이어 적는다 → '영업/고객정보'.
+      · 비어 있으면(이 PC 의 내 드라이브에서 자동으로 찾기) default('고객정보').
+      · 내 드라이브 밖(이 PC 에만 있는 폴더 · 공유 드라이브)이면 "" — 웹은 그 폴더를 볼 수 없다.
+    """
+    s = (files_dir or "").strip()
+    if not s:
+        return (default or "").strip()
+    parts = [x for x in re.split(r"[\\/]+", s) if x]
+    roots = {n.casefold() for n in MY_DRIVE_NAMES + ("Google Drive",)}
+    idx = max((i for i, x in enumerate(parts) if x.casefold() in roots), default=-1)
+    if idx < 0:
+        return ""
+    return "/".join(parts[idx + 1:])

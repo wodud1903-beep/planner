@@ -16,6 +16,7 @@ import * as appdata from "../appdata.js";
 import { attach } from "./split.js";
 
 let _rootId = "";
+let _rootRef = "";        // _rootId 를 찾은 설정 값 — 설정이 바뀌면 다시 찾는다(v1.30)
 let _top = [];           // 맨 윗 겹 (대개 고객 폴더들)
 let _prep = [];
 let _q = "";
@@ -35,20 +36,31 @@ async function setFolderRef(v) {
 }
 const folderRef = () => store.get("meta", "driveFolder").then((v) => v || "");
 
+// 계정 설정(PC·다른 기기)에서 서류 폴더가 바뀌었다 — 이 기기 설정을 바꾸고, 예전 폴더 기억을 버린다(v1.30).
+// ⚠️ 예전엔 찾아 둔 폴더 id(_rootId · 저장본)를 그대로 써서, 설정이 바뀌어도 옛 폴더를 계속 보였다.
+export async function adoptFolder(v) {
+  await store.put("meta", "driveFolder", v);
+  await store.del("data", "driveTop");
+  _rootId = ""; _rootRef = ""; _err = "";
+  setTop([]);
+}
+
 export async function load({ refresh = true } = {}) {
-  const cached = await store.get("data", "driveTop");
-  if (cached && cached.items) { _rootId = cached.rootId; setTop(cached.items); }
-  else if (!refresh) { _rootId = ""; setTop([]); }              // 계정이 바뀌어 지운 뒤
-  if (!refresh) return;
   const ref = await folderRef();
+  const cached = await store.get("data", "driveTop");
+  // 저장본은 같은 폴더 설정으로 받은 것만 쓴다(옛 저장본엔 설정 값이 없다 — 그건 그대로 쓴다)
+  if (cached && cached.items && (!cached.ref || cached.ref === ref)) {
+    _rootId = cached.rootId; _rootRef = ref; setTop(cached.items);
+  } else if (!refresh || cached) { _rootId = ""; _rootRef = ""; setTop([]); }   // 계정·폴더가 바뀌었다
+  if (!refresh) return;
   if (!ref) return;
   try {
-    const id = _rootId || await drive.folderId(ref);
+    const id = (_rootRef === ref && _rootId) || await drive.folderId(ref);
     if (!id) { _err = `'${ref}' 폴더를 찾지 못했습니다.`; paintList(); return; }
-    _rootId = id;
+    _rootId = id; _rootRef = ref;
     const items = await drive.listFolder(id);
     _err = "";
-    await store.put("data", "driveTop", { rootId: id, items, at: Date.now() });
+    await store.put("data", "driveTop", { rootId: id, ref, items, at: Date.now() });
     setTop(items);
     return true;
   } catch (e) {
@@ -152,7 +164,7 @@ function setupScreen() {
     try {
       const id = await drive.folderId(v);
       if (!id) { msg.textContent = "그런 폴더를 찾지 못했습니다. 이름이 맞는지 봐 주세요."; return; }
-      _rootId = id;
+      _rootId = id; _rootRef = v;
       await setFolderRef(v);
       await store.del("data", "driveTop");
       _top = []; _prep = [];
