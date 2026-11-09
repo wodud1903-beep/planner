@@ -162,6 +162,7 @@ class MainWindow(QMainWindow):
     sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
     sig_sheet_docs = Signal(object)                  # {행번호: S열 =IMAGE() 수식}
     sig_sheet_uids = Signal(object)                  # {행번호: U열 고객ID}
+    sig_sheet_drops = Signal(object, int)            # (시트 드롭다운 목록 {key: [값]}, epoch)
     sig_sheet_rates = Signal(object)                 # 공유 수당율 표
     sig_sheet_kb = Signal(object)                    # 공유 업무자료 목록
     sig_sync_done = Signal(bool, str, bool)          # (바뀜, 오류, 수동여부)
@@ -278,6 +279,7 @@ class MainWindow(QMainWindow):
         # --- 고객관리(구글 시트) 상태 ---
         self.sheet_rows: list = []
         self.sheet_choices: dict = {}
+        self._sheet_dropdowns: dict = {}   # 시트 칸에 걸린 드롭다운 목록(금융사 등 — v1.28.4)
         self._sheet_last_row = 0
         self._sheet_header_row = 0
         self._sheet_pending: list = []   # 아직 시트에 안 올라간 행
@@ -327,6 +329,7 @@ class MainWindow(QMainWindow):
         self.sig_sheet_ments.connect(self._on_sheet_ments)
         self.sig_sheet_docs.connect(self._on_sheet_docs)
         self.sig_sheet_uids.connect(self._on_sheet_uids)
+        self.sig_sheet_drops.connect(self._on_sheet_drops)
         self.sig_sheet_rates.connect(self._on_sheet_rates)
         self.sig_sheet_kb.connect(self._on_sheet_kb)
         self.sig_sheet_done.connect(self._on_sheet_done)
@@ -1099,6 +1102,8 @@ class MainWindow(QMainWindow):
         self.tab_kb.set_auth(self.gauth)        # 첨부(그림·PDF) 올리기·받기
         self.tab_kb.on_changed = self._touch_sync
         self.tab_kb.on_push_shared = self._push_kb_shared
+        # 내 계정에서만 고친 회사 자료 — 곧 내 계정(kb_edits.json)으로 올린다(v1.29)
+        self.tab_kb.on_local_saved = self._touch_sync
         self.tabs.addTab(self.tab_kb, "자료검색")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
@@ -2064,7 +2069,14 @@ class MainWindow(QMainWindow):
                 if not live():
                     return
                 self.sig_sheet_rows.emit((rows, summary, _hdr, epoch), last, "")
-                ments = docs = uids = None
+                ments = docs = uids = drops = None
+                # 1-2) 칸에 걸린 드롭다운 목록(금융사 등) — 고객이 없는 새 시트에서도 고를 수 있게
+                try:
+                    drops = sheets.read_dropdowns(self.gauth, sid, sname, _hdr)
+                    if live():
+                        self.sig_sheet_drops.emit(drops or {}, epoch)
+                except Exception:
+                    pass
                 # 2) 안내멘트는 목록을 띄운 뒤 뒤이어 채운다
                 try:
                     ments = sheets.read_ments(self.gauth, sid, sname)
@@ -2089,7 +2101,7 @@ class MainWindow(QMainWindow):
                     pass
                 # 5) 다음에 켤 때 바로 보이게 받은 그대로 둔다(v1.26 — sheet_cache)
                 if raw and live():
-                    sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs)
+                    sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs, drops)
                 # 6) 고객ID 까지 다 왔다 — 월 마감은 이때 본다
                 if live():
                     self.sig_sheet_done.emit(epoch)
@@ -2117,7 +2129,8 @@ class MainWindow(QMainWindow):
         self.sheet_rows = rows
         self._sheet_last_row = rows[-1].row
         self._sheet_header_row = hdr
-        self.sheet_choices = sheets.choices(rows)
+        self._sheet_dropdowns = c.get("drops") if isinstance(c.get("drops"), dict) else {}
+        self.sheet_choices = sheets.merge_choices(sheets.choices(rows), self._sheet_dropdowns)
         self._sheet_cached_at = c.get("saved", "")
         for cr in rows:                      # 늦게 오던 칸들도 같이 둔 것을 채운다
             if c["ments"].get(cr.row):
@@ -2131,6 +2144,13 @@ class MainWindow(QMainWindow):
         self.refresh_customers()
         self.refresh_dashboard()
         return True
+
+    def _on_sheet_drops(self, drops, epoch: int):
+        """시트 칸의 드롭다운 목록이 왔다 — 고객 등록·수정 창의 후보에 더한다."""
+        if epoch != self._sheet_epoch:
+            return
+        self._sheet_dropdowns = dict(drops or {})
+        self.sheet_choices = sheets.merge_choices(sheets.choices(self.sheet_rows), self._sheet_dropdowns)
 
     def _on_sheet_ments(self, ments: dict):
         """안내멘트가 뒤늦게 도착 → 해당 행에 채우고 복사 버튼을 살린다."""
@@ -2153,6 +2173,7 @@ class MainWindow(QMainWindow):
         self._sheet_header_row = 0
         self._sheet_loaded = False
         self.sheet_choices = {}
+        self._sheet_dropdowns = {}
         self.lbl_cust_summary.hide()
         self._summary_data = []
         self.refresh_customers()
@@ -2298,7 +2319,7 @@ class MainWindow(QMainWindow):
         self.sheet_rows = rows
         self._sheet_last_row = last_row
         self._sheet_header_row = hdr
-        self.sheet_choices = sheets.choices(rows)
+        self.sheet_choices = sheets.merge_choices(sheets.choices(rows), self._sheet_dropdowns)
         self._sheet_pending = []
         self._sheet_loaded = True
         self._show_summary(summary)
@@ -2515,9 +2536,15 @@ class MainWindow(QMainWindow):
     def on_customer_add(self):
         if not self._sheet_ready():
             return
-        if not self.sheet_rows and not self._sheet_pending:
+        # 시트를 한 번이라도 읽었으면 고객이 0명이어도(새로 만든 시트) 등록할 수 있다(v1.28.4)
+        # — 예전엔 고객 줄이 없으면 '불러오기' 만 하라고 해서, 시트에 손으로 한 명을 넣어야 했다
+        if not self._sheet_loaded and not self.sheet_rows and not self._sheet_pending:
             QMessageBox.information(self, config.APP_NAME,
                                     "먼저 [불러오기]로 시트를 읽어주세요.")
+            return
+        if not self._sheet_header_row:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "시트의 머리글(순번/고객명…) 줄을 아직 모릅니다. [불러오기] 를 다시 눌러 주세요.")
             return
         res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self)
         if res is None:
@@ -2555,7 +2582,7 @@ class MainWindow(QMainWindow):
                         f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
                     v["doc"] = sheets.image_formula(url)
                 # 순번은 앱이 계산해서 넣는다(A열이 수식이면 "" → 수식에 맡김)
-                seq = sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot)
+                seq = sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot, header_row=hdr_row)
                 try:
                     # U열이 없는 시트면 여기서 만들어 둔다(실패해도 등록은 진행)
                     if hdr_row:
@@ -2563,7 +2590,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 newrow = sheets.append_row(self.gauth, sid, sname, v, last,
-                                           seq=seq, uid=uid)
+                                           seq=seq, uid=uid, header_row=hdr_row)
                 self.sig_sheet_written.emit(pend, newrow, "")
             except Exception as e:
                 self.sig_sheet_written.emit(pend, None, str(e))

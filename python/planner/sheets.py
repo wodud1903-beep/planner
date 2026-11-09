@@ -523,25 +523,33 @@ def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
 
 
 def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-             last_row: int, rows: list) -> str:
+             last_row: int, rows: list, header_row: int = 0) -> str:
     """새 행에 넣을 순번. A열이 수식이면 "" (건드리지 않고 수식에 맡긴다).
 
     A열이 그냥 숫자면 직전까지의 최대값 + 1 을 돌려준다.
     (수식 복사만 하던 예전 방식은 A열이 '값'일 때 직전 번호를 그대로 베껴 왔다)
+
+    고객이 아직 없는 새 시트(last_row 가 머리글 줄)면 새 줄의 A 를 본다 — 수식이 미리 걸려
+    있으면 "", 아니면 "1"(v1.28.4 — 예전엔 머리글 '순번' 을 보고 비워 둬 순번이 영영 안 붙었다).
     """
+    empty = bool(header_row) and last_row <= header_row
+    probe = last_row + 1 if empty else last_row
+    prev = ""
     try:
         url = config.SHEETS_VALUES_URL.format(
-            sheet_id=sheet_id, rng=_rng(sheet_name, f"A{last_row}"))
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"A{probe}"))
         r = _http().get(url, headers=_headers(auth), timeout=20,
                          params={"valueRenderOption": "FORMULA"})
         if r.status_code == 200:
             vals = (r.json() or {}).get("values", [])
-            cur = str(vals[0][0]) if (vals and vals[0]) else ""
-            if cur.strip().startswith("="):
+            prev = str(vals[0][0]) if (vals and vals[0]) else ""
+            if prev.strip().startswith("="):
                 return ""            # 수식이 알아서 계산한다
     except Exception:
         pass
-    mx = 0
+    if empty:
+        return "1"
+    mx = int(prev.strip()) if prev.strip().isdigit() else 0   # 방금 넣은 고객(아직 목록에 없음)
     for cr in rows or []:
         s = (cr.seq or "").strip()
         if s.isdigit():
@@ -719,6 +727,115 @@ def month_stats(rows: list[CustomerRow], today) -> dict:
     return res
 
 
+# ---------------------------------------------------------------------------
+# 시트의 드롭다운(데이터 확인) — 새로 만든 시트라 고객이 아직 없어도 금융사 등을 고를 수 있게(v1.28.4)
+#
+# 예전엔 후보를 **이미 적힌 고객 값**에서만 뽑아(choices), 고객이 없는 새 시트에서는 금융사
+# 드롭다운이 비었다. 이제 시트 칸에 걸린 드롭다운 목록(직접 적은 목록 / 다른 범위를 가리키는
+# 목록 둘 다)을 읽어 후보에 더한다.
+# ---------------------------------------------------------------------------
+DROPDOWN_ROWS = 300          # 머리글 아래 몇 줄의 드롭다운을 볼지(새 시트도 보통 미리 걸어 둔다)
+FINANCE_FALLBACK = "='고객센터'!$A$3:$A$60"   # 기존 시트의 금융사 드롭다운이 가리키는 곳
+
+
+def dropdown_rules(grid: dict) -> list:
+    """GridData 한 덩어리 → 그 안의 드롭다운 규칙들 [("list", [값…]) | ("range", "=목록!A2:A")].
+
+    통신에서 떼어 낸 순수 계산(검사용). 같은 규칙은 한 번만.
+    """
+    out, seen = [], set()
+    for rd in (grid or {}).get("rowData", []) or []:
+        for v in (rd or {}).get("values", []) or []:
+            dv = (v or {}).get("dataValidation") or {}
+            cond = dv.get("condition") or {}
+            typ = cond.get("type", "")
+            vals = [str((x or {}).get("userEnteredValue", "")).strip() for x in cond.get("values", []) or []]
+            vals = [x for x in vals if x]
+            if typ == "ONE_OF_LIST" and vals:
+                key = ("list", tuple(vals))
+            elif typ == "ONE_OF_RANGE" and vals:
+                key = ("range", vals[0])
+            else:
+                continue
+            if key not in seen:
+                seen.add(key)
+                out.append((key[0], list(key[1]) if key[0] == "list" else key[1]))
+    return out
+
+
+def _range_a1(ref: str, sheet_name: str) -> str:
+    """'=목록!$A$2:$A' · '=$Z$2:$Z$40' → API 범위 글자. 시트 이름이 없으면 그 탭."""
+    r = (ref or "").strip().lstrip("=").replace("$", "")
+    if "!" not in r:
+        r = f"'{sheet_name}'!{r}"
+    return r
+
+
+def read_dropdowns(auth: GoogleAuth, sheet_id: str, sheet_name: str, header_row: int) -> dict:
+    """고르는 칸(금융사·특판/대리점·진행현황·출고유형)에 걸린 드롭다운 목록 → {key: [값…]}.
+
+    읽지 못하면 GoogleError — 부르는 쪽은 그냥 넘어간다(후보가 시트 값만큼만 나올 뿐).
+    """
+    if header_row <= 0:
+        return {}
+    cols = {key: ci for ci, key, _l in FIELDS if key in CHOICE_FIELDS}
+    first, last = header_row + 1, header_row + DROPDOWN_ROWS
+    keys = list(cols)
+    params = [("ranges", f"'{sheet_name}'!{col_letter(cols[k])}{first}:{col_letter(cols[k])}{last}") for k in keys]
+    params.append(("fields", "sheets(data(rowData(values(dataValidation))))"))
+    url = config.SHEETS_BASE_URL.format(sheet_id=sheet_id)
+    r = _http().get(url, headers=_headers(auth), timeout=30, params=params)
+    _check(r)
+    sheets_ = (r.json() or {}).get("sheets", []) or []
+    grids = (sheets_[0].get("data", []) if sheets_ else []) or []
+    rules = {k: dropdown_rules(grids[i] if i < len(grids) else {}) for i, k in enumerate(keys)}
+    # 고객 줄이 아직 없는 새 시트는 드롭다운이 걸린 칸이 없을 수 있다 — 금융사는 기존 시트가
+    # 가리키는 '고객센터' 탭 목록(='고객센터'!$A$3:$A$30)을 대신 본다(탭이 없으면 그냥 넘어간다)
+    if not rules.get("finance"):
+        rules["finance"] = [("range", FINANCE_FALLBACK)]
+    # 다른 범위를 가리키는 목록은 한 번에 읽는다
+    refs = sorted({ref for rs in rules.values() for kind, ref in rs if kind == "range"})
+    ref_vals: dict = {}
+    if refs:
+        r2 = _http().get(config.SHEETS_BATCH_GET_URL.format(sheet_id=sheet_id), headers=_headers(auth),
+                         timeout=30, params=[("ranges", _range_a1(x, sheet_name)) for x in refs]
+                         + [("valueRenderOption", "FORMATTED_VALUE")])
+        if r2.status_code == 200:
+            for ref, vr in zip(refs, (r2.json() or {}).get("valueRanges", []) or []):
+                ref_vals[ref] = [str(c).strip() for row in vr.get("values", []) or [] for c in row if str(c).strip()]
+        elif len(refs) > 1:
+            # 하나라도 없는 탭이면 통째로 400 — 하나씩 다시(없는 것만 빠진다)
+            for ref in refs:
+                r3 = _http().get(config.SHEETS_BATCH_GET_URL.format(sheet_id=sheet_id), headers=_headers(auth),
+                                 timeout=20, params=[("ranges", _range_a1(ref, sheet_name)),
+                                                     ("valueRenderOption", "FORMATTED_VALUE")])
+                if r3.status_code == 200:
+                    vrs = (r3.json() or {}).get("valueRanges", []) or [{}]
+                    ref_vals[ref] = [str(c).strip() for row in vrs[0].get("values", []) or []
+                                     for c in row if str(c).strip()]
+    out = {}
+    for k, rs in rules.items():
+        got: list = []
+        for kind, val in rs:
+            for x in (val if kind == "list" else ref_vals.get(val, [])):
+                if x not in got:
+                    got.append(x)
+        if got:
+            out[k] = got
+    return out
+
+
+def merge_choices(used: dict, drops: dict) -> dict:
+    """시트 값에서 뽑은 후보(자주 쓴 순) 뒤에 드롭다운에만 있는 값을 드롭다운 차례대로 붙인다."""
+    out = {k: list(v) for k, v in (used or {}).items()}
+    for k, vals in (drops or {}).items():
+        cur = out.setdefault(k, [])
+        for x in vals:
+            if x not in cur:
+                cur.append(x)
+    return out
+
+
 def choices(rows: list[CustomerRow]) -> dict:
     """기존 데이터에서 콤보박스 후보를 모은다(하드코딩하지 않기 위해)."""
     res: dict = {}
@@ -893,7 +1010,8 @@ def last_customer_row(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> int:
 
 
 def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-               values: dict, last_row: int, seq: str = "", uid: str = "") -> int:
+               values: dict, last_row: int, seq: str = "", uid: str = "",
+               header_row: int = 0) -> int:
     """맨 아래에 고객 한 줄 추가. 새 행 번호를 반환.
 
     순서: (1) 직전 행의 서식·드롭다운·수식 복사 → (2) 직접기재 칸 + 순번 기록.
@@ -908,12 +1026,15 @@ def append_row(auth: GoogleAuth, sheet_id: str, sheet_name: str,
         # 덮어쓴다. 쓰기 직전에 실제 마지막 줄을 다시 본다.
         last_row = max(last_row, last_customer_row(auth, sheet_id, sheet_name))
         new_row = last_row + 1
-        try:
-            gid = _sheet_gid(auth, sheet_id, sheet_name)
-            _copy_row_style(auth, sheet_id, gid, last_row, new_row)
-        except Exception:
-            # 서식/수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
-            pass
+        # 고객이 아직 없는 새 시트 — 직전 줄이 머리글이다. 머리글 서식(굵은 글씨·색)을 첫 고객
+        # 줄에 덮어쓰면 그 줄에 미리 걸어 둔 드롭다운·수식이 지워지므로 복사하지 않는다(v1.28.4).
+        if not (header_row and last_row <= header_row):
+            try:
+                gid = _sheet_gid(auth, sheet_id, sheet_name)
+                _copy_row_style(auth, sheet_id, gid, last_row, new_row)
+            except Exception:
+                # 서식/수식 복사가 안 되어도(권한/구조 문제) 값 입력은 진행한다
+                pass
         extra = {0: seq} if seq else None   # A열 순번 (수식이면 seq="" 라 건너뜀)
         _write_cells(auth, sheet_id, sheet_name, new_row, values, extra)
         if uid:

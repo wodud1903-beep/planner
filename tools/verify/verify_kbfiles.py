@@ -380,6 +380,7 @@ trashed = []
 kb_files.trash = lambda auth, ids: trashed.extend(ids)
 KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None, select=None: (
     [{"title": "신한 전자약정", "files": [att]}],           # P1·Z9 를 뺐다
+    [],                                                    # 내 계정에서만 고친 것(v1.29)
     [{"title": "내 자료", "files": []}]))                   # att2 를 뺐다
 tab._edit()
 pump(20)
@@ -440,7 +441,7 @@ real_rr = kb_files.rename_remote
 kb_files.rename_remote = lambda auth, fid, name: renamed_remote.append((fid, name)) or True
 KbEditDialog.run = classmethod(lambda cls, account="", parent=None, auth=None, select=None: (
     setattr(cls, "last_renamed", [(up["id"], "신분증 사본.png")]) or
-    ([], [{"title": "이름 시험", "files": [dict(up, name="신분증 사본.png")]}])))
+    ([], [], [{"title": "이름 시험", "files": [dict(up, name="신분증 사본.png")]}])))
 tab2 = KbTab()
 tab2.set_auth(A)
 tab2._edit()
@@ -776,8 +777,9 @@ ok("내 메모 — 묶음도 바꿔서 그 자료", d8.ed_title.text() == "내 �
 d8.reject()
 d9 = KbEditDialog("staff@x", None, auth=A,
                   select={"source": kb.SRC_SHARED, "title": "메리츠캐피탈"})
-ok("관리자가 아니면 공통 자료는 못 고치니 내 메모 맨 위", d9.ed_title.text() == "개인 심사서류",
-   d9.ed_title.text())
+ok("관리자가 아니면 공통 자료는 '내 계정에서만 고침' 묶음에서 그 자료(v1.29)",
+   d9.ed_title.text() == "메리츠캐피탈" and d9.cmb_src.currentData() == kb.SRC_LOCAL,
+   (d9.ed_title.text(), d9.cmb_src.currentData()))
 d9.reject()
 d10 = KbEditDialog("admin@x", None, auth=A, select={"source": kb.SRC_SHARED, "title": "없는 자료"})
 ok("못 찾으면 맨 위", d10.lst.currentRow() == 0)

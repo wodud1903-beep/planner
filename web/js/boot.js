@@ -53,7 +53,7 @@ paintState();
 // [다시 로그인] 이 끝나면 — 새로고침 없이 보던 화면의 자료만 다시 받는다
 addEventListener("planner:reauthed", async () => {
   paintState();
-  if (await pullSettings()) await cust.loadSettings();
+  if (await pullSettings(true)) await cust.loadSettings();
   for (const m of [kbui, cust, docs, agenda, calc]) {
     try { m.load(); } catch (e) { /* 하나가 탈나도 나머지는 받는다 */ }
   }
@@ -139,7 +139,7 @@ router.on(/^\/docs$/, () => docs.screen(null));
   setTimeout(async () => {
     await auth.token();                 // 조용한 시도 (실패해도 화면은 그대로)
     paintState();
-    if (await pullSettings()) await cust.loadSettings();
+    if (await pullSettings(true)) await cust.loadSettings();   // PC 에서 바꾼 시트·폴더도 따라간다
     kbui.load();
     cust.load();
     docs.load();
@@ -173,22 +173,26 @@ function tellAuth(flag) {
   if (say) toast(say[0], say[1]);
 }
 
-/** 새로 채운 것이 있으면 true. */
-async function pullSettings() {
+/** 계정의 설정(PC 앱 · 웹앱 중 나중에 바꾼 것)으로 이 기기를 맞춘다. 바뀐 것이 있으면 true.
+ *
+ * force=false(첫 화면 전): 이 기기에 없는 것만 채운다 — 이미 있으면 통신 없이 바로 넘어간다.
+ * force=true(화면이 뜬 뒤): 이미 있어도 계정 것과 다르면 바꾼다(v1.29) — PC 에서 시트·서류 폴더를
+ *   바꾸면 웹도 로그인만 돼 있으면 따라온다. 예전엔 한 번 채우면 다시 보지 않아 따로 설정해야 했다. */
+async function pullSettings(force = false) {
   try {
     const have = await store.get("meta", "sheet");
     const folder = await store.get("meta", "driveFolder");
-    if (have && have.id && folder) return false;   // 이 기기에 이미 다 있다
+    if (!force && have && have.id && folder) return false;   // 이 기기에 이미 다 있다
     if (auth.state() !== auth.STATE.AUTHED) return false;
     const got = await appdata.loadSettings();
     if (!got) return false;
     let changed = false;
-    if ((!have || !have.id) && got.sheetId) {
-      await store.put("meta", "sheet",
-                      { id: got.sheetId, tab: got.sheetTab || "미출고차량" });
+    const tab = got.sheetTab || "미출고차량";
+    if (got.sheetId && (!have || have.id !== got.sheetId || (have.tab || "미출고차량") !== tab)) {
+      await store.put("meta", "sheet", { id: got.sheetId, tab });
       changed = true;
     }
-    if (!folder && got.driveFolder) {
+    if (got.driveFolder && folder !== got.driveFolder) {
       await store.put("meta", "driveFolder", got.driveFolder);
       changed = true;
     }
