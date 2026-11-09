@@ -32,7 +32,7 @@ from . import (
     account_settings, alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
     customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheet_cache, sheets, sync,
+    google_client, hotkey, kb, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_cache, sheets, sync,
     theme, updater, weekly,
 )
 from .update_progress import UpdateProgress
@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
     sig_acct_pushed = Signal(str)      # 시트·서류 폴더를 계정 설정에 올림 (오류, ""=성공) — v1.30
     sig_kb_pushed = Signal(str, object, bool)   # 내 계정에서 고친 자료 맞춤 (오류, 받은 제목들, 알릴지) — v1.30
+    sig_otp = Signal(object, str)      # 휴대폰 인증번호 — 새로 온 것 [{code, sender, body}], 오류 (v1.31)
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
     sig_upd_progress = Signal(object, object)   # 업데이트 받는 중 (받은 바이트, 전체) — 진행 창(v1.27)
     sig_upd_stage = Signal(str)                 # 업데이트 단계 ("apply" = 다 받고 바꾸는 중)
@@ -323,6 +324,7 @@ class MainWindow(QMainWindow):
         self.sig_synced.connect(self._on_synced)
         self.sig_acct_pushed.connect(self._on_acct_pushed)
         self.sig_kb_pushed.connect(self._on_kb_pushed)
+        self.sig_otp.connect(self._on_otp)
         self.sig_update.connect(self._on_update_checked)
         self.sig_upd_progress.connect(self._on_upd_progress)
         self.sig_upd_stage.connect(self._on_upd_stage)
@@ -355,6 +357,14 @@ class MainWindow(QMainWindow):
         self._kb_poll = QTimer(self)
         self._kb_poll.timeout.connect(lambda: self._push_kb_edits(announce=False))
         self._kb_poll.start(2 * 60 * 1000)
+        # 휴대폰 인증번호 — MacroDroid 가 쌓는 시트 맨 위를 4초마다 본다(v1.31, otp.py · 설정에서 켠다)
+        self._otp = otp.Watcher()
+        self._otp_busy = False
+        self._otp_skip = 0
+        self._otp_errs = 0
+        self._otp_timer = QTimer(self)
+        self._otp_timer.timeout.connect(self._poll_otp)
+        self._otp_timer.start(otp.POLL_MS)
 
         # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
         self._task_refetch_timer = QTimer(self)
@@ -3237,6 +3247,46 @@ class MainWindow(QMainWindow):
         self._kb_again = False
         if again and err != "offline":
             QTimer.singleShot(300, lambda: self._push_kb_edits(announce=True))
+
+    # ---- 휴대폰 인증번호(v1.31) ----
+    def _poll_otp(self):
+        s = self.settings
+        sid = str(getattr(s, "otp_sheet", "") or "").strip()
+        if not getattr(s, "otp_on", False) or not sid:
+            self._otp.reset()                # 다시 켜면 그때 있던 것은 '본 것' 으로
+            return
+        if self._otp_busy or not self.gauth.is_connected() or not self._account_verified:
+            return
+        if self._otp_skip > 0:               # 방금 못 읽었다 — 조금 쉬었다가
+            self._otp_skip -= 1
+            return
+        self._otp_busy = True
+        tab = str(getattr(s, "otp_tab", "") or "").strip()
+
+        def worker():
+            items, err = [], ""
+            try:
+                items = self._otp.poll(self.gauth, sid, tab)
+            except Exception as e:
+                err = (str(e).splitlines() or ["error"])[0][:160] or "error"
+            self.sig_otp.emit(items, err)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_otp(self, items, err: str):
+        self._otp_busy = False
+        if err:
+            self._otp_skip = otp.BACKOFF_TICKS
+            self._otp_errs += 1
+            if self._otp_errs == 3:          # 계속 못 읽으면 한 번만 알린다
+                self.lbl_status.setText("인증문자 시트를 읽지 못했습니다 — [설정] 의 시트 주소·로그인 계정을 확인하세요")
+                self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
+            return
+        self._otp_errs = 0
+        copy = bool(getattr(self.settings, "otp_copy", True))
+        for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
+            if copy:
+                QApplication.clipboard().setText(it["code"])
+            otp_popup.show(it, copied=copy)
 
     def _on_acct_pushed(self, err: str):
         if not err:

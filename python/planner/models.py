@@ -294,6 +294,12 @@ class AppSettings:
     # 나중에 바꾼 것을 덮지 않으려고 항목별로 남긴다. 옛 설정 파일엔 없다("").
     sheet_at: str = ""
     folder_at: str = ""
+    # 휴대폰 인증번호 받기(v1.31, otp.py) — MacroDroid 가 문자를 쌓는 구글 시트를 몇 초마다 본다.
+    # 시트 주소는 사람마다 다르다(공개 저장소에 적지 않는다).
+    otp_on: bool = False
+    otp_sheet: str = ""
+    otp_tab: str = ""
+    otp_copy: bool = True
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
     # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
@@ -347,6 +353,10 @@ class AppSettings:
             "filesDriveFolder": self.files_drive_folder,
             "sheetAt": self.sheet_at,
             "folderAt": self.folder_at,
+            "otpOn": bool(self.otp_on),
+            "otpSheet": self.otp_sheet,
+            "otpTab": self.otp_tab,
+            "otpCopy": bool(self.otp_copy),
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
@@ -425,6 +435,10 @@ class AppSettings:
                                 or drive_path.CUSTOMER_DIR)
         s.sheet_at = str(o.get("sheetAt", "") or "")
         s.folder_at = str(o.get("folderAt", "") or "")
+        s.otp_on = bool(o.get("otpOn", False))
+        s.otp_sheet = str(o.get("otpSheet", "") or "")
+        s.otp_tab = str(o.get("otpTab", "") or "")
+        s.otp_copy = bool(o.get("otpCopy", True))
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")
