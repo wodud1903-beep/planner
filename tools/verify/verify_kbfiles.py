@@ -332,7 +332,7 @@ ok("못 받으면 멈추고 알린다", "받지 못" in view.lbl_status.text()
    and len([c for c in F.calls if "NOPE" in c[1]]) == n, view.lbl_status.text())
 
 print("\n[8] 편집 창 — 붙여 넣고, [저장] 때 올리고, 실패하면 닫지 않는다")
-config.is_rates_admin = lambda e: True
+config.is_kb_admin = config.is_rates_admin = lambda e: True
 kb.save_mine([{"title": "내 자료", "body": "", "files": [att2]}])
 d = KbEditDialog("admin@x", None, auth=A)
 d.show()
@@ -404,7 +404,7 @@ ok("못 쓰는 글자는 _", kb_files.fix_name('신분증:앞/뒤', "a.png") == 
 ok("비면 바꾸지 않는다", kb_files.fix_name("  ", "a.png") == "")
 up = kb_files.upload(A, png_bytes("#123456"), "붙여넣은 그림 1026_101500.png", public=False)
 kb.save_mine([{"title": "이름 시험", "body": "", "files": [up]}])
-config.is_rates_admin = lambda e: False
+config.is_kb_admin = config.is_rates_admin = lambda e: False
 d2 = KbEditDialog("me@x", None, auth=A)
 d2.show()
 d2.lst.setCurrentRow(0)
@@ -728,7 +728,7 @@ kb.save_shared([{"category": "캐피탈", "title": "메리츠캐피탈", "body":
                 {"category": "캐피탈", "title": "가 먼저", "body": "나"}])
 kb.save_mine([{"category": "심사서류", "title": "개인 심사서류", "body": "다"},
               {"category": "기타", "title": "내 메모 둘", "body": "라"}])
-config.is_rates_admin = lambda a: a == "admin@x"
+config.is_kb_admin = config.is_rates_admin = lambda a: a == "admin@x"
 d6 = KbEditDialog("admin@x", None, auth=A)
 d6.show()
 pump(10)
