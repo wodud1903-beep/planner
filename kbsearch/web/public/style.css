@@ -326,3 +326,45 @@ dialog input:focus, dialog textarea:focus { border-color: var(--accent); box-sha
   #btn-admin span { display: none; }
   #btn-admin { padding: 0 12px; }
 }
+
+/* 홈 화면 앱 설치 띠(폰에서 처음 열 때 — 닫으면 다시 안 뜬다) */
+.installbar {
+  display: flex; align-items: center; gap: 12px; flex: none;
+  margin: 0 12px 10px; padding: 10px 8px 10px 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow);
+}
+.installbar img { border-radius: 10px; flex: none; }
+.installbar p { margin: 0; flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.45; }
+.installbar p b { display: block; font-size: 14px; }
+.installbar p span { color: var(--sub); }
+.ibclose { border: 0; background: none; padding: 6px; color: var(--faint); flex: none; border-radius: 8px; }
+.ibclose:hover { background: var(--hover); }
+.ibclose svg { width: 18px; height: 18px; display: block; }
+
+/* 내 메모(PC·일정관리기 — 웹은 보기만) */
+.chips button.mine { border-color: #BFE7E1; color: #0F766E; }
+.chips button.mine[aria-pressed="true"] { background: #E0F5F2; color: #0F766E; }
+.minepill {
+  font-style: normal; font-size: 11px; font-weight: 700; line-height: 1.6;
+  color: #0F766E; background: #E0F5F2; border-radius: 999px; padding: 0 7px; margin-left: 6px;
+}
+.tag.mine { background: #E0F5F2; color: #0F766E; }
+.note.mine { background: #EEF8F6; color: #0F5C55; border-color: #CDEBE6; }
+.att .noimg { display: grid; place-items: center; height: 100%; color: var(--faint); font-size: 13px; font-weight: 600; }
+.vfail { display: grid; gap: 14px; justify-items: center; text-align: center; color: var(--sub); font-size: 14px; }
+.vfail p { margin: 0; line-height: 1.6; }
+
+/* 카톡으로 보내기 */
+#sharedlg { padding: 24px; }
+#sharedlg[open] { display: grid; gap: 16px; }
+.dlg-icon.share { background: #FEF6D8; color: #8A5A00; }
+.shareopts { gap: 10px; }
+.shareopt {
+  display: grid; gap: 2px; width: 100%; text-align: left; padding: 13px 16px;
+  border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--card);
+  transition: background .12s, border-color .12s;
+}
+.shareopt:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); }
+.shareopt:disabled { opacity: .55; cursor: default; }
+.shareopt b { font-size: 15px; }
+.shareopt span { font-size: 12.5px; color: var(--sub); }

@@ -1,5 +1,7 @@
 // 업무자료검색 웹 — 회사 공통 자료를 로그인 없이 검색 + 관리자 서버 on/off.
 // 공통 자료를 **이 기기에서만** 고칠 수 있다(팩스번호·내 연락처 등 — PC 의 '이 PC 에서 고침' 과 같다).
+// 폰: 홈 화면에 앱으로 설치(sw.js — 인터넷이 끊겨도 받아 둔 자료) · [카톡으로 보내기] ·
+//     구글 로그인하면 PC·일정관리기의 '내 메모' 도 본다(보기만).
 // 검색·본문 모양은 일정관리기 폰 웹앱의 kb.js · hangul.js 를 그대로 쓴다(초성 검색 포함).
 //
 // 첫 화면을 빨리:
@@ -99,15 +101,70 @@ function markDead(key, on) {
   saveDead(d);
 }
 
-/** 고친 것을 다시 덮어 그리고, 보던 자료를 다시 보여 준다. */
+// ------------------------------------------------------------------ 내 메모(보기만)
+// PC 업무자료검색·일정관리기의 '내 메모' — 구글 동기화로 로그인하면 내 드라이브 앱 공간의 동기화
+// 묶음에서 메모 칸만 읽어 온다(sync.readMemos). 웹에서는 고치지 않는다 — 그 묶음에 일정관리기
+// 할일·고객메모가 함께 있어서 잘못 쓰면 일정관리기 자료가 다친다. 인터넷이 끊겨도 보도록 이
+// 브라우저에 받아 두고, 로그아웃하거나 다른 계정으로 바꾸면 지운다.
+const MINE_KEY = "kbsearch:mine:v1";
+const MINE_CAT = "__mine__";           // 분류 칩 '내 메모'
+function readMine() {
+  try {
+    const o = JSON.parse(localStorage.getItem(MINE_KEY) || "null");
+    return o && Array.isArray(o.items) ? o : null;
+  } catch (e) { return null; }
+}
+/** 지금 로그인한 계정의 메모만(받아 둔 것이 다른 계정 것이면 안 보인다). */
+function loadMine() {
+  const o = readMine();
+  return o && o.email && o.email === savedAcct() ? o.items : [];
+}
+function saveMine(email, list, stamp = "") {
+  try { localStorage.setItem(MINE_KEY, JSON.stringify({ email, items: list, stamp, at: Date.now() })); } catch (e) { /* 꽉 참 */ }
+}
+function dropMine() {
+  try { localStorage.removeItem(MINE_KEY); } catch (e) { /* 무시 */ }
+}
+const mineView = () => loadMine().map((it, i) => ({ ...it, _mine: true, _key: [MINE_CAT, i] }));
+/** 화면 목록 — 회사 자료(이 기기에서 고친 것을 덮은) + 내 메모. */
+const buildItems = () => merged(shared).concat(mineView());
+
+// 주소 끝(#…)으로 보던 자료를 다시 연다 — 내 메모는 'm:' 를 붙여 같은 제목의 회사 자료와 가른다
+const hashOf = (it) => (it._mine ? "m:" : "") + (it.title || "");
+function findByHash(h) {
+  if (!h) return -1;
+  if (h.startsWith("m:")) return items.findIndex((it) => it._mine && it.title === h.slice(2));
+  const i = items.findIndex((it) => !it._mine && it.title === h);
+  return i >= 0 ? i : items.findIndex((it) => it.title === h);
+}
+
+/** 고친 것을 다시 덮어 그리고, 보던 자료를 다시 보여 준다(없어졌으면 첫 화면으로). */
 function remerge(key) {
-  items = merged(shared);
+  items = buildItems();
   idx = kb.index(items);
+  if (cat === MINE_CAT && !items.some((it) => it._mine)) cat = "";
   paintCats();
   paintList();
   paintFoot();
   const i = key ? items.findIndex((x) => keyStr(x._key) === keyStr(key)) : -1;
   if (i >= 0) show(i, false);
+  else if (key) hideDetail();
+}
+
+const HELLO = $("#detail").innerHTML;       // 아무것도 안 고른 첫 화면
+function hideDetail() {
+  cur = -1;
+  $("#split").classList.remove("detail");
+  $("#detail").innerHTML = HELLO;
+}
+
+/** 동기화 뒤 — 고치는 중이면 고치는 칸은 그대로 두고 목록만 새로. */
+function rebuild() {
+  if ($("#ed-body")) {
+    items = buildItems(); idx = kb.index(items); paintCats(); paintList(); paintFoot();
+    return;
+  }
+  remerge(cur >= 0 && items[cur] ? items[cur]._key : null);
 }
 
 // ------------------------------------------------------------------ 자료 받기
@@ -120,20 +177,22 @@ function setFoot(text, kind = "") {
   $("#foot-text").textContent = text;
 }
 
-let footAt = "", footCache = false;
+let footAt = "", footCache = false, footOffline = false;
 function paintFoot() {
-  const t = timeText(footAt), n = localCount();
-  setFoot(`회사 공통 자료 ${shared.length}건` + (n ? ` · 이 기기에서 고친 것 ${n}건` : "")
-          + (footCache ? " · 새로 받는 중…" : t ? ` · ${t} 받음` : ""), footCache ? "" : "live");
+  const t = timeText(footAt), n = localCount(), m = loadMine().length;
+  const tail = footOffline ? ` · 인터넷이 끊겨 받아 둔 자료${t ? `(${t} 받음)` : ""}`
+             : footCache ? " · 새로 받는 중…" : t ? ` · ${t} 받음` : "";
+  setFoot(`회사 공통 자료 ${shared.length}건` + (m ? ` · 내 메모 ${m}건` : "")
+          + (n ? ` · 이 기기에서 고친 것 ${n}건` : "") + tail, footOffline ? "bad" : footCache ? "" : "live");
 }
 
 function setItems(list, at, fromCache) {
   const painted = items.length > 0;
   const same = painted && JSON.stringify(list) === JSON.stringify(shared);
   // 보던 자료는 새 목록에서도 제목으로 다시 찾는다(바꾸기 **전에** 적어 둔다)
-  const keep = cur >= 0 ? (items[cur] || {}).title : decodeURIComponent(location.hash.slice(1));
+  const keep = cur >= 0 && items[cur] ? hashOf(items[cur]) : decodeURIComponent(location.hash.slice(1));
   shared = list;
-  items = merged(list);
+  items = buildItems();
   idx = kb.index(items);
   footAt = at;
   footCache = fromCache;
@@ -143,7 +202,7 @@ function setItems(list, at, fromCache) {
   paintCats();
   paintList();
   if (keep) {
-    const i = items.findIndex((it) => it.title === keep);
+    const i = findByHash(keep);
     if (i >= 0) show(i, false);
   }
 }
@@ -160,10 +219,16 @@ async function load(boot) {
     return showOff((st && st.on === false ? st.message : res.j.message) || "");
   }
   if (res.status !== 200 || !Array.isArray(res.j.items)) {
+    if (res.status === 0 && items.length) {        // 인터넷이 끊겼다 — 받아 둔 자료를 그대로 쓴다
+      footOffline = true; footCache = false;
+      paintFoot();
+      return;
+    }
     if (!items.length) paintList();
     setFoot(res.status === 0 ? "인터넷 연결을 확인해 주세요." : (res.j.error || "자료를 받지 못했습니다."), "bad");
     return;
   }
+  footOffline = false;
   showOn();
   writeCache(res.j.items, res.j.at);
   setItems(res.j.items, res.j.at, false);
@@ -187,12 +252,15 @@ function paintSkeleton() {
 
 function paintCats() {
   const count = (c) => items.filter((it) => (it.category || "") === c).length;
+  const mineN = items.filter((it) => it._mine).length;
   const used = kb.CATEGORIES.filter((c) => count(c));
   const extra = [...new Set(items.map((it) => it.category || "").filter((c) => c && !used.includes(c)))];
-  const cats = ["", ...used, ...extra];
+  const cats = ["", ...(mineN ? [MINE_CAT] : []), ...used, ...extra];
+  const label = (c) => (c === MINE_CAT ? "내 메모" : c || "전체");
+  const num = (c) => (c === MINE_CAT ? mineN : c ? count(c) : items.length);
   $("#cats").innerHTML = cats.map((c) =>
-    `<button type="button" data-cat="${esc(c)}" aria-pressed="${c === cat}">${esc(c || "전체")}`
-    + `<span class="n">${c ? count(c) : items.length}</span></button>`).join("");
+    `<button type="button" data-cat="${esc(c)}" aria-pressed="${c === cat}"${c === MINE_CAT ? ' class="mine"' : ""}>${esc(label(c))}`
+    + `<span class="n">${num(c)}</span></button>`).join("");
   for (const b of $("#cats").querySelectorAll("button")) {
     b.onclick = () => { cat = b.dataset.cat; paintCats(); paintList(); };
   }
@@ -204,7 +272,7 @@ function paintList() {
     el.innerHTML = '<li class="empty-row">자료가 없습니다.</li>';
     return;
   }
-  const hits = kb.search(idx, q, cat);
+  const hits = cat === MINE_CAT ? kb.search(idx, q, "").filter((it) => it._mine) : kb.search(idx, q, cat);
   if (!hits.length) {
     el.innerHTML = '<li class="empty-row">찾는 자료가 없습니다.<br>다른 말이나 초성으로 찾아 보세요.</li>';
     return;
@@ -218,7 +286,8 @@ function paintList() {
       : "";
     return `<li><button type="button" class="row" data-i="${i}" aria-current="${i === cur}">
       <span class="av ${colorOf(it.category)}" aria-hidden="true">${esc(initial(it.category))}</span>
-      <span class="tx"><span class="t">${esc(it.title)}</span>${sub ? `<span class="s">${esc(sub)}</span>` : ""}</span>
+      <span class="tx"><span class="t">${esc(it.title)}</span>${sub || it._mine
+        ? `<span class="s">${esc(sub)}${it._mine ? '<i class="minepill">내 메모</i>' : ""}</span>` : ""}</span>
       ${clip}</button></li>`;
   }).join("");
   for (const b of el.querySelectorAll("button.row")) b.onclick = () => show(+b.dataset.i, true);
@@ -252,17 +321,20 @@ function show(i, push) {
         <div class="tags">
           ${it.category ? `<span class="tag ${colorOf(it.category)}">${esc(it.category)}</span>` : ""}
           ${fin ? `<span class="tag plain">${esc(fin)}</span>` : ""}
-          ${it._local ? `<span class="tag edited">${syncedHere(it) ? "공통 · 내 계정에서 고침" : "공통 · 이 기기에서 고침"}</span>`
-                      : '<span class="tag plain">회사 공통</span>'}
+          ${it._mine ? '<span class="tag mine">내 메모</span>'
+            : it._local ? `<span class="tag edited">${syncedHere(it) ? "공통 · 내 계정에서 고침" : "공통 · 이 기기에서 고침"}</span>`
+            : '<span class="tag plain">회사 공통</span>'}
         </div>
       </div>
     </div>
     ${it._stale ? '<p class="note">고친 뒤에 회사가 이 자료의 원본을 바꿨습니다. 새 원본을 보려면 [회사 자료로 되돌리기] 를 누르세요.</p>' : ""}
     ${it._orphan ? '<p class="note">회사 자료에서 없어졌거나 제목이 바뀐 자료입니다 — 이 기기에서 고친 것만 남아 있습니다.</p>' : ""}
+    ${it._mine ? '<p class="note mine">내 메모는 PC 업무자료검색·일정관리기에서 고칩니다. 웹에서는 보기만 합니다.</p>' : ""}
     <div id="bodybox">${kb.bodyToHtml(it.body || "")}</div>
     <div class="actions" id="acts">
       <button type="button" class="btn primary" id="copy" ${(it.body || "").trim() ? "" : "disabled"}>${COPY_ICON}<span>본문 복사</span></button>
-      <button type="button" class="btn ghost" id="edit">${EDIT_ICON}<span>수정</span></button>
+      ${canShare() ? `<button type="button" class="btn ghost" id="share" ${(it.body || "").trim() || sendable(it).length ? "" : "disabled"}>${SEND_ICON}<span>카톡으로 보내기</span></button>` : ""}
+      ${it._mine ? "" : `<button type="button" class="btn ghost" id="edit">${EDIT_ICON}<span>수정</span></button>`}
       ${it._local ? '<button type="button" class="btn ghost" id="revert">회사 자료로 되돌리기</button>' : ""}
     </div>
     ${files.length ? `<p class="sec">첨부 <span class="n">${files.length}</span></p><div class="atts">${files.map((f, k) => `
@@ -285,8 +357,13 @@ function show(i, push) {
     setTimeout(() => { copy.classList.remove("done"); copy.innerHTML = `${COPY_ICON}<span>본문 복사</span>`; }, 1400);
   };
   $("#back").onclick = () => history.back();
-  $("#edit").onclick = () => startEdit(i);
+  if ($("#edit")) $("#edit").onclick = () => startEdit(i);
   if ($("#revert")) $("#revert").onclick = () => revert(i);
+  if ($("#share")) $("#share").onclick = () => openShare(it, $("#share"));
+  // 그림을 못 받으면(내 메모의 내 드라이브 그림 · 인터넷 끊김) 깨진 그림 대신 이름 자리만
+  for (const im of $("#detail").querySelectorAll(".att img")) {
+    im.addEventListener("error", () => { im.replaceWith(Object.assign(document.createElement("span"), { className: "noimg", textContent: "그림" })); }, { once: true });
+  }
   // 크게 보기는 이 화면 안에서 — 드라이브 새 탭으로 가면 다음 첨부를 보려고 닫았다 열어야 했다
   for (const a of $("#detail").querySelectorAll("a[data-k]")) {
     a.onclick = (e) => {
@@ -295,13 +372,13 @@ function show(i, push) {
       openViewer(files, +a.dataset.k);
     };
   }
-  if (push) history.pushState({ i }, "", "#" + encodeURIComponent(it.title));
+  if (push) history.pushState({ i }, "", "#" + encodeURIComponent(hashOf(it)));
 }
 
 // ------------------------------------------------------------------ 이 기기에서 고치기
 function startEdit(i) {
   const it = items[i];
-  if (!it) return;
+  if (!it || it._mine) return;
   $("#bodybox").innerHTML = `
     <div class="editor">
       <label for="ed-body">본문 — 팩스번호·내 연락처처럼 나에게 맞게 고쳐 쓰세요</label>
@@ -315,17 +392,16 @@ function startEdit(i) {
     <button type="button" class="btn primary" id="ed-save">${CHECK_ICON}<span>저장</span></button>
     <button type="button" class="btn ghost" id="ed-cancel">취소</button>`;
   $("#ed-cancel").onclick = () => remerge(it._key);
-  $("#ed-save").onclick = () => saveEdit(i, ta.value);
+  $("#ed-save").onclick = () => saveEdit(it, ta.value);
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); remerge(it._key); }
-    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(i, ta.value); }
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(it, ta.value); }
   });
   ta.focus();
 }
 
-function saveEdit(i, text) {
-  const it = items[i];
-  if (!it) return;
+function saveEdit(it, text) {
+  if (!it || it._mine) return;
   const body = String(text || "").replace(/\r\n?/g, "\n").split("\n").map((l) => l.trimEnd()).join("\n").trim();
   const recs = loadLocal();
   const k = keyStr(it._key);
@@ -361,7 +437,7 @@ function revert(i) {
   markDead(it._key, true);
   if (sync.isSyncKey(it._key)) soonSync();
   if (it._orphan) {
-    items = merged(shared); idx = kb.index(items); paintCats(); paintList(); paintFoot();
+    items = buildItems(); idx = kb.index(items); paintCats(); paintList(); paintFoot();
     $("#split").classList.remove("detail");
     $("#detail").innerHTML = '<div class="hello"><h2>지웠습니다</h2><p>왼쪽 목록에서 다른 자료를 골라 주세요.</p></div>';
     cur = -1;
@@ -369,6 +445,124 @@ function revert(i) {
   }
   remerge(it._key);
 }
+
+// ------------------------------------------------------------------ 카톡으로 보내기
+// 폰의 '보내기' 화면(Web Share)을 연다 — 거기서 카카오톡을 고르면 된다. 글 · 그림 · PDF 는 따로 보낸다
+// (섞어서 넘기면 카톡이 보내기 목록에 안 뜨거나 하나만 받는 일이 있다). 첨부는 이 주소의 /api/file 이 회사
+// 첨부만 받아 준다(구글 드라이브 파일은 브라우저가 바로 못 받는다). 4MB 가 넘는 PDF 처럼 파일로 못
+// 보내는 첨부는 링크로 보낸다. 내 메모의 첨부는 내 드라이브에만 있어 보내지 않는다(받는 사람이 못 연다).
+const SEND_ICON = '<svg viewBox="0 0 24 24"><path d="M21 3 10.5 13.5"/><path d="M21 3l-6.5 18-4-7.5L3 9.5 21 3Z"/></svg>';
+const FILE_MAX = 4 * 1024 * 1024;
+// 폰·태블릿에서만 — 컴퓨터의 공유 창에는 카톡이 없을 수 있다(컴퓨터는 PC 프로그램 · [본문 복사])
+const canShare = () => typeof navigator.share === "function" && matchMedia("(pointer: coarse)").matches;
+const sendable = (it) => (it && !it._mine ? it.files || [] : []);
+const shdlg = $("#sharedlg");
+let shareItem = null, shareReady = null;
+
+function fileName(f, type) {
+  const base = String(f.name || "첨부").replace(/[\\/:*?"<>|]+/g, "_");
+  const ext = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
+                "application/pdf": ".pdf" }[type];
+  if (!ext) return base;
+  return /\.[a-z0-9]{2,5}$/i.test(base) ? base.replace(/\.[a-z0-9]{2,5}$/i, ext) : base + ext;
+}
+
+/** 첨부를 파일로 받아 둔다 → {imgs: 그림 파일, pdfs: PDF 파일, left: 파일로 못 보내 링크로 보낼 첨부} */
+async function prepFiles(list) {
+  const got = await Promise.all(list.map(async (f) => {
+    if (isPdf(f) && f.size > FILE_MAX) return { f, file: null };
+    try {
+      const r = await fetch(`/api/file?id=${encodeURIComponent(f.id)}`);
+      if (!r.ok) return { f, file: null };
+      const blob = await r.blob();
+      if (!blob.size || blob.size > FILE_MAX) return { f, file: null };
+      const type = blob.type || f.mime || "application/octet-stream";
+      return { f, file: new File([blob], fileName(f, type), { type }) };
+    } catch (e) { return { f, file: null }; }
+  }));
+  const ok = (files) => files.length && (typeof navigator.canShare !== "function" || navigator.canShare({ files }));
+  let imgs = got.filter((x) => x.file && x.file.type.startsWith("image/"));
+  let pdfs = got.filter((x) => x.file && !x.file.type.startsWith("image/"));
+  const left = got.filter((x) => !x.file).map((x) => x.f);
+  // 이 폰이 파일 보내기를 못 하면 그 묶음은 링크로
+  if (imgs.length && !ok(imgs.map((x) => x.file))) { left.push(...imgs.map((x) => x.f)); imgs = []; }
+  if (pdfs.length && !ok(pdfs.map((x) => x.file))) { left.push(...pdfs.map((x) => x.f)); pdfs = []; }
+  return { imgs: imgs.map((x) => x.file), pdfs: pdfs.map((x) => x.file), left };
+}
+
+const names = (files) => {
+  const n = files.map((f) => f.name);
+  return n.length > 2 ? `${n.slice(0, 2).join(", ")} 외 ${n.length - 2}개` : n.join(", ");
+};
+const linksText = (files) => files.map((f) => `${f.name}\n${view(f.id)}`).join("\n\n");
+
+function flash(btn, text) {
+  const html = btn.innerHTML;
+  btn.innerHTML = `<span>${esc(text)}</span>`;
+  setTimeout(() => { btn.innerHTML = html; }, 1600);
+}
+
+/** [카톡으로 보내기] — 첨부가 없으면 바로 글을, 있으면 무엇을 보낼지 고르는 창을 연다. */
+function openShare(it, btn) {
+  const files = sendable(it);
+  const body = String(it.body || "").trim();
+  if (!files.length) {
+    navigator.share({ text: body }).catch((e) => {
+      if (!e || e.name !== "AbortError") flash(btn, "보내지 못했습니다");
+    });
+    return;
+  }
+  shareItem = it;
+  shareReady = null;
+  const nImg = files.filter((f) => !isPdf(f)).length, nPdf = files.length - nImg;
+  $("#share-err").textContent = "";
+  $("#share-text").disabled = !body;
+  $("#share-text-sub").textContent = body ? "서류 목록·팩스번호 등 글" : "본문이 없습니다";
+  $("#share-imgs").hidden = !nImg;
+  $("#share-imgs").disabled = true;
+  $("#share-imgs-title").textContent = `그림 ${nImg}장 보내기`;
+  $("#share-imgs-sub").textContent = "준비 중…";
+  $("#share-pdfs").hidden = !nPdf;
+  $("#share-pdfs").disabled = true;
+  $("#share-pdfs-title").textContent = `PDF ${nPdf}개 보내기`;
+  $("#share-pdfs-sub").textContent = "준비 중…";
+  $("#share-links").hidden = true;
+  if (!shdlg.open) shdlg.showModal();
+  prepFiles(files).then((p) => {
+    if (shareItem !== it) return;                // 그새 다른 자료를 열었다
+    shareReady = p;
+    for (const [kind, got, n, unit] of [["imgs", p.imgs, nImg, "장"], ["pdfs", p.pdfs, nPdf, "개"]]) {
+      if (!n) continue;
+      $(`#share-${kind}`).disabled = !got.length;
+      $(`#share-${kind}-title`).textContent = `${kind === "imgs" ? "그림" : "PDF"} ${got.length || n}${unit} 보내기`;
+      $(`#share-${kind}-sub`).textContent = got.length ? names(got) : "파일로 못 보냅니다 — 아래 링크로 보내세요";
+    }
+    if (p.left.length) {
+      $("#share-links").hidden = false;
+      $("#share-links-sub").textContent = `${p.left.length}개 — 커서 파일로 못 보내는 첨부 등(받는 사람이 눌러서 엽니다)`;
+    }
+  });
+}
+
+/** 창 안의 단추 — 보내기 화면을 연다. 취소하면 창은 그대로(다른 것을 고를 수 있게). */
+async function sendFromDialog(data) {
+  $("#share-err").textContent = "";
+  try {
+    await navigator.share(data);
+    shdlg.close();
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    $("#share-err").textContent = e && e.name === "NotAllowedError"
+      ? "폰이 막았습니다 — 한 번 더 눌러 주세요." : "보내지 못했습니다 — " + ((e && e.message) || e);
+  }
+}
+$("#share-text").onclick = () => shareItem && sendFromDialog({ text: String(shareItem.body || "").trim() });
+$("#share-imgs").onclick = () => shareReady && shareReady.imgs.length && sendFromDialog({ files: shareReady.imgs });
+$("#share-pdfs").onclick = () => shareReady && shareReady.pdfs.length && sendFromDialog({ files: shareReady.pdfs });
+$("#share-links").onclick = () => shareReady && shareReady.left.length && sendFromDialog({ text: linksText(shareReady.left) });
+$("#share-close").onclick = () => shdlg.close();
+shdlg.addEventListener("click", (e) => { if (e.target === shdlg) shdlg.close(); });
+shdlg.addEventListener("close", () => { shareItem = null; shareReady = null; });
 
 // ------------------------------------------------------------------ 첨부 크게 보기
 // ◀ ▶ 단추 · 키보드 ← → · 폰은 옆으로 밀어서 같은 자료의 다른 첨부로 넘긴다. Esc 로 닫는다.
@@ -396,6 +590,14 @@ function viewAt(k) {
   stage.innerHTML = isPdf(f)
     ? `<iframe src="${pdfView(f.id)}" title="${esc(f.name)}" allow="autoplay"></iframe>`
     : `<img src="${thumb(f.id, 2000)}" alt="${esc(f.name)}">`;
+  const im = stage.querySelector("img");
+  if (im) {
+    im.addEventListener("error", () => {
+      stage.innerHTML = `<div class="vfail"><p>여기서 그림을 열지 못했습니다.<br>
+        (인터넷이 끊겼거나, 내 구글 드라이브에만 있는 그림입니다)</p>
+        <a class="btn ghost small" href="${view(f.id)}" target="_blank" rel="noopener">원본 열기</a></div>`;
+    }, { once: true });
+  }
   // 옆 그림을 미리 받아 둔다 — 넘길 때 기다리지 않게
   for (const n of [vfiles[k + 1], vfiles[k - 1]]) {
     if (n && !isPdf(n)) new Image().src = thumb(n.id, 2000);
@@ -422,8 +624,7 @@ vdlg.addEventListener("touchend", (e) => {
 });
 
 window.addEventListener("popstate", () => {
-  const want = decodeURIComponent(location.hash.slice(1));
-  const i = want ? items.findIndex((it) => it.title === want) : -1;
+  const i = findByHash(decodeURIComponent(location.hash.slice(1)));
   if (i >= 0) show(i, false);
   else $("#split").classList.remove("detail");
 });
@@ -444,7 +645,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-  if ($("#admin").open || vdlg.open) return;
+  if ($("#admin").open || vdlg.open || shdlg.open || sdlg.open) return;
   e.preventDefault();
   $("#q").focus();
   $("#q").select();
@@ -479,13 +680,21 @@ function paintSync() {
   $("#sync-label").textContent = syncing ? "동기화 중…" : "구글 동기화";
   const st = $("#sync-state");
   st.className = "state " + (who ? "on" : "off");
+  const nm = loadMine().length;
   st.innerHTML = who
-    ? `<div>${esc(who)}<small>${syncing ? "맞추는 중…" : lastSync ? `${esc(timeText(new Date(lastSync).toISOString()))} 에 맞췄습니다` : "로그인돼 있습니다"}</small></div>`
-    : "<div>로그인하지 않았습니다<small>PC 업무자료검색에서 쓰는 구글 계정으로 로그인하세요.</small></div>";
+    ? `<div>${esc(who)}<small>${syncing ? "맞추는 중…" : lastSync ? `${esc(timeText(new Date(lastSync).toISOString()))} 에 맞췄습니다` : "로그인돼 있습니다"}`
+      + `${nm ? ` · 내 메모 ${nm}건` : ""}</small></div>`
+    : "<div>로그인하지 않았습니다<small>PC 업무자료검색에서 쓰는 구글 계정으로 로그인하세요. 로그인하면 내 메모도 보입니다.</small></div>";
+  const kakao = !who && inKakao();
+  if (kakao) {
+    st.innerHTML = "<div>카카오톡 안에서는 구글 로그인이 막혀 있습니다<small>크롬·사파리로 열어 로그인해 주세요.</small></div>";
+  }
   $("#sync-err").textContent = syncMsg;
   $("#sync-err").classList.toggle("ok", !!syncMsg && !syncBad);
   $("#sync-go").hidden = !who;
   $("#sync-login").hidden = !!who;
+  $("#sync-login").textContent = kakao ? "다른 브라우저로 열기" : "구글 로그인";
+  $("#sync-switch").hidden = kakao;
   $("#sync-out").hidden = !who;
   $("#sync-go").disabled = syncing;
 }
@@ -498,44 +707,89 @@ function login(choose = false) {
   location.href = "/api/auth/login" + (p.toString() ? "?" + p : "");
 }
 
+/** 고친 심사서류 3종을 맞춘다. 그새 이 기기에서 또 고쳤으면 {retry} — 다음 번에 다시 한다. */
+async function syncEdits(t) {
+  const snap = () => JSON.stringify(loadLocal()) + JSON.stringify(loadDead());
+  const before = snap();
+  const got = await sync.readRemote(t);
+  if (snap() !== before) return { retry: true, changed: [] };
+  const m = sync.mergeEdits(loadLocal(), loadDead(), got.edits);
+  if (m.pushNeeded) await sync.writeRemote(t, got.fid, m.edits);
+  if (snap() !== before) return { retry: true, changed: [] };     // 올리는 사이에 고쳤다 — 덮지 않는다
+  saveLocal(m.recs);
+  saveDead(m.dead);
+  return { changed: m.changedTitles };
+}
+
+/** 내 메모를 받아 이 브라우저에 둔다(보기만). 묶음이 그대로면 내려받지 않는다. */
+async function syncMemos(t) {
+  const o = readMine();
+  const since = o && o.email === t.email ? String(o.stamp || "") : "";
+  const got = await sync.readMemos(t, since);
+  if (got.unchanged) return { changed: false, count: loadMine().length };
+  const before = JSON.stringify(loadMine());
+  saveMine(t.email, got.items, got.stamp);
+  return { changed: JSON.stringify(got.items) !== before, count: got.items.length };
+}
+
 /** 한 번 맞춘다. quiet=true 면 실패해도 창을 띄우지 않는다(저절로 맞출 때). */
 async function syncNow(quiet = false) {
   if (syncing) { syncAgain = true; return; }
   syncing = true; syncMsg = ""; syncBad = false;
   paintSync();
+  let out = false;
+  const signedOut = () => {                     // 로그인 전이거나 구글에서 권한을 뺐다
+    if (out) return;
+    out = true;
+    const had = savedAcct();
+    setAcct("");
+    if (readMine()) { dropMine(); rebuild(); }  // 그 계정의 메모를 남기지 않는다
+    if (had) { syncMsg = "로그인이 끝났습니다 — [구글 로그인] 을 다시 눌러 주세요."; syncBad = true; }
+  };
   try {
-    const signedOut = () => {                   // 로그인 전이거나 구글에서 권한을 뺐다
-      const had = savedAcct();
-      setAcct("");
-      if (had) { syncMsg = "로그인이 끝났습니다 — [구글 로그인] 을 다시 눌러 주세요."; syncBad = true; }
-    };
     let t = await sync.token();
     if (!t) { signedOut(); return; }
+    if (savedAcct() && t.email && t.email !== savedAcct()) { dropMine(); }   // 다른 계정 — 옛 계정 메모는 지운다
     setAcct(t.email);
     if ((t.missing || []).length) {
       syncMsg = "구글 동의 화면에서 권한 항목을 체크하지 않았습니다 — 다시 로그인해 모두 체크해 주세요.";
       syncBad = true;
       return;
     }
-    let got;
-    try { got = await sync.readRemote(t); } catch (e) {
-      if (!e.auth) throw e;
-      t = await sync.token(true);                 // 토큰이 막 끝났을 수 있다 — 한 번만 새로 받아 다시
-      if (!t) { signedOut(); return; }
-      got = await sync.readRemote(t);
+    // 토큰이 막 끝났을 수 있다 — 401 이면 한 번만 새로 받아 다시
+    const again = async (fn) => {
+      try { return await fn(t); } catch (e) {
+        if (!e.auth) throw e;
+        const t2 = await sync.token(true);
+        if (!t2) { signedOut(); return null; }
+        t = t2;
+        return fn(t2);
+      }
+    };
+    const [ed, me] = await Promise.allSettled([again(syncEdits), again(syncMemos)]);
+    if (out) return;
+    const msgs = [], errs = [];
+    let changed = false;
+    if (ed.status === "rejected") errs.push(ed.reason?.message || "고친 심사서류를 맞추지 못했습니다.");
+    else if (ed.value && ed.value.retry) syncAgain = true;
+    else if (ed.value && ed.value.changed.length) {
+      msgs.push(`PC 등에서 고친 ${ed.value.changed.join(" · ")} 을(를) 받았습니다.`);
+      changed = true;
     }
-    const before = JSON.stringify(loadLocal()) + JSON.stringify(loadDead());
-    const m = sync.mergeEdits(loadLocal(), loadDead(), got.edits);
-    if (JSON.stringify(loadLocal()) + JSON.stringify(loadDead()) !== before) { syncAgain = true; return; }  // 그새 고쳤다
-    if (m.pushNeeded) await sync.writeRemote(t, got.fid, m.edits);
-    saveLocal(m.recs);
-    saveDead(m.dead);
-    lastSync = Date.now();
-    syncMsg = m.changedTitles.length ? `PC 등에서 고친 ${m.changedTitles.join(" · ")} 을(를) 받았습니다.` : "맞췄습니다.";
-    if (m.changedTitles.length) {
-      const key = cur >= 0 && items[cur] ? items[cur]._key : null;
-      if ($("#ed-body")) { items = merged(shared); idx = kb.index(items); paintList(); paintFoot(); }  // 고치는 중이면 칸은 그대로
-      else remerge(key);
+    if (me.status === "rejected") errs.push("내 메모를 받지 못했습니다 — " + (me.reason?.message || ""));
+    else if (me.value) {
+      if (me.value.changed) changed = true;
+      msgs.push(`내 메모 ${me.value.count}건.`);
+    }
+    if (changed) rebuild();
+    else paintFoot();
+    if (errs.length) {
+      syncMsg = errs.join(" ");
+      syncBad = true;
+      if (!quiet && !sdlg.open) sdlg.showModal();
+    } else {
+      lastSync = Date.now();
+      syncMsg = (msgs.length === 1 && msgs[0].startsWith("내 메모") ? "맞췄습니다. " : "") + msgs.join(" ");
     }
   } catch (e) {
     syncMsg = e.message || "동기화하지 못했습니다.";
@@ -563,14 +817,15 @@ $("#btn-sync").onclick = () => {
   if (signedIn()) syncNow(false);
 };
 $("#sync-go").onclick = () => syncNow(false);
-$("#sync-login").onclick = () => login(false);
+$("#sync-login").onclick = () => { if (inKakao()) location.href = kakaoOut(); else login(false); };
 $("#sync-switch").onclick = () => login(true);
 $("#sync-out").onclick = async () => {
   if (!confirm("구글 로그아웃할까요?\n이 기기에서 고친 것은 그대로 남습니다.")) return;
   await sync.logout();
   setAcct(""); lastSync = 0; syncMsg = "로그아웃했습니다."; syncBad = false;
+  dropMine();                                   // 이 브라우저에 받아 둔 내 메모도 지운다
   paintSync();
-  if (cur >= 0) remerge(items[cur]._key);
+  rebuild();
 };
 $("#sync-close").onclick = () => sdlg.close();
 sdlg.addEventListener("click", (e) => { if (e.target === sdlg) sdlg.close(); });
@@ -598,6 +853,60 @@ function takeAuthFlag() {
   syncBad = true;
   return f;
 }
+
+// ------------------------------------------------------------------ 홈 화면 앱(설치)
+// 폰에서 처음 열면 위에 '홈 화면에 앱으로 설치' 띠를 띄운다(닫으면 다시 안 뜬다). 안드로이드 크롬은
+// [설치] 한 번으로, 아이폰·카톡 안 브라우저 등은 방법을 알려 준다. 인터넷 없이 열리는 것은 sw.js.
+const INSTALL_KEY = "kbsearch:install-dismissed:v1";
+let installEvt = null;
+// 카카오톡 안 브라우저 — 설치도, 구글 로그인도 안 된다(구글이 앱 안 브라우저의 로그인을 막는다).
+// 카톡이 알아듣는 주소로 바깥 브라우저(크롬·사파리)를 열어 준다.
+const inKakao = () => /KAKAOTALK/i.test(navigator.userAgent);
+const kakaoOut = () => "kakaotalk://web/openExternal?url=" + encodeURIComponent(location.origin + location.pathname + location.hash);
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isPhone = () => matchMedia("(max-width: 760px)").matches && matchMedia("(pointer: coarse)").matches;
+const installDismissed = () => { try { return localStorage.getItem(INSTALL_KEY) === "1"; } catch (e) { return false; } };
+function dismissInstall() {
+  try { localStorage.setItem(INSTALL_KEY, "1"); } catch (e) { /* 무시 */ }
+  paintInstall();
+}
+function paintInstall() {
+  $("#installbar").hidden = standalone() || installDismissed() || !isPhone();
+  if (inKakao()) {
+    $("#installbar p span").textContent = "카카오톡 안에서는 설치도 구글 로그인도 안 됩니다. 크롬·사파리로 열어 주세요.";
+    $("#install-go").textContent = "다른 브라우저로 열기";
+    $("#install-go").dataset.href = kakaoOut();
+  }
+}
+function installHow() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(ua)) return "아래쪽(또는 주소창 옆)의 [공유] 단추(네모에 위 화살표) → [홈 화면에 추가] → [추가] 를 누르세요.";
+  if (/SamsungBrowser/i.test(ua)) return "아래쪽 [≡] 메뉴 → [현재 페이지 추가] → [홈 화면] 을 누르세요.";
+  return "브라우저 오른쪽 위 [⋮] 메뉴 → [홈 화면에 추가] 또는 [앱 설치] 를 누르세요.";
+}
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();                          // 크롬이 제멋대로 띄우지 않게 — 우리 띠의 [설치] 로
+  installEvt = e;
+  paintInstall();
+});
+window.addEventListener("appinstalled", () => { installEvt = null; dismissInstall(); });
+$("#install-go").onclick = async () => {
+  if (inKakao()) { location.href = kakaoOut(); return; }
+  if (installEvt) {
+    const ev = installEvt;
+    installEvt = null;
+    try {
+      await ev.prompt();
+      const r = await ev.userChoice;
+      if (r && r.outcome === "accepted") dismissInstall();
+    } catch (e) { /* 이미 썼거나 막힘 */ }
+    paintInstall();
+    return;
+  }
+  $("#installbar p span").textContent = installHow();
+  $("#install-go").hidden = true;
+};
+$("#install-close").onclick = dismissInstall;
 
 // ------------------------------------------------------------------ 관리자 — 서버 on/off
 const dlg = $("#admin");
@@ -682,3 +991,14 @@ load(window.__boot).then(() => {
   if (authFlag === "ok") { if (!sdlg.open) sdlg.showModal(); syncNow(false); }
   else if (savedAcct()) syncNow(true);
 });
+// 인터넷이 다시 붙으면 새 자료를 받고 맞춘다
+window.addEventListener("online", () => {
+  load().then(() => { if (savedAcct()) syncNow(true); });
+});
+paintInstall();
+// 홈 화면 앱 · 인터넷 없이 열기 — 화면 파일을 받아 둔다(sw.js). 첫 화면을 늦추지 않게 다 뜬 뒤에.
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  const reg = () => navigator.serviceWorker.register("/sw.js").catch(() => { /* 사생활 보호 창 등 */ });
+  if (document.readyState === "complete") reg();
+  else window.addEventListener("load", reg, { once: true });
+}

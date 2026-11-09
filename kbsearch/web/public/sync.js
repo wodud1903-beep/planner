@@ -12,6 +12,11 @@
 // 로그인·토큰은 이 주소의 서버(api/auth/*)가 맡는다 — 화면 코드는 1시간짜리 토큰만 쓴다.
 export const SYNC_TITLES = ["개인 심사서류", "개인사업자 심사서류", "법인 심사서류"];
 export const EDITS_FILE = "kb_edits.json";
+// 내 메모 — 일정관리기·PC 업무자료검색의 드라이브 동기화 묶음. 웹은 **읽기만** 한다
+// (묶음에 일정관리기 할일·고객메모가 함께 들어 있어, 메모 칸만 꺼내고 나머지는 버린다).
+export const PLANNER_FILE = "planner_sync.json";
+const MINE_KEY = "kb_mine.json";
+const TOMBS_KEY = "deleted.json";
 const DRIVE = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
@@ -97,13 +102,20 @@ async function g(t, url, init = {}) {
   return r;
 }
 
+async function findMeta(t, name) {
+  const q = new URLSearchParams({ spaces: "appDataFolder", q: `name='${name}'`, fields: "files(id,modifiedTime)" });
+  const list = await (await g(t, `${DRIVE}?${q}`)).json();
+  const f = ((list && list.files) || [])[0];
+  return f && f.id ? { id: f.id, at: String(f.modifiedTime || "") } : null;
+}
+const findFile = async (t, name) => (await findMeta(t, name))?.id || null;
+const readFile = async (t, fid) => (await g(t, `${DRIVE}/${encodeURIComponent(fid)}?alt=media`)).text();
+
 /** 드라이브 파일 → {fid, edits}. 없으면 {fid:null, edits:{}}. **못 읽으면 throw — 그때는 쓰지 않는다.** */
 export async function readRemote(t) {
-  const q = new URLSearchParams({ spaces: "appDataFolder", q: `name='${EDITS_FILE}'`, fields: "files(id,modifiedTime)" });
-  const list = await (await g(t, `${DRIVE}?${q}`)).json();
-  const fid = ((list && list.files) || [])[0]?.id || null;
+  const fid = await findFile(t, EDITS_FILE);
   if (!fid) return { fid: null, edits: {} };
-  const text = await (await g(t, `${DRIVE}/${encodeURIComponent(fid)}?alt=media`)).text();
+  const text = await readFile(t, fid);
   let o;
   try { o = text.trim() ? JSON.parse(text) : {}; } catch (e) {
     throw new Error("드라이브의 고친 자료 파일이 깨져 있어 동기화를 멈췄습니다.");
@@ -125,4 +137,75 @@ export async function writeRemote(t, fid, edits) {
   const r = await g(t, `${UPLOAD}?uploadType=multipart&fields=id`, {
     method: "POST", headers: { "Content-Type": `multipart/related; boundary=${b}` }, body: multipart });
   return (await r.json()).id;
+}
+
+// ------------------------------------------------------------------ 내 메모(읽기만)
+function cleanFiles(files) {
+  const out = [];
+  for (const f of Array.isArray(files) ? files : []) {
+    if (!f || typeof f !== "object") continue;
+    const id = String(f.id || "").trim(), name = String(f.name || "").trim();
+    if (!id || !name || id.startsWith("local-")) continue;   // 아직 안 올린 첨부는 그 PC 에만 있다
+    out.push({ id, name, mime: String(f.mime || "").trim(), size: Math.max(0, parseInt(f.size, 10) || 0) });
+  }
+  return out;
+}
+
+/** 메모 한 건을 화면에 쓸 모양으로(PC kb._clean 과 같은 칸). 제목이 없으면 버린다. */
+export function cleanMemo(o) {
+  if (!o || typeof o !== "object") return null;
+  const title = String(o.title || "").trim();
+  if (!title) return null;
+  let checks = o.checklist || [];
+  if (typeof checks === "string") checks = checks.split("\n");
+  const it = {
+    category: String(o.category || "").trim(), finance: String(o.finance || "").trim(), title,
+    tags: String(o.tags || "").trim(),
+    body: String(o.body || "").split("\n").map((l) => l.trimEnd()).join("\n"),
+    checklist: (Array.isArray(checks) ? checks : []).map((c) => String(c).trim()).filter(Boolean),
+  };
+  const files = cleanFiles(o.files);
+  if (files.length) it.files = files;
+  if (o.at) it.at = String(o.at);
+  return it;
+}
+
+/**
+ * 동기화 묶음의 메모 칸 → 메모 목록. 지운 표식(deleted.json)보다 나중에 고치지 않은 메모는 뺀다
+ * (PC sync.drop_dead 와 같은 규칙). 묶음이 없으면 {items: [], found: false}.
+ */
+export function memosFromBundle(b) {
+  const files = (b && typeof b === "object" && b.files && typeof b.files === "object") ? b.files : {};
+  let raw = [];
+  try { raw = String(files[MINE_KEY] || "").trim() ? JSON.parse(files[MINE_KEY]) : []; } catch (e) { raw = []; }
+  let tombs = {};
+  try { tombs = String(files[TOMBS_KEY] || "").trim() ? JSON.parse(files[TOMBS_KEY]) : {}; } catch (e) { tombs = {}; }
+  const dead = (tombs && typeof tombs[MINE_KEY] === "object" && tombs[MINE_KEY]) || {};
+  const seen = new Set();
+  const out = [];
+  for (const o of Array.isArray(raw) ? raw : []) {
+    const it = cleanMemo(o);
+    if (!it || seen.has(it.title)) continue;
+    if (it.title in dead && String(it.at || "") <= String(dead[it.title] || "")) continue;
+    seen.add(it.title);
+    out.push(it);
+  }
+  return out;
+}
+
+/**
+ * 내 메모를 받는다. 못 읽으면 throw(받아 둔 것을 지우지 않게).
+ * since = 지난번에 받은 묶음의 고친 시각 — 그대로면 내려받지 않는다({unchanged}). 묶음에는 일정관리기
+ * 할일·고객메모 등이 함께 있어 클 수 있다(폰 데이터를 아낀다).
+ */
+export async function readMemos(t, since = "") {
+  const meta = await findMeta(t, PLANNER_FILE);
+  if (!meta) return { items: [], found: false, stamp: "" };
+  if (since && meta.at && meta.at === since) return { unchanged: true, stamp: since };
+  const text = await readFile(t, meta.id);
+  let b;
+  try { b = JSON.parse(text); } catch (e) {
+    throw new Error("드라이브의 동기화 묶음을 읽을 수 없습니다(모양이 깨짐).");
+  }
+  return { items: memosFromBundle(b), found: true, stamp: meta.at };
 }
