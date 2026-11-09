@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.28.2"
+APP_VERSION = "1.28.3"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -129,9 +129,19 @@ RATES_SHEET_ID = "1PSjqA7wvIBHusjYHFfD9cLKP-EbtdFrCkNqlZHz2jm0"
 # 직원이 실수로 바꾸지 못하도록 관리자 계정에서만 편집을 허용한다.
 RATES_ADMINS = ("wodud1903@gmail.com",)
 
+# 회사 공통 업무자료(자료검색 '회사 공통')를 고칠 수 있는 계정 — 수당율과 따로 둔다(v1.28.3).
+# 업무자료만 맡길 사람을 더할 수 있게(수당율 편집 권한은 주지 않는다). 업무자료검색 프로그램의
+# kbsearch/config.py KB_ADMINS 와 **같아야 한다**(검사가 대조한다).
+# ⚠️ 여기에 더한 계정은 '수당연동용' 구글 시트에 편집자로 공유돼 있어야 시트로 올릴 수 있다.
+KB_ADMINS = ("wodud1903@gmail.com", "qkrwlsgh7303@gmail.com")
+
 
 def is_rates_admin(email: str) -> bool:
     return (email or "").strip().lower() in RATES_ADMINS
+
+
+def is_kb_admin(email: str) -> bool:
+    return (email or "").strip().lower() in KB_ADMINS
 
 # 콜백 서버가 시도할 포트 범위 (델파이 원본과 동일)
 REDIRECT_PORT_RANGE = range(49200, 49231)

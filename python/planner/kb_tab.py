@@ -567,7 +567,7 @@ class KbTab(QWidget):
         self.view.search_for(query)
 
     def _edit(self) -> None:
-        admin = config.is_rates_admin(self.account)
+        admin = config.is_kb_admin(self.account)
         auth = self.view.auth
         before = _file_ids(kb.load_mine()) | (_file_ids(kb.load_shared()) if admin else set())
         # 보고 있던 자료가 바로 열리게(예전엔 늘 맨 위 자료부터 나왔다)
@@ -730,7 +730,7 @@ class KbEditDialog(QDialog):
         except Exception:
             self.resize(1000, 860)
         self.auth = auth
-        self.admin = config.is_rates_admin(account)
+        self.admin = config.is_kb_admin(account)
         self.shared = [dict(x) for x in kb.load_shared()]
         self.mine = [dict(x) for x in kb.load_mine()]
         self._cur = -1
