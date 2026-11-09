@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
+    account_settings, alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
     customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
     google_client, hotkey, kb, navicons, news, news_dialog, searchcombo, sheet_cache, sheets, sync,
@@ -152,6 +152,8 @@ class MainWindow(QMainWindow):
     sig_monthly = Signal(str, str, bool)   # 월 마감 시트 쓰기 끝 (YYYY-MM, 오류, 저절로였나)
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
     sig_synced = Signal(bool)          # Drive 동기화 완료(변경 여부)
+    sig_acct_pushed = Signal(str)      # 시트·서류 폴더를 계정 설정에 올림 (오류, ""=성공) — v1.30
+    sig_kb_pushed = Signal(str, object, bool)   # 내 계정에서 고친 자료 맞춤 (오류, 받은 제목들, 알릴지) — v1.30
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
     sig_upd_progress = Signal(object, object)   # 업데이트 받는 중 (받은 바이트, 전체) — 진행 창(v1.27)
     sig_upd_stage = Signal(str)                 # 업데이트 단계 ("apply" = 다 받고 바꾸는 중)
@@ -319,6 +321,8 @@ class MainWindow(QMainWindow):
         self.sig_account.connect(self._on_account_ready)
         self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
+        self.sig_acct_pushed.connect(self._on_acct_pushed)
+        self.sig_kb_pushed.connect(self._on_kb_pushed)
         self.sig_update.connect(self._on_update_checked)
         self.sig_upd_progress.connect(self._on_upd_progress)
         self.sig_upd_stage.connect(self._on_upd_stage)
@@ -347,6 +351,10 @@ class MainWindow(QMainWindow):
         self._sync_poll = QTimer(self)
         self._sync_poll.timeout.connect(lambda: self.sync_now_async(manual=False))
         self._sync_poll.start(10 * 60 * 1000)
+        # 내 계정에서 고친 자료(kb_edits.json)는 작아서 자주 본다 — 웹에서 고친 것이 2분 안에 온다(v1.30)
+        self._kb_poll = QTimer(self)
+        self._kb_poll.timeout.connect(lambda: self._push_kb_edits(announce=False))
+        self._kb_poll.start(2 * 60 * 1000)
 
         # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
         self._task_refetch_timer = QTimer(self)
@@ -1102,8 +1110,8 @@ class MainWindow(QMainWindow):
         self.tab_kb.set_auth(self.gauth)        # 첨부(그림·PDF) 올리기·받기
         self.tab_kb.on_changed = self._touch_sync
         self.tab_kb.on_push_shared = self._push_kb_shared
-        # 내 계정에서만 고친 회사 자료 — 곧 내 계정(kb_edits.json)으로 올린다(v1.29)
-        self.tab_kb.on_local_saved = self._touch_sync
+        # 내 계정에서만 고친 회사 자료 — 저장하는 그 자리에서 내 계정(kb_edits.json)으로 올린다(v1.30)
+        self.tab_kb.on_local_saved = self._on_kb_local_saved
         self.tabs.addTab(self.tab_kb, "자료검색")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
@@ -3110,13 +3118,20 @@ class MainWindow(QMainWindow):
         prev_files = (self.settings.files_dir.strip(),
                       self.settings.drive_api_on,
                       self.settings.files_drive_folder.strip())
+        prev_acct = account_settings.local_items(self.settings)
         dlg = SettingsDialog(self.gauth, self.settings, self,
                              account=getattr(self, 'account_email', ''),
                              on_backup=self.open_backup,
                              on_sync=lambda: self.sync_now_async(manual=True))
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
+            # 시트·서류 폴더를 바꿨으면 바꾼 때를 적고 **그 자리에서** 내 계정에 올린다(v1.30) —
+            # 같은 계정으로 로그인한 웹(jyplanner)이 바로 따라온다.
+            acct_changed = account_settings.stamp_changes(
+                self.settings, prev_acct, account_settings.local_items(self.settings))
             self._save_settings()
+            if acct_changed:
+                self._push_account_settings(announce=True)
             self._apply_hotkeys()
             self._apply_news_button()              # 뉴스 문서를 바꿨을 수 있다
             self.followup_tracker.last_scan = None  # 설정이 바뀌었으니 다시 스캔
@@ -3158,6 +3173,81 @@ class MainWindow(QMainWindow):
         elif accepted:
             # 설정만 바뀐 경우에도 팔로업 재스캔
             self._run_followups()
+
+    def _push_account_settings(self, announce: bool = False):
+        """시트·서류 폴더를 계정 설정 파일(account_settings.json)에 바로 올린다(v1.30).
+
+        못 올려도(로그인 전 · 인터넷 끊김) 다음 동기화 때 다시 올린다(sync._account_settings).
+        """
+        if not self.gauth.is_connected() or not self._account_verified:
+            if announce:
+                self.sig_acct_pushed.emit("offline")
+            return
+        snap = replace(self.settings)
+
+        def worker():
+            try:
+                account_settings.push(self.gauth, snap)
+                err = ""
+            except Exception as e:
+                err = str(e) or "error"
+            if announce:
+                self.sig_acct_pushed.emit(err)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_kb_local_saved(self):
+        """내 계정에서만 고친 회사 자료를 저장했다 → **그 자리에서** 내 계정(kb_edits.json)에 올린다(v1.30).
+        예전엔 2.5초 뒤 동기화 묶음을 다 올린 다음에야 올라가서, 그게 탈나면 웹에 영영 안 갔다."""
+        self._touch_sync()
+        self._push_kb_edits(announce=True)
+
+    def _push_kb_edits(self, announce: bool = False):
+        if not self.gauth.is_connected() or not self._account_verified:
+            if announce:
+                self.sig_kb_pushed.emit("offline", [], True)
+            return
+        if getattr(self, "_kb_pushing", False):
+            self._kb_again = getattr(self, "_kb_again", False) or announce   # 끝나면 한 번 더(방금 고친 것)
+            return
+        self._kb_pushing = True
+
+        def worker():
+            from . import kb_edits
+            changed, err = [], ""
+            try:
+                changed = kb_edits.sync(self.gauth) or []
+            except Exception as e:
+                err = str(e) or "error"
+            self.sig_kb_pushed.emit(err, changed, announce)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_kb_pushed(self, err: str, changed, announce: bool):
+        if err != "offline":
+            self._kb_pushing = False
+        if changed and hasattr(self, "tab_kb"):
+            self.tab_kb.reload()             # 웹·다른 PC 에서 고친 것을 받았다
+        if announce and hasattr(self, "tab_kb"):
+            if not err:
+                self.tab_kb.show_note("내 계정에 저장했습니다 — 웹·업무자료검색에도 바로 반영됩니다", "ok")
+            elif err == "offline":
+                self.tab_kb.show_note("저장했습니다 — 구글에 연결되면 내 계정에 올립니다", "sub")
+            else:
+                self.tab_kb.show_note("내 계정에 올리지 못했습니다 — 잠시 뒤 다시 올립니다", "bad")
+        again = getattr(self, "_kb_again", False)
+        self._kb_again = False
+        if again and err != "offline":
+            QTimer.singleShot(300, lambda: self._push_kb_edits(announce=True))
+
+    def _on_acct_pushed(self, err: str):
+        if not err:
+            self.lbl_status.setText("시트·서류 폴더를 내 계정에 저장했습니다 — 웹(jyplanner)에도 바로 반영됩니다")
+            self.lbl_status.setStyleSheet(f"color:{theme.c('status_ok')};")
+        elif err == "offline":
+            self.lbl_status.setText("저장했습니다 — 구글에 연결되면 내 계정(웹)에도 맞춥니다")
+            self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
+        else:
+            self.lbl_status.setText("내 계정에 올리지 못했습니다 — 다음 동기화 때 다시 올립니다")
+            self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
 
     def fetch_all_async(self):
         if not self.gauth.is_connected():

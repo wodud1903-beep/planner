@@ -2214,6 +2214,200 @@ console.log("\n[22] 옛 주소(github.io) → 새 주소로 옮긴다 · 첫 로
   execFileSync("rm", ["-rf", tmp]);
 }
 
+console.log("\n[27] v1.30 — PC 설정·고친 자료를 내 계정으로 실시간 따라가기");
+{
+  const cA = await browser.newContext({ viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul" });
+  await cA.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const iso = () => new Date().toISOString();
+  // 앱 전용 공간(appDataFolder) — 이름 → {id, mod, body}
+  const app = {
+    "account_settings.json": { id: "ACC1", mod: "2026-11-09T01:00:00.000Z", body: { v: 1,
+      sheet: { id: "ACCSHEET1", tab: "미출고차량", at: "2026-11-09T01:00:00Z", by: "pc" },
+      folder: { ref: "영업/고객정보", at: "2026-11-09T01:00:00Z", by: "pc" } } },
+    "kb_edits.json": { id: "KBE1", mod: "2026-11-09T01:00:00.000Z", body: { v: 1, edits: {
+      "KB 연락처": { item: { title: "KB 연락처", category: "캐피탈", finance: "KB", body: "팩스 0504-111-2222" },
+                     base: { title: "KB 연락처", body: "1588" }, at: "2026-11-09T01:00:00Z" } } } },
+  };
+  const byId = (id) => Object.values(app).find((f) => f.id === id);
+  const uploads = [], folderQs = [], asked = [];
+  await cA.route("**/accounts.google.com/**", (r) => r.abort());
+  await cA.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await cA.route("**/www.googleapis.com/calendar/v3/**", (r) => r.fulfill({ json: { items: [] } }));
+  await cA.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    asked.push(u);
+    if (u.includes("업무자료")) {
+      return r.fulfill({ json: { values: [["카테고리", "금융사", "제목", "태그", "본문"],
+                                          ["캐피탈", "KB", "KB 연락처", "", "1588"],
+                                          ["캐피탈", "현대", "현대캐피탈", "", "1577"]] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  await cA.route("**/upload/drive/v3/**", async (r) => {
+    const id = (r.request().url().match(/files\/([^?]+)/) || [])[1];
+    const body = r.request().postData() || "";
+    uploads.push({ id, body });
+    const f = byId(id);
+    if (f) { f.body = JSON.parse(body); f.mod = iso(); }
+    return r.fulfill({ json: { id } });
+  });
+  await cA.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("spaces=appDataFolder")) {
+      const name = (u.match(/name='([^']+)'/) || [])[1];
+      const f = app[name];
+      return r.fulfill({ json: { files: f ? [{ id: f.id, name, modifiedTime: f.mod }] : [] } });
+    }
+    const m = u.match(/files\/([A-Za-z0-9_]+)\?alt=media/);
+    if (m && byId(m[1])) return r.fulfill({ body: JSON.stringify(byId(m[1]).body), contentType: "application/json" });
+    if (u.includes("application/vnd.google-apps.folder")) {
+      folderQs.push(u);
+      if (u.includes("name='영업'") && u.includes("'root' in parents")) return r.fulfill({ json: { files: [{ id: "F_SALES" }] } });
+      if (u.includes("name='고객정보'") && u.includes("'F_SALES' in parents")) return r.fulfill({ json: { files: [{ id: "F_CUST" }] } });
+      if (u.includes("name='새 서류함'")) return r.fulfill({ json: { files: [{ id: "F_NEW" }] } });
+      return r.fulfill({ json: { files: [] } });
+    }
+    if (u.includes("'F_CUST' in parents")) return r.fulfill({ json: { files: [
+      { id: "C1", name: "홍길동", mimeType: "application/vnd.google-apps.folder" }] } });
+    if (u.includes("'F_NEW' in parents")) return r.fulfill({ json: { files: [
+      { id: "C2", name: "김철수", mimeType: "application/vnd.google-apps.folder" }] } });
+    return r.fulfill({ json: { files: [] } });
+  });
+  const pA = await page(cA);
+  await pA.goto(s.url + "#/customers", { waitUntil: "networkidle" });
+  await pA.waitForTimeout(1500);
+  ok("계정 설정 파일의 시트를 쓴다(PC 가 설정 창에서 바로 올린 것)", asked.some((u) => u.includes("ACCSHEET1")),
+     asked.filter((u) => u.includes("spreadsheets/")).map((u) => u.slice(46, 60)).join(" "));
+  await pA.click('nav.tabs a[data-tab="/docs"]');
+  await pA.waitForTimeout(1200);
+  ok("PC 의 서류 폴더(내 드라이브\\영업\\고객정보)를 경로로 찾아 연다",
+     folderQs.some((u) => u.includes("'root' in parents")) && (await pA.locator("text=홍길동").count()) > 0,
+     folderQs.map((u) => u.slice(-90)).join(" | "));
+
+  // 켜 둔 채로 PC 에서 시트·서류 폴더를 바꾼다 → 화면으로 돌아오면(또는 30초 안에) 따라간다
+  asked.length = 0;
+  app["account_settings.json"].body = { v: 1,
+    sheet: { id: "ACCSHEET2", tab: "새 탭(PC)", at: "2026-11-09T02:00:00Z", by: "pc" },
+    folder: { ref: "새 서류함", at: "2026-11-09T02:00:00Z", by: "pc" } };
+  app["account_settings.json"].mod = iso();
+  await pA.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await pA.waitForTimeout(1500);
+  const meta = await pA.evaluate(async () => {
+    const st = await import("./js/store.js");
+    return { sheet: await st.get("meta", "sheet"), folder: await st.get("meta", "driveFolder") };
+  });
+  ok("다시 열지 않아도 PC 에서 바꾼 시트를 따라간다", meta.sheet && meta.sheet.id === "ACCSHEET2"
+     && meta.sheet.tab === "새 탭(PC)" && asked.some((u) => u.includes("ACCSHEET2")), JSON.stringify(meta));
+  ok("서류 폴더도 따라가고 옛 폴더를 계속 보이지 않는다",
+     meta.folder === "새 서류함" && (await pA.locator("text=김철수").count()) > 0
+     && (await pA.locator("text=홍길동").count()) === 0, JSON.stringify(meta.folder));
+  const tmsg = await pA.evaluate(() => { const t = document.querySelector("#toast"); return t ? t.textContent : ""; });
+  ok("바꿨다고 알려 준다", tmsg.includes("내 계정 설정이 바뀌어"), tmsg);
+  const fetchesBefore = asked.length;
+  await pA.evaluate(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await pA.waitForTimeout(800);
+  ok("안 바뀌었으면 다시 받지 않는다(목록 한 번만 본다)", asked.length === fetchesBefore, `${fetchesBefore} → ${asked.length}`);
+
+  // 웹에서 바꾸면 계정 설정 파일에 '웹 · 지금 시각' 으로 쓴다(PC 가 덮지 않게)
+  uploads.length = 0;
+  await pA.evaluate(async () => {
+    const m = await import("./js/appdata.js");
+    const st = await import("./js/store.js");
+    await st.put("meta", "driveFolder", "폰에서 고른 폴더");     // 화면에서 고르면 이 기기에 먼저 둔다(docs.js)
+    await m.saveSettings({ driveFolder: "폰에서 고른 폴더" });
+  });
+  const acc = uploads.find((x) => x.id === "ACC1");
+  const accBody = acc ? JSON.parse(acc.body) : {};
+  ok("웹에서 바꾼 것은 계정 설정 파일에 웹·시각과 함께(다른 칸은 그대로)",
+     accBody.folder && accBody.folder.ref === "폰에서 고른 폴더" && accBody.folder.by === "web"
+     && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(accBody.folder.at) && accBody.sheet && accBody.sheet.id === "ACCSHEET2",
+     acc ? acc.body.slice(0, 160) : "올리지 않음");
+  const pick = await pA.evaluate(async () => {
+    const m = await import("./js/appdata.js");
+    const pc = { files: { "plan_cfg.json": JSON.stringify({ sheetId: "P", sheetName: "PT", filesDriveFolder: "PF" }) },
+                 times: { "plan_cfg.json": "2026-11-09T01:00:00Z" } };
+    return {
+      acct: m.pickSettings({ sheetId: "W", updatedAt: "2026-12-01T00:00:00.000Z" }, pc,
+                           { sheet: { id: "A", tab: "AT", at: "2026-11-01T00:00:00Z" } }),
+      none: m.pickSettings(null, null, {}),
+    };
+  });
+  ok("계정 설정 파일에 있는 칸이 먼저 · 없는 칸만 예전 곳에서",
+     pick.acct.sheetId === "A" && pick.acct.sheetTab === "AT" && pick.acct.driveFolder === "PF" && pick.none === null,
+     JSON.stringify(pick));
+
+  // 자료검색 — PC 에서 '내 계정에서만' 고친 것이 웹에도 보인다
+  await pA.click('nav.tabs a[data-tab="/kb"]');
+  await pA.waitForTimeout(1500);
+  const rows = await pA.locator("#kblist button.row").allTextContents();
+  ok("PC 에서 내 계정에서 고친 자료가 목록에 표시된다", rows.some((t) => t.includes("KB 연락처") && t.includes("내 계정에서 고침"))
+     && rows.some((t) => t.includes("현대캐피탈") && !t.includes("내 계정에서 고침")), rows.join(" | "));
+  await pA.locator("#kblist button.row", { hasText: "KB 연락처" }).click();
+  await pA.waitForTimeout(500);
+  const det = await pA.locator("#kbdetail").innerText();
+  ok("열면 고친 내용(팩스번호)이 보인다 · 나만 보인다는 표시", det.includes("0504-111-2222") && !det.includes("1588")
+     && det.includes("내 계정에서 고침"), det.slice(0, 120));
+  // 웹에서 고친다 → 내 계정(kb_edits.json)에 저장
+  uploads.length = 0;
+  await pA.click("#kbedit");
+  await pA.fill("#kbbody", "팩스 0504-999-8888");
+  await pA.click("#kbsave");
+  await pA.waitForTimeout(800);
+  const ke = uploads.find((x) => x.id === "KBE1");
+  const keBody = ke ? JSON.parse(ke.body) : {};
+  const rec = ((keBody.edits || {})["KB 연락처"]) || {};
+  ok("웹에서 고친 것을 내 계정에 저장한다(PC 와 같은 모양 · 지금 시각)",
+     rec.item && rec.item.body === "팩스 0504-999-8888" && rec.base && rec.base.body === "1588"
+     && rec.at > "2026-11-09T01:00:00Z", ke ? ke.body.slice(0, 200) : "올리지 않음");
+  ok("바꾼 칸만 싣는다(회사 원본의 체크리스트·첨부를 PC 에서 빈 값으로 덮지 않게)",
+     rec.item && !("checklist" in rec.item) && !("files" in rec.item) && !("tags" in rec.item)
+     && rec.item.finance === "KB",                     // PC 에서 고쳐 둔 칸은 그대로 이어 간다
+     JSON.stringify(rec.item));
+  ok("저장한 내용이 바로 보인다", (await pA.locator("#kbdetail").innerText()).includes("0504-999-8888"));
+  // 되돌리기 → item=null (PC 에도 되돌림이 전해진다)
+  uploads.length = 0;
+  await pA.click("#kbrevert");
+  await pA.waitForTimeout(800);
+  const rv = uploads.find((x) => x.id === "KBE1");
+  const rvRec = rv ? (JSON.parse(rv.body).edits || {})["KB 연락처"] : null;
+  ok("[회사 자료로 되돌리기] — 내 계정에 되돌림(item=null)을 적고 회사 원본이 보인다",
+     rvRec && rvRec.item === null && (await pA.locator("#kbdetail").innerText()).includes("1588"),
+     rv ? rv.body.slice(0, 160) : "올리지 않음");
+  // 켜 둔 채 PC 에서 다시 고친다 → 돌아오면 바로 보인다
+  app["kb_edits.json"].body = { v: 1, edits: { "현대캐피탈": {
+    item: { title: "현대캐피탈", body: "팩스 0504-777-6666" }, base: { title: "현대캐피탈", body: "1577" },
+    at: "2099-01-01T00:00:00Z" } } };
+  app["kb_edits.json"].mod = iso();
+  await pA.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pA.waitForTimeout(5000);
+  await pA.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pA.waitForTimeout(1200);
+  const rows2 = await pA.locator("#kblist button.row").allTextContents();
+  ok("PC 에서 새로 고친 것이 다시 열지 않아도 보인다", rows2.some((t) => t.includes("현대캐피탈") && t.includes("내 계정에서 고침")),
+     rows2.join(" | "));
+  const overlay = await pA.evaluate(async () => {
+    const m = await import("./js/kbedits.js");
+    const items = [{ title: "A", body: "1" }, { title: "A", body: "2" }, { title: "B", body: "3" }];
+    const out = m.overlay(items, { A: { item: { body: "X", files: null }, base: { body: "0" }, at: "t" },
+                                   B: { item: null, base: null, at: "t" } });
+    return out.map((x) => [x.body, !!x._local, !!x._stale]);
+  });
+  ok("겹치는 규칙 — 같은 제목은 첫 번째만 · 되돌림은 원본 · 회사가 또 고쳤으면 표시",
+     JSON.stringify(overlay) === JSON.stringify([["X", true, true], ["2", false, false], ["3", false, false]]),
+     JSON.stringify(overlay));
+  await cA.close();
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');

@@ -53,7 +53,7 @@ paintState();
 // [다시 로그인] 이 끝나면 — 새로고침 없이 보던 화면의 자료만 다시 받는다
 addEventListener("planner:reauthed", async () => {
   paintState();
-  if (await pullSettings(true)) await cust.loadSettings();
+  await pullSettings(true);
   for (const m of [kbui, cust, docs, agenda, calc]) {
     try { m.load(); } catch (e) { /* 하나가 탈나도 나머지는 받는다 */ }
   }
@@ -139,7 +139,7 @@ router.on(/^\/docs$/, () => docs.screen(null));
   setTimeout(async () => {
     await auth.token();                 // 조용한 시도 (실패해도 화면은 그대로)
     paintState();
-    if (await pullSettings(true)) await cust.loadSettings();   // PC 에서 바꾼 시트·폴더도 따라간다
+    await pullSettings(true);           // PC 에서 바꾼 시트·폴더도 따라간다
     kbui.load();
     cust.load();
     docs.load();
@@ -154,7 +154,46 @@ router.on(/^\/docs$/, () => docs.screen(null));
   }, 0);
 
   registerSW();
+  watchAccount();
 })();
+
+// ---------------------------------------------------------------- 계정 따라가기(v1.30)
+// PC 앱에서 시트·서류 폴더를 바꾸거나 자료를 '내 계정에서만' 고치면 그 자리에서 내 계정에 올린다.
+// 웹은 **화면으로 돌아올 때와 켜 둔 동안 30초마다** 계정을 들여다보고(작은 파일 · 바뀌었을 때만 받는다)
+// 바로 따라간다. 예전엔 켤 때 한 번만 봐서, 켜 둔 채 PC 에서 바꾸면 다시 열기 전엔 그대로였다.
+const WATCH_MS = 30 * 1000;
+let _watching = false, _watchedAt = 0;
+async function checkAccount() {
+  if (_watching || document.visibilityState !== "visible") return;
+  if (auth.state() !== auth.STATE.AUTHED) return;
+  if (Date.now() - _watchedAt < 4000) return;      // 돌아오기·타이머가 겹쳐도 한 번만
+  _watching = true;
+  _watchedAt = Date.now();
+  try {
+    const ch = await pullSettings(true, { light: true });
+    if (ch.sheet) Promise.resolve(cust.load()).catch(() => {});
+    if (ch.folder) Promise.resolve(docs.load()).catch(() => {});
+    if (ch.sheet || ch.folder) {
+      const what = ch.sheet && ch.folder ? "고객관리 시트·서류 폴더" : ch.sheet ? "고객관리 시트" : "서류 폴더";
+      toast(`내 계정 설정이 바뀌어 ${what}를 새로 맞췄어요.`);
+      // 목록 화면이면 다시 그린다(서류 폴더 설정 화면 → 목록). 고치는 화면은 건드리지 않는다(쓰던 것이 날아간다).
+      const cur = router.current();
+      if (cur && (cur.path === "/customers" || cur.path === "/docs")) router.handle();
+    }
+    await kbui.refreshEdits();                        // 내 계정에서 고친 자료(PC·업무자료검색)
+  } catch (e) {
+    /* 다음에 다시 본다 */
+  } finally {
+    _watching = false;
+  }
+}
+function watchAccount() {
+  setInterval(checkAccount, WATCH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { _watchedAt = 0; checkAccount(); }
+  });
+  addEventListener("focus", () => { if (Date.now() - _watchedAt > 10000) checkAccount(); });
+}
 
 // 로그인 화면에서 돌아온 결과를 한 줄로 알린다.
 function tellAuth(flag) {
@@ -173,35 +212,35 @@ function tellAuth(flag) {
   if (say) toast(say[0], say[1]);
 }
 
-/** 계정의 설정(PC 앱 · 웹앱 중 나중에 바꾼 것)으로 이 기기를 맞춘다. 바뀐 것이 있으면 true.
+/** 계정의 설정(계정 설정 파일 · PC 앱 · 웹앱 중 나중에 바꾼 것)으로 이 기기를 맞춘다. 바뀐 것 {sheet, folder}.
  *
  * force=false(첫 화면 전): 이 기기에 없는 것만 채운다 — 이미 있으면 통신 없이 바로 넘어간다.
- * force=true(화면이 뜬 뒤): 이미 있어도 계정 것과 다르면 바꾼다(v1.29) — PC 에서 시트·서류 폴더를
- *   바꾸면 웹도 로그인만 돼 있으면 따라온다. 예전엔 한 번 채우면 다시 보지 않아 따로 설정해야 했다. */
-async function pullSettings(force = false) {
+ * force=true(화면이 뜬 뒤): 이미 있어도 계정 것과 다르면 바꾼다 — PC 에서 시트·서류 폴더를 바꾸면 따라온다.
+ * light=true(30초마다 · 돌아올 때): 계정 설정 파일만, 바뀌었을 때만 본다(v1.30).
+ * 시트가 바뀌면 옛 시트의 고객 목록을, 폴더가 바뀌면 옛 폴더 기억을 버린다(예전엔 옛 것을 계속 보였다). */
+async function pullSettings(force = false, { light = false } = {}) {
+  const ch = { sheet: false, folder: false };
   try {
     const have = await store.get("meta", "sheet");
     const folder = await store.get("meta", "driveFolder");
-    if (!force && have && have.id && folder) return false;   // 이 기기에 이미 다 있다
-    if (auth.state() !== auth.STATE.AUTHED) return false;
-    const got = await appdata.loadSettings();
-    if (!got) return false;
-    let changed = false;
+    if (!force && have && have.id && folder) return ch;   // 이 기기에 이미 다 있다
+    if (auth.state() !== auth.STATE.AUTHED) return ch;
+    const got = await appdata.loadSettings({ light });
+    if (!got) return ch;
     const tab = got.sheetTab || "미출고차량";
     if (got.sheetId && (!have || have.id !== got.sheetId || (have.tab || "미출고차량") !== tab)) {
-      await store.put("meta", "sheet", { id: got.sheetId, tab });
-      changed = true;
+      await cust.adoptSheet(got.sheetId, tab);
+      ch.sheet = true;
     }
     if (got.driveFolder && folder !== got.driveFolder) {
-      await store.put("meta", "driveFolder", got.driveFolder);
-      changed = true;
+      await docs.adoptFolder(got.driveFolder);
+      ch.folder = true;
     }
-    return changed;
   } catch (e) {
     // 권한이 아직 없거나(다시 로그인 전) 통신이 안 되면 그냥 넘어간다.
     // 이 기기에 저장된 값이 있으면 그것으로 계속 쓴다.
-    return false;
   }
+  return ch;
 }
 
 // ---------------------------------------------------------------- 자동 갱신

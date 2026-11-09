@@ -290,6 +290,10 @@ class AppSettings:
     #    (drive.readonly 권한이 붙는다 — config.SCOPE_DRIVE_READ 설명 참고)
     drive_api_on: bool = True
     files_drive_folder: str = drive_path.CUSTOMER_DIR
+    # 시트(주소·탭)와 서류 폴더를 **바꾼 때**(UTC, v1.30) — 계정 설정(account_settings.json)에서 웹·다른 곳이
+    # 나중에 바꾼 것을 덮지 않으려고 항목별로 남긴다. 옛 설정 파일엔 없다("").
+    sheet_at: str = ""
+    folder_at: str = ""
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
     # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
@@ -341,6 +345,8 @@ class AppSettings:
             "filesDir": self.files_dir,
             "driveApiOn": self.drive_api_on,
             "filesDriveFolder": self.files_drive_folder,
+            "sheetAt": self.sheet_at,
+            "folderAt": self.folder_at,
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
@@ -417,6 +423,8 @@ class AppSettings:
         s.drive_api_on = bool(o.get("driveApiOn", True))
         s.files_drive_folder = (o.get("filesDriveFolder", "") or ""
                                 or drive_path.CUSTOMER_DIR)
+        s.sheet_at = str(o.get("sheetAt", "") or "")
+        s.folder_at = str(o.get("folderAt", "") or "")
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")

@@ -45,12 +45,16 @@ export async function loadSettings() {
   _sheetId = s.id || DEF_SHEET_ID;
   _sheetTab = s.tab || DEF_SHEET_NAME;
 }
-async function saveSettings(id, tab) {
+// 이 기기의 시트 설정을 바꾸고 옛 시트의 고객 목록을 비운다. 계정 설정(PC·다른 기기)에서 바뀌었을 때도 쓴다(v1.30).
+export async function adoptSheet(id, tab) {
   _sheetId = id || DEF_SHEET_ID;
   _sheetTab = tab || DEF_SHEET_NAME;
   await store.put("meta", "sheet", { id: _sheetId, tab: _sheetTab });
   await store.del("data", "customers");
   _rows = []; _prep = []; _syncedAt = 0;
+}
+async function saveSettings(id, tab) {
+  await adoptSheet(id, tab);
   // 계정에도 남긴다 — 다른 기기에서 로그인해도 다시 넣지 않게.
   // ⚠️ 기다리지 않는다. 이 기기에는 이미 저장됐고, 이건 덤이다.
   appdata.saveSettings({ sheetId: _sheetId, sheetTab: _sheetTab }).catch(() => {});

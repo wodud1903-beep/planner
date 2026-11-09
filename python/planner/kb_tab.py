@@ -538,7 +538,7 @@ class KbTab(QWidget):
         top = QHBoxLayout()
         self.lbl_title = QLabel("🔎 자료검색")
         top.addWidget(self.lbl_title)
-        self.lbl_hint = QLabel("전자약정·심사서류를 미리 넣어 두고 바로 찾아 쓰세요.")
+        self.lbl_hint = QLabel(self.HINT)
         top.addWidget(self.lbl_hint)
         top.addStretch()
         self.btn_edit = QPushButton("자료 편집")
@@ -553,6 +553,22 @@ class KbTab(QWidget):
 
     def set_account(self, email: str) -> None:
         self.account = email or ""
+
+    HINT = "전자약정·심사서류를 미리 넣어 두고 바로 찾아 쓰세요."
+
+    def show_note(self, text: str, tone: str = "ok", ms: int = 8000) -> None:
+        """위 안내 줄에 잠깐 알린다(내 계정에 저장했는지 등 — v1.30). ms 뒤 원래 안내로."""
+        col = {"ok": theme.c("status_ok"), "bad": theme.c("status_bad")}.get(tone, theme.c("subtext"))
+        self.lbl_hint.setText(text)
+        self.lbl_hint.setStyleSheet(f"color:{col};")
+        self._note_seq = getattr(self, "_note_seq", 0) + 1
+        seq = self._note_seq
+
+        def back():
+            if getattr(self, "_note_seq", 0) == seq:
+                self.lbl_hint.setText(self.HINT)
+                self.lbl_hint.setStyleSheet(f"color:{theme.c('subtext')};")
+        QTimer.singleShot(ms, back)
 
     def set_auth(self, auth) -> None:
         """첨부를 올리고 받을 때 쓰는 구글 로그인."""
@@ -595,7 +611,7 @@ class KbTab(QWidget):
         except Exception as e:
             QMessageBox.warning(self, config.APP_NAME, "메모 저장 실패:\n" + str(e))
         try:
-            # 내 계정에서만 고친 회사 자료 — 다음 동기화 때 내 계정(kb_edits.json)으로 올라간다
+            # 내 계정에서만 고친 회사 자료 — 그 자리에서 내 계정(kb_edits.json)으로 올린다(main_window)
             if kb.set_local(local) and callable(self.on_local_saved):
                 self.on_local_saved()
         except Exception as e:

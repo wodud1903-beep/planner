@@ -52,6 +52,13 @@ export function parseFolderRef(s) {
   if (m) return { kind: "id", value: m[1] };
   // 주소를 붙여넣었는데 폴더 id 를 못 찾았다면 이름으로 오해하면 안 된다
   if (/^https?:\/\//i.test(t)) return { kind: "bad", value: t };
+  // '내 드라이브' 기준 경로 — PC 설정의 서류 폴더(G:\내 드라이브\영업\고객정보)가 이 꼴로 온다(v1.30)
+  if (/[\\/]/.test(t)) {
+    const segs = t.split(/[\\/]+/).map((x) => x.trim()).filter(Boolean);
+    if (segs.length > 1) return { kind: "path", value: segs.join("/"), segs };
+    if (segs.length === 1) return { kind: "name", value: segs[0] };
+    return { kind: "none", value: "" };
+  }
   // 드라이브 id 에는 공백이 없고 보통 25자가 넘는다
   if (!/\s/.test(t) && /^[A-Za-z0-9_-]{20,}$/.test(t)) return { kind: "id", value: t };
   return { kind: "name", value: t };
@@ -66,10 +73,26 @@ export async function folderId(ref) {
     if (j && j.mimeType === FOLDER_MIME) return j.id;
     return "";
   }
-  // 이름이 같은 폴더가 여럿이면 가장 최근 것 — 파이썬 쪽과 같은 규칙이다.
+  if (p.kind === "path") {
+    // 내 드라이브 맨 위에서부터 한 칸씩 내려간다. 못 찾으면(옮겼거나 이름을 바꿨으면) 마지막 이름으로라도.
+    let parent = "root";
+    for (const seg of p.segs) {
+      const id = await childFolder(seg, parent);
+      if (!id) { parent = ""; break; }
+      parent = id;
+    }
+    if (parent && parent !== "root") return parent;
+    return childFolder(p.segs[p.segs.length - 1], "");
+  }
+  return childFolder(p.value, "");
+}
+
+// 이름이 같은 폴더가 여럿이면 가장 최근 것 — 파이썬 쪽과 같은 규칙이다. parent 가 있으면 그 바로 밑에서만.
+async function childFolder(name, parent) {
   const q = encodeURIComponent(
-    `name='${p.value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
-    + ` and mimeType='${FOLDER_MIME}' and trashed=false`);
+    `name='${String(name).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`
+    + ` and mimeType='${FOLDER_MIME}' and trashed=false`
+    + (parent ? ` and '${parent}' in parents` : ""));
   const j = await call(`${FILES}?q=${q}&fields=files(id,name,modifiedTime)`
                      + `&orderBy=modifiedTime desc&pageSize=10`);
   const f = (j && j.files) || [];
