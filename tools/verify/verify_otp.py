@@ -158,6 +158,10 @@ ok("10초 뒤 저절로 닫힌다(v1.31.1)", otp_popup.LIFE_MS == 10000 and ps[-
 from PySide6.QtCore import QEvent, QPointF  # noqa: E402
 from PySide6.QtGui import QEnterEvent  # noqa: E402
 ph = otp_popup.show({"code": "121212", "body": ""})
+app.processEvents()
+ok("뜬 뒤에도 10초를 센다(창 밖 마우스로 온 '들어왔다' 는 무시 — v1.31.2)", ph._life.isActive())
+ph.enterEvent(QEnterEvent(QPointF(-400, -600), QPointF(10, 10), QPointF(10, 10)))
+ok("창 밖이면 멈추지 않는다", ph._life.isActive())
 ph.enterEvent(QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5)))
 ok("마우스를 올려 두면 닫지 않는다", not ph._life.isActive())
 ph.leaveEvent(QEvent(QEvent.Leave))

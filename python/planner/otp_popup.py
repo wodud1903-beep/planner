@@ -86,11 +86,19 @@ class OtpPopup(QWidget):
         self._life.start(LIFE_MS)
 
     def enterEvent(self, e):
-        self._life.stop()                         # 보는 중 — 닫지 않는다
+        # 마우스가 **정말 이 창 안에 있을 때만** 멈춘다 — 창이 뜰 때 밖에 있는 마우스로도 '들어왔다' 가 오는
+        # 일이 있어(검사에서 실제로 봤다), 그대로 멈추면 10초가 지나도 닫히지 않는다.
+        try:
+            inside = self.rect().contains(e.position().toPoint())
+        except Exception:
+            inside = False
+        if inside:
+            self._life.stop()                     # 보는 중 — 닫지 않는다
         super().enterEvent(e)
 
     def leaveEvent(self, e):
-        self._life.start(LIFE_MS)                 # 손을 떼면 다시 10초
+        if not self._life.isActive():
+            self._life.start(LIFE_MS)             # 손을 떼면 다시 10초
         super().leaveEvent(e)
 
     def copy(self) -> None:
