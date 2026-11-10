@@ -94,12 +94,16 @@ otp._http = lambda: Http()
 
 class Auth:
     email = "me@example.com"
+    scope_ok = True
 
     def valid_token(self):
         return "TOKEN"
 
     def is_connected(self):
         return True
+
+    def has_scope(self, s):
+        return self.scope_ok
 
 
 otp.read_top(Auth(), "SHEETID", "시트1")
@@ -227,6 +231,36 @@ ok("못 읽으면 약 30초 쉰다 · 세 번째에 한 번 알린다", f._otp_s
    and "인증문자 시트를 읽지 못했습니다" in f.msgs[0][0])
 src = (_HERE.parent / "kbsearch" / "main_window.py").read_text(encoding="utf-8")
 ok("4초마다 본다", "self._otp_timer.start(otp.POLL_MS)" in src)
+
+print("[6] kb-v1.8.1 — 그 시트를 볼 수 없는 계정 · 인터넷 끊김 · 잠들었다 깸(일정관리기와 같다)")
+ok("일정관리기와 같은 값", (otp.DENIED_TICKS, otp.GAP_SEC) == (potp.DENIED_TICKS, potp.GAP_SEC) == (150, 120))
+fd = Fake(Settings())
+MainWindow._on_otp(fd, [], "denied")
+MainWindow._on_otp(fd, [], "denied")
+ok("권한이 없으면 10분에 한 번만 다시 보고, 한 번만 알린다", fd._otp_skip == otp.DENIED_TICKS and len(fd.msgs) == 1
+   and "볼 수 없습니다" in fd.msgs[0][0])
+fn = Fake(Settings())
+for i in range(5):
+    MainWindow._on_otp(fn, [], "net")
+ok("인터넷이 끊긴 것은 알리지 않는다", fn.msgs == [] and fn._otp_skip == otp.BACKOFF_TICKS and fn._otp_errs == 0)
+st2 = Settings()
+st2.otp_on = True
+fs = Fake(st2)
+fs.gauth = Auth()
+fs.gauth.scope_ok = False
+n = len(calls)
+MainWindow._poll_otp(fs)
+ok("시트 권한 없이 로그인했으면 읽지 않는다", len(calls) == n and not fs._otp_busy)
+w2 = otp.Watcher()
+SHEET["vals"] = [HEAD, [D, "수신문자", LOGIN]]
+w2.poll(Auth(), "SHEETID", "시트1", TODAY, now=1000.0)
+SHEET["vals"] = [HEAD, [D, "수신문자", KB], [D, "수신문자", LOGIN]]
+ok("오래(2분 넘게) 못 봤다가 다시 보면 그사이 온 옛 문자는 띄우지 않는다",
+   w2.poll(Auth(), "SHEETID", "시트1", TODAY, now=1000.0 + otp.GAP_SEC + 1) == [])
+import inspect as _insp  # noqa: E402
+_osrc = _insp.getsource(otp)
+ok("net.http 를 부를 때 찾는다(검사가 가짜로 바꾸면 진짜 인터넷으로 나가지 않는다)", "return net.http()" in _osrc
+   and not any(ln.startswith("from .net import http") for ln in _osrc.splitlines()))
 
 print()
 print("실패:", FAIL if FAIL else "없음")

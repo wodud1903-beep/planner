@@ -105,6 +105,7 @@ class GoogleAuth:
         self.refresh_token = ""
         self.access_token = ""
         self.email = ""
+        self.scopes: list = []          # 실제로 받은 권한(kb-v1.8.1) — 동의 화면에서 뺀 것을 알려 주려고
         self.token_expiry = datetime.min
         self._refresh_lock = threading.Lock()
         self._load()
@@ -117,6 +118,7 @@ class GoogleAuth:
             o = json.loads(self.cfg_file.read_text(encoding="utf-8"))
             self.refresh_token = o.get("refresh_token", "")
             self.email = o.get("email", "")
+            self.scopes = [str(x) for x in (o.get("scopes") or [])]
         except Exception:
             pass
 
@@ -124,18 +126,32 @@ class GoogleAuth:
         try:
             config.atomic_write(
                 self.cfg_file,
-                json.dumps({"refresh_token": self.refresh_token, "email": self.email},
-                           ensure_ascii=False))
+                json.dumps({"refresh_token": self.refresh_token, "email": self.email,
+                            "scopes": list(self.scopes)}, ensure_ascii=False))
         except Exception:
             pass
 
     def is_connected(self) -> bool:
         return bool(self.refresh_token)
 
+    def missing_scopes(self) -> list:
+        """로그인할 때 빠진 권한의 이름(사람이 읽는 말). 모르면(옛 토큰) 빈 목록.
+
+        구글 동의 화면은 항목마다 체크를 받는다 — 빼고 [계속] 하면 로그인은 되는데 그 기능만 안 된다.
+        """
+        if not self.is_connected() or not self.scopes:
+            return []
+        have = set(self.scopes)
+        return [label for sc, label in config.SCOPE_LABELS.items() if sc not in have]
+
+    def has_scope(self, scope: str) -> bool:
+        return (not self.scopes) or scope in self.scopes
+
     def disconnect(self):
         self.refresh_token = ""
         self.access_token = ""
         self.email = ""
+        self.scopes = []
         self.token_expiry = datetime.min
         self._save()
 
@@ -202,6 +218,9 @@ class GoogleAuth:
         self.access_token = j.get("access_token", "")
         self.refresh_token = j.get("refresh_token", "") or self.refresh_token
         self.token_expiry = datetime.now() + timedelta(seconds=int(j.get("expires_in", 3600)) - 60)
+        granted = (j.get("scope", "") or "").split()      # 실제로 받은 권한(요청한 것과 다를 수 있다)
+        if granted:
+            self.scopes = granted
         if not self.refresh_token:
             raise GoogleError("refresh_token 을 받지 못했습니다. "
                               "구글 계정의 앱 권한을 해제한 뒤 다시 시도하세요.")
@@ -225,6 +244,10 @@ class GoogleAuth:
         j = resp.json()
         self.access_token = j.get("access_token", "")
         self.token_expiry = datetime.now() + timedelta(seconds=int(j.get("expires_in", 3600)) - 60)
+        granted = (j.get("scope", "") or "").split()
+        if granted and granted != self.scopes:
+            self.scopes = granted
+            self._save()
 
     def valid_token(self) -> str:
         if self.access_token and datetime.now() < self.token_expiry:

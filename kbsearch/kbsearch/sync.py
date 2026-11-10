@@ -353,11 +353,11 @@ def sync_edits(auth) -> list:
         fid = google_auth.appdata_find(auth, EDITS_FILE)
         text = google_auth.appdata_read(auth, fid) if fid else ""
     except google_auth.GoogleError as e:
-        raise SyncError(f"고친 심사서류를 받지 못했습니다: {e}")
+        raise SyncError(f"고친 자료를 받지 못했습니다: {e}")
     try:
         o = json.loads(text) if text.strip() else {}
     except Exception:
-        raise SyncError("드라이브의 고친 심사서류 파일이 깨져 있어 주고받지 않았습니다.")
+        raise SyncError("드라이브의 고친 자료 파일이 깨져 있어 주고받지 않았습니다.")
     remote = o.get("edits") if isinstance(o, dict) and isinstance(o.get("edits"), dict) else {}
     stamp = now_stamp()
     m = merge_edits(kb.load_local(), kb.load_local_dead(), remote, stamp, kb.load_shared())
@@ -366,7 +366,7 @@ def sync_edits(auth) -> list:
             google_auth.appdata_write(auth, EDITS_FILE, json.dumps(
                 {"v": 1, "updatedAt": stamp, "edits": m["edits"]}, ensure_ascii=False, indent=1), fid)
         except google_auth.GoogleError as e:
-            raise SyncError(f"고친 심사서류를 올리지 못했습니다: {e}")
+            raise SyncError(f"고친 자료를 올리지 못했습니다: {e}")
     kb.replace_local(m["recs"], m["dead"])
     return m["changed"]
 

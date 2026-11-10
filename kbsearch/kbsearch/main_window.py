@@ -116,7 +116,10 @@ class MainWindow(QMainWindow):
         self._auto_timer.start(int(config.KB_AUTO_MINUTES * 60 * 1000))
         QTimer.singleShot(1500, self._pull_if_stale)     # 창을 띄우며 이미 받았으면 건너뛴다
         # 고친 심사서류 3종 — 로그인돼 있으면 켤 때와 몇 분마다 웹과 조용히 맞춘다(kb-v1.6.0)
-        self._auto_timer.timeout.connect(self.sync_edits_quiet)
+        # kb-v1.8.1: 공통 자료(10분)와 따로 2분마다 — 웹·일정관리기에서 고친 것이 곧 온다(작은 파일 하나)
+        self._edits_timer = QTimer(self)
+        self._edits_timer.timeout.connect(self.sync_edits_quiet)
+        self._edits_timer.start(2 * 60 * 1000)
         QTimer.singleShot(8000, self.sync_edits_quiet)
         # 웹 스위치 — 켜 둔 채로 지내도 관리자가 끄면 몇 분 안에 멈춘다
         self._switch_checking = False
@@ -475,6 +478,8 @@ class MainWindow(QMainWindow):
             return
         if self._otp_busy or not self.gauth.is_connected():
             return
+        if not self.gauth.has_scope(config.SCOPE_SHEETS):
+            return                           # 시트 권한 없이 로그인했다(로그인 때 알렸다)
         if self._otp_skip > 0:               # 방금 못 읽었다 — 조금 쉬었다가
             self._otp_skip -= 1
             return
@@ -485,9 +490,14 @@ class MainWindow(QMainWindow):
         tab = str(getattr(s, "otp_tab", "") or "").strip()
 
         def worker():
+            import requests
             items, err = [], ""
             try:
                 items = self._otp.poll(self.gauth, sid, tab)
+            except otp.NoAccess:
+                err = "denied"               # 이 계정은 그 시트를 볼 수 없다
+            except requests.RequestException:
+                err = "net"                  # 인터넷이 잠깐 끊겼다 — 알리지 않는다
             except Exception as e:
                 err = (str(e).splitlines() or ["error"])[0][:160] or "error"
             self.sig_otp.emit(items, err)
@@ -495,13 +505,24 @@ class MainWindow(QMainWindow):
 
     def _on_otp(self, items, err: str) -> None:
         self._otp_busy = False
+        if err == "denied":
+            # 기다려도 안 풀린다 — 10분에 한 번만 다시 보고, 한 번만 알린다(kb-v1.8.1)
+            self._otp_skip = otp.DENIED_TICKS
+            if not getattr(self, "_otp_denied_told", False):
+                self._otp_denied_told = True
+                self._set_msg("이 구글 계정으로는 인증문자 시트를 볼 수 없습니다 — 시트 주인에게 공유를 요청하거나 "
+                              "[설정] 에서 끄세요", "bad")
+            return
         if err:
             self._otp_skip = otp.BACKOFF_TICKS
+            if err == "net":
+                return                       # 인터넷이 끊긴 것은 알리지 않는다(붙으면 다시 본다)
             self._otp_errs += 1
             if self._otp_errs == 3:          # 계속 못 읽으면 한 번만 알린다
                 self._set_msg("인증문자 시트를 읽지 못했습니다 — [설정] 의 시트 주소·구글 로그인을 확인하세요", "bad")
             return
         self._otp_errs = 0
+        self._otp_denied_told = False        # 다시 읽힌다 — 또 막히면 다시 알린다
         copy = bool(getattr(self.settings, "otp_copy", True))
         for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
             if copy:
@@ -585,7 +606,8 @@ class MainWindow(QMainWindow):
             self._set_msg("저장했습니다 — 회사 공통 자료는 나만 바뀝니다"
                           + (" (내 계정으로 곧 맞춥니다)" if self.gauth.is_connected() else ""), "ok")
         if local_changed and self.gauth.is_connected():
-            QTimer.singleShot(500, self.sync_edits_quiet)     # 심사서류 3종이면 웹에도 곧 반영
+            self._edits_announce = True      # 올린 결과를 알린다(kb-v1.8.1 — 예전엔 됐는지 알 수 없었다)
+            QTimer.singleShot(500, self.sync_edits_quiet)     # 웹·일정관리기에도 곧 반영
 
     # ------------------------------------------------------------ 고친 심사서류 3종 — 조용히 맞추기
     def sync_edits_quiet(self) -> None:
@@ -609,11 +631,17 @@ class MainWindow(QMainWindow):
 
     def _on_edits(self, changed, err: str) -> None:
         self._busy = False
+        told = getattr(self, "_edits_announce", False)
+        self._edits_announce = False
         if changed:
             self.view.reload()
             if self._quick is not None and self._quick.isVisible():
                 self._quick.view.reload()
-            self._set_msg("웹에서 고친 " + ", ".join(changed) + " 을(를) 받았습니다", "ok")
+            self._set_msg("다른 곳에서 고친 " + ", ".join(changed) + " 을(를) 받았습니다", "ok")
+        elif told and not err:
+            self._set_msg("내 계정에 저장했습니다 — 웹·일정관리기에도 반영됩니다", "ok")
+        elif told:
+            self._set_msg("이 PC 에는 저장했지만 내 계정에 올리지 못했습니다 — 잠시 뒤 다시 올립니다", "bad")
         self.refresh_account()
 
     # ------------------------------------------------------------ 로그인 · 동기화
@@ -672,6 +700,15 @@ class MainWindow(QMainWindow):
         self._set_msg(f"{email} 로 로그인했습니다.", "ok")
         self.refresh_account()
         self.show_window()
+        # 동의 화면에서 뺀 항목이 있으면 바로 알린다(kb-v1.8.1) — 예전엔 동기화가 '그냥 안 되는' 것처럼 보였다
+        miss = self.gauth.missing_scopes()
+        if miss:
+            QMessageBox.warning(
+                self, config.APP_NAME,
+                "구글 로그인은 됐지만, 동의 화면에서 빠진 항목이 있어 아래 기능이 동작하지 않습니다.\n\n· "
+                + "\n· ".join(miss)
+                + "\n\n[로그아웃] 후 [동기화] 로 다시 로그인하면서,\n"
+                  "동의 화면의 '모두 선택' 에 체크하고 [계속] 을 눌러 주세요.")
         self._begin_sync()
 
     def _begin_sync(self) -> None:

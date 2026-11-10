@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "업무자료검색"
 APP_ID = "KbSearch"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 # ---------------------------------------------------------------------------
 # 서비스 스위치 — **자동 업데이트로 끄고 켠다.**
@@ -66,6 +66,14 @@ GOOGLE_SCOPES = [
     # 첨부(그림·PDF) — 앱이 올린 파일에만 접근하는 최소 권한
     "https://www.googleapis.com/auth/drive.file",
 ]
+
+# 권한이 빠졌을 때 사람에게 보여 줄 이름(kb-v1.8.1) — 구글 동의 화면은 항목마다 체크를 받는다.
+SCOPE_SHEETS = "https://www.googleapis.com/auth/spreadsheets"
+SCOPE_LABELS = {
+    SCOPE_SHEETS: "구글 시트(회사 자료 올리기·인증번호 받기)",
+    "https://www.googleapis.com/auth/drive.appdata": "내 메모·고친 자료 동기화(드라이브 앱 저장공간)",
+    "https://www.googleapis.com/auth/drive.file": "첨부 올리기(드라이브 파일)",
+}
 
 AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
