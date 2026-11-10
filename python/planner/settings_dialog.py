@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, drive_path, searchcombo, sheets, theme, weekly
-from .models import AppSettings
+from .models import AppSettings, otp_where
 
 
 TERMS_FILE = "terms_presets.json"
@@ -237,6 +237,26 @@ class SettingsDialog(QDialog):
         self._refresh_install_hint()
         root.addWidget(gb_files)
 
+        # ---- 휴대폰 인증번호 받기(v1.31, otp.py) ----
+        gb_o = QGroupBox("휴대폰 인증번호 받기 — 폰으로 온 인증번호를 PC 에 바로 띄우기")
+        ofl = QFormLayout(gb_o)
+        self.chk_otp = QCheckBox("사용 (몇 초마다 아래 시트를 보고, 새 인증번호가 오면 화면 오른쪽 아래에 띄웁니다)")
+        ofl.addRow(self.chk_otp)
+        self.ed_otp_sheet = QLineEdit()
+        self.ed_otp_sheet.setPlaceholderText("비워 두면 지점 기본 인증문자 시트")
+        ofl.addRow("인증문자 시트", self.ed_otp_sheet)
+        self.ed_otp_tab = QLineEdit()
+        self.ed_otp_tab.setPlaceholderText("비워 두면 첫 번째 탭")
+        ofl.addRow("탭 이름", self.ed_otp_tab)
+        self.chk_otp_copy = QCheckBox("오면 바로 클립보드에 복사 (로그인 칸에서 Ctrl+V)")
+        ofl.addRow("", self.chk_otp_copy)
+        lbl_o = QLabel("기본은 지점 공용 인증문자 시트입니다 — 다른 시트를 쓸 때만 주소를 바꾸세요(비우면 기본으로).\n"
+                       "MacroDroid 가 받은 문자를 시트 맨 위 줄에 넣어 주면 됩니다(맨 위가 최신 · 첫 칸 날짜 · 본문).\n"
+                       "켤 때 이미 있던 문자는 띄우지 않고, 뜬 번호는 10초 뒤 닫힙니다(마우스를 올리면 그대로).")
+        lbl_o.setStyleSheet(f"color:{theme.c('subtext')};")
+        ofl.addRow(lbl_o)
+        root.addWidget(gb_o)
+
         # ---- 오늘의 뉴스 ----
         gb_n = QGroupBox("오늘의 뉴스 (대시보드 [오늘의 뉴스] 단추)")
         nfl = QFormLayout(gb_n)
@@ -378,6 +398,10 @@ class SettingsDialog(QDialog):
         self.sp_expiry.setValue(s.expiry_months)
         self.chk_weekly.setChecked(s.weekly_on)
         self.ed_news.setText(s.news_doc)
+        self.chk_otp.setChecked(bool(getattr(s, "otp_on", False)))
+        self.ed_otp_sheet.setText(getattr(s, "otp_sheet", "") or "")
+        self.ed_otp_tab.setText(getattr(s, "otp_tab", "") or "")
+        self.chk_otp_copy.setChecked(bool(getattr(s, "otp_copy", True)))
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
         self.cmb_theme.setCurrentIndex(i if i >= 0 else 0)
@@ -443,6 +467,11 @@ class SettingsDialog(QDialog):
         s.expiry_months = self.sp_expiry.value()
         s.weekly_on = self.chk_weekly.isChecked()
         s.news_doc = self.ed_news.text().strip()
+        s.otp_on = self.chk_otp.isChecked()
+        # 주소를 붙여넣어도 ID 만 · 비우면 지점 기본 시트(탭이 비면 '시트1')
+        s.otp_sheet, s.otp_tab = otp_where(sheets.parse_sheet_id(self.ed_otp_sheet.text()),
+                                           self.ed_otp_tab.text())
+        s.otp_copy = self.chk_otp_copy.isChecked()
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
         s.dark_mode = theme.THEMES.get(s.theme, (None, None, False))[2]

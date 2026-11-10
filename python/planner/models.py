@@ -231,6 +231,15 @@ def save_list(path: Path, items) -> None:
     config.atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def otp_where(sheet, tab) -> tuple:
+    """인증문자 시트·탭 — 비어 있으면 지점 기본 시트(v1.31.1). 기본 시트에 탭이 비면 '시트1'."""
+    sid = str(sheet or "").strip() or config.OTP_DEF_SHEET_ID
+    t = str(tab or "").strip()
+    if not t and sid == config.OTP_DEF_SHEET_ID:
+        t = config.OTP_DEF_TAB
+    return sid, t
+
+
 @dataclass
 class AppSettings:
     """전역 설정 (설정창에서 편집, plan_cfg.json 에 저장). 델파이 TAppSettings 호환."""
@@ -294,6 +303,12 @@ class AppSettings:
     # 나중에 바꾼 것을 덮지 않으려고 항목별로 남긴다. 옛 설정 파일엔 없다("").
     sheet_at: str = ""
     folder_at: str = ""
+    # 휴대폰 인증번호 받기(v1.31, otp.py) — MacroDroid 가 문자를 쌓는 구글 시트를 몇 초마다 본다.
+    # v1.31.1: 기본은 켜짐 · 지점 공용 시트(config.OTP_DEF_SHEET_ID) — 비워 두면 기본 시트로 돌아간다.
+    otp_on: bool = True
+    otp_sheet: str = config.OTP_DEF_SHEET_ID
+    otp_tab: str = config.OTP_DEF_TAB
+    otp_copy: bool = True
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
     # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
@@ -347,6 +362,11 @@ class AppSettings:
             "filesDriveFolder": self.files_drive_folder,
             "sheetAt": self.sheet_at,
             "folderAt": self.folder_at,
+            # ⚠️ 켜짐은 새 이름(otpEnabled)으로 적는다 — v1.31.0 은 기본 꺼짐을 "otpOn": false 로 적어 두었다.
+            "otpEnabled": bool(self.otp_on),
+            "otpSheet": self.otp_sheet,
+            "otpTab": self.otp_tab,
+            "otpCopy": bool(self.otp_copy),
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
@@ -425,6 +445,9 @@ class AppSettings:
                                 or drive_path.CUSTOMER_DIR)
         s.sheet_at = str(o.get("sheetAt", "") or "")
         s.folder_at = str(o.get("folderAt", "") or "")
+        s.otp_on = bool(o.get("otpEnabled", True))          # 옛 "otpOn"(v1.31.0 의 기본 꺼짐)은 보지 않는다
+        s.otp_sheet, s.otp_tab = otp_where(o.get("otpSheet"), o.get("otpTab"))
+        s.otp_copy = bool(o.get("otpCopy", True))
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")
