@@ -108,11 +108,16 @@ otp._http = lambda: Http()
 
 
 class Auth:
+    scope_ok = True
+
     def valid_token(self):
         return "TOKEN"
 
     def is_connected(self):
         return True
+
+    def has_scope(self, s):
+        return self.scope_ok
 
 
 otp.read_top(Auth(), "SHEETID", "시트1")
@@ -129,6 +134,41 @@ ok("새 인증번호가 오면 그것만", [g["code"] for g in got] == ["989365"
 ok("다시 보면 또 띄우지 않는다", w.poll(Auth(), "SHEETID", "", TODAY) == [])
 SHEET["vals"] = [HEAD, [D, "수신문자", "인증번호 [777777]"], [D, "수신문자", KB]]
 ok("다른 시트로 바꾸면 그 시트의 지금 것은 '본 것'", w.poll(Auth(), "OTHER", "", TODAY) == [])
+# v1.31.3 — PC 가 잠들었다 깨거나 인터넷이 한참 끊겼다 붙으면, 그사이 온 옛 문자는 띄우지 않는다
+w2 = otp.Watcher()
+SHEET["vals"] = [HEAD, [D, "수신문자", LOGIN]]
+w2.poll(Auth(), "SHEETID", "", TODAY, now=1000.0)
+SHEET["vals"] = [HEAD, [D, "수신문자", KB], [D, "수신문자", LOGIN]]
+ok("오래(2분 넘게) 못 봤다가 다시 보면 그사이 온 것은 띄우지 않는다",
+   w2.poll(Auth(), "SHEETID", "", TODAY, now=1000.0 + otp.GAP_SEC + 1) == [])
+SHEET["vals"] = [HEAD, [D, "수신문자", "인증번호 [246810]"], [D, "수신문자", KB], [D, "수신문자", LOGIN]]
+ok("그 뒤 새로 온 것은 다시 띄운다(자리 비움 20초 간격은 그대로 이어 본다)",
+   [g["code"] for g in w2.poll(Auth(), "SHEETID", "", TODAY, now=1000.0 + otp.GAP_SEC + 21)] == ["246810"])
+
+
+class Resp403(Resp):
+    status_code = 403
+
+
+class Http403:
+    def get(self, url, **kw):
+        calls.append((url, kw))
+        return Resp403([])
+
+
+_keep_http = otp._http
+otp._http = lambda: Http403()
+try:
+    otp.read_top(Auth(), "SHEETID", "")
+    ok("권한이 없으면 NoAccess", False)
+except otp.NoAccess:
+    ok("권한이 없으면(403 · 404) NoAccess", True)
+otp._http = _keep_http
+import inspect as _insp  # noqa: E402
+_osrc = _insp.getsource(otp)
+ok("net.http 를 부를 때 찾는다(검사가 net.http 를 가짜로 바꾸면 진짜 인터넷으로 나가지 않는다)",
+   "return net.http()" in _osrc
+   and not any(ln.startswith("from .net import http") for ln in _osrc.splitlines()))
 
 print("[4] 화면 — 오른쪽 아래 · 항상 위 · 포커스 안 뺏음 · 복사")
 QApplication.clipboard().setText("")
@@ -271,6 +311,54 @@ ok("못 읽으면 약 30초 쉰다 · 세 번째에 한 번 알린다", f._otp_s
 f.sig_otp = Sig()
 MainWindow._poll_otp(f)
 ok("쉬는 동안은 읽지 않는다", f.sig_otp.got == [] and f._otp_skip == otp.BACKOFF_TICKS - 1)
+
+# v1.31.3 — 그 시트를 볼 수 없는 직원 PC · 인터넷 끊김 · 시트 권한 없이 로그인
+fd = Fake(AppSettings())
+fd.sig_toast = Sig()
+MainWindow._on_otp(fd, [], "denied")
+MainWindow._on_otp(fd, [], "denied")
+ok("권한이 없으면 10분에 한 번만 다시 보고, 한 번만 알린다", fd._otp_skip == otp.DENIED_TICKS == 150
+   and len(fd.sig_toast.got) == 1 and "볼 수 없어" in fd.sig_toast.got[0][1] and fd.lbl_status.text() == "")
+MainWindow._on_otp(fd, [], "")
+MainWindow._on_otp(fd, [], "denied")
+ok("다시 읽히다 또 막히면 다시 알린다", len(fd.sig_toast.got) == 2)
+fn = Fake(AppSettings())
+for i in range(5):
+    MainWindow._on_otp(fn, [], "net")
+ok("인터넷이 끊긴 것은 알리지 않는다(쉬었다가 다시)", fn.lbl_status.text() == "" and fn._otp_skip == otp.BACKOFF_TICKS
+   and fn._otp_errs == 0)
+fs = Fake(AppSettings())
+fs.gauth = Auth()
+fs.gauth.scope_ok = False
+n_calls = len(calls)
+MainWindow._poll_otp(fs)
+ok("시트 권한 없이 로그인했으면 읽지 않는다(상태 줄이 다시 로그인하라고 알린다)",
+   not fs._otp_busy and len(calls) == n_calls and fs.sig_otp.got == [])
+_p = otp.Watcher.poll
+
+
+def _deny(self, *a, **k):
+    raise otp.NoAccess("HTTP 403")
+
+
+otp.Watcher.poll = _deny
+fw = Fake(AppSettings())
+MainWindow._poll_otp(fw)
+fw.sig_otp.ev.wait(5)
+ok("일꾼이 권한 없음을 'denied' 로 알린다", fw.sig_otp.got == [([], "denied")], fw.sig_otp.got)
+import requests as _rq  # noqa: E402
+
+
+def _cut(self, *a, **k):
+    raise _rq.ConnectionError("끊김")
+
+
+otp.Watcher.poll = _cut
+fw = Fake(AppSettings())
+MainWindow._poll_otp(fw)
+fw.sig_otp.ev.wait(5)
+ok("인터넷 끊김은 'net' 으로", fw.sig_otp.got == [([], "net")], fw.sig_otp.got)
+otp.Watcher.poll = _p
 f._otp_skip = 0
 f._otp_busy = False
 _idle = otp.idle_seconds

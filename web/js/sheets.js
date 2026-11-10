@@ -115,6 +115,12 @@ export function kbFilesFrom(cell, title) {
                    mime: String(f.mime || "").trim(), size: Number(f.size) || 0 }));
 }
 
+/** 본문 다듬기 — 줄바꿈을 \n 으로, 줄 끝 공백과 앞뒤 빈 줄을 턴다(PC 와 같은 규칙). */
+export function normBody(text) {
+  return String(text == null ? "" : text).replace(/\r\n?/g, "\n")
+    .split("\n").map((l) => l.replace(/\s+$/, "")).join("\n").trim();
+}
+
 export async function readKb(sheetId, tab) {
   const rows = await values(sheetId, tab, "A1:F");
   let g = [];
@@ -128,7 +134,9 @@ export async function readKb(sheetId, tab) {
       finance: (row[1] || "").trim(),
       title,
       tags: (row[3] || "").trim(),
-      body: (row[4] || "").replace(/\r\n/g, "\n"),
+      // PC(planner/kb.py norm_body · sheets.read_kb)·업무자료검색 웹과 같게 다듬는다 — 줄 끝 공백과 앞뒤 빈 줄.
+      // 안 맞추면 PC 에서 '내 계정에서만' 고친 자료를 웹이 '회사가 또 고쳤다' 로 잘못 알린다(v1.31.3).
+      body: normBody(row[4]),
       checklist: (row[5] || "").split("\n").map((x) => x.trim()).filter(Boolean),
     };
     const files = kbFilesFrom((g[i] || [])[0] || "", title);

@@ -220,6 +220,12 @@ async function saveMine(i, body) {
   const it = _items[i];
   if (!it) return;
   const msg = $("#kbmsg");
+  // 고친 것이 없으면 계정에 쓰지 않는다(v1.31.3) — 예전엔 그대로 [저장] 해도 '되돌림' 기록을 계정에 남겼다
+  if (body !== null && kbedits.norm(body) === kbedits.norm(it.body)) {
+    showDetail(i);
+    toast("바뀐 내용이 없어요.");
+    return;
+  }
   const btns = [$("#kbsave"), $("#kbrevert")].filter(Boolean);
   for (const b of btns) b.disabled = true;
   if (msg) msg.textContent = "내 계정에 저장하는 중…";

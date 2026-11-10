@@ -12,6 +12,8 @@ export const FILE = "kb_edits.json";
 const FIELDS = ["title", "category", "finance", "tags", "body", "checklist", "files"];
 
 const stamp = () => new Date().toISOString().slice(0, 19) + "Z";
+export const norm = (t) => String(t == null ? "" : t).replace(/\r\n?/g, "\n")
+  .split("\n").map((l) => l.replace(/\s+$/, "")).join("\n").trim();
 
 /** 파일 → {제목: 기록}. 모양이 틀린 기록은 뺀다. */
 export function editsOf(data) {
@@ -42,7 +44,8 @@ export function overlay(items, edits) {
     out._local = true;
     out._orig = it;
     const b = rec.base && typeof rec.base === "object" ? rec.base : null;
-    if (b && typeof b.body === "string" && b.body !== String(it.body || "")) out._stale = true;
+    // 다듬은 것끼리 견준다 — PC 는 줄 끝 공백을 턴 본문을 원본으로 적는다(공백 차이는 '또 고침' 이 아니다)
+    if (b && typeof b.body === "string" && norm(b.body) !== norm(it.body)) out._stale = true;
     return out;
   });
 }
@@ -71,7 +74,7 @@ export async function save(shown, body) {
   const o = data && typeof data === "object" ? { ...data } : {};
   const edits = { ...editsOf(data) };
   const prev = edits[t] && edits[t].item && typeof edits[t].item === "object" ? edits[t].item : {};
-  const item = { ...prev, title: orig.title, body: String(body) };
+  const item = { ...prev, title: orig.title, body: norm(body) };
   const now = stamp();
   const merged = { ...orig };
   for (const k of FIELDS) if (item[k] !== null && item[k] !== undefined) merged[k] = item[k];

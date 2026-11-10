@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.31.2"
+APP_VERSION = "1.31.3"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -65,6 +65,18 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/documents.readonly",
 ]
 SCOPE_DOCS_READ = "https://www.googleapis.com/auth/documents.readonly"
+# 권한이 빠졌을 때 사람에게 보여 줄 이름(v1.31.3) — 구글 동의 화면은 항목마다 체크를 받는다.
+# 하나라도 빼고 로그인하면 그 기능만 조용히 안 됐다(일반 직원이 가장 자주 겪는 일).
+SCOPE_LABELS = {
+    "https://www.googleapis.com/auth/calendar": "캘린더(일정)",
+    "https://www.googleapis.com/auth/tasks": "할일",
+    "https://www.googleapis.com/auth/drive.appdata": "동기화(드라이브 앱 저장공간)",
+    "https://www.googleapis.com/auth/spreadsheets": "구글 시트(고객관리·업무자료·인증번호)",
+    "https://www.googleapis.com/auth/drive.file": "첨부 올리기(드라이브 파일)",
+    "https://www.googleapis.com/auth/documents.readonly": "오늘의 뉴스(문서 읽기)",
+}
+# 늘 살피는 것(상태 줄). 뉴스 문서 읽기는 뉴스 창이 따로 알린다.
+SCOPES_CORE = tuple(k for k in SCOPE_LABELS if not k.endswith("documents.readonly"))
 # 오늘의 뉴스 문서 — 제미나이가 매일 아침(8:40) 새로 쓴다. [설정] 에서 바꿀 수 있다.
 # 문서 id 만으로는 열 수 없다(그 계정에 있거나 공유된 문서만 읽힌다).
 DEF_NEWS_DOC = "1KhvgFvtETklf2wAoJjSzCJLh3iyKCYB19LaH_j03rqI"
