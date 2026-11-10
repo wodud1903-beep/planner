@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "업무자료검색"
 APP_ID = "KbSearch"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 # ---------------------------------------------------------------------------
 # 서비스 스위치 — **자동 업데이트로 끄고 켠다.**
@@ -88,6 +88,11 @@ SHEETS_BATCH_UPDATE_URL = SHEETS_BASE_URL + ":batchUpdate"
 # 회사 공통 업무자료 — 일정관리기와 **같은 스프레드시트·같은 탭**.
 # (일정관리기 config.RATES_SHEET_ID — 수당율과 업무자료가 같이 든 전용 파일)
 KB_SHEET_ID = "1PSjqA7wvIBHusjYHFfD9cLKP-EbtdFrCkNqlZHz2jm0"
+# 휴대폰 인증번호 받기(kb-v1.8.0, otp.py) — 일정관리기와 같은 지점 공용 '인증문자' 시트(지점장 폰의 MacroDroid 가 쌓는다).
+# 주소·탭은 저절로 채워 두고, 쓰는 사람이 설정에서 켠다(처음 설치하면 꺼짐 — 지점장 결정).
+# ⚠️ 저장소·exe 가 공개라 이 ID 도 공개다(일정관리기 config 와 같은 설명 — 지점장이 그대로 두기로 했다).
+OTP_DEF_SHEET_ID = "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw"
+OTP_DEF_TAB = "시트1"
 KB_TAB = "업무자료"
 
 # 회사 공통 자료를 **로그인 없이** 저절로 받는 간격(분). 켤 때 한 번, 그 뒤로 이 간격마다.

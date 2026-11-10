@@ -1,4 +1,4 @@
-"""화면 — 로그인 없이 편집·저장, 설정 세 가지, 빠른검색, [동기화] 흐름.
+"""화면 — 로그인 없이 편집·저장, 설정(네 가지), 빠른검색, [동기화] 흐름.
 
 Qt 창을 실제로 띄운다(화면이 없으면 offscreen). 구글은 fake_google 로 흉내 낸다.
 """
@@ -145,11 +145,11 @@ pump(0.1)
 ok("본문이 복사됨", QGuiApplication.clipboard().text() == "내가 적은 본문")
 ok("창이 닫힘", not q.isVisible())
 
-print("[4] 설정 — 세 가지만")
+print("[4] 설정 — 시작프로그램 · 테마 · 단축키 · 휴대폰 인증번호(kb-v1.8.0)")
 d = SettingsDialog(w.settings, hot_ok=True, parent=w)
 groups = [g.title() for g in d.findChildren(__import__("PySide6.QtWidgets").QtWidgets.QGroupBox)]
-ok("시작프로그램 · 테마 · 빠른검색 단축키", groups == ["시작 프로그램", "화면 테마", "업무자료 빠른검색 단축키"],
-   groups)
+ok("시작프로그램 · 테마 · 빠른검색 단축키 · 휴대폰 인증번호 받기",
+   groups == ["시작 프로그램", "화면 테마", "업무자료 빠른검색 단축키", "휴대폰 인증번호 받기"], groups)
 d.chk_ctrl.setChecked(False)
 d.chk_alt.setChecked(False)
 d.chk_shift.setChecked(False)

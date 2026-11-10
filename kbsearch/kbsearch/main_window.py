@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
-from . import config, hotkey, kb, kb_files, sheets_kb, switch, sync, theme, updater
+from . import config, hotkey, kb, kb_files, otp, otp_popup, sheets_kb, switch, sync, theme, updater
 from .google_auth import GoogleAuth, LoginCancelled
 from .icon import make_icon
 from .kb_view import KbEditDialog, KbView, QuickSearch
@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
     sig_update = Signal(object, str, bool)   # (새 판 정보 | None, 오류, 직접 눌렀나)
     sig_public = Signal(object, str)         # (공개로 받은 공통 자료 | None, 오류)
     sig_switch = Signal(object)              # 웹 스위치 상태(switch.fetch_state) | None
+    sig_otp = Signal(object, str)            # 휴대폰 인증번호 — 새로 온 것 [{code, sender, body}], 오류 (kb-v1.8.0)
 
     STALE_SEC = 5 * 60          # 창·빠른검색을 열 때 이보다 오래됐으면 공통 자료를 다시 받는다
 
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self.sig_update.connect(self._on_update)
         self.sig_public.connect(self._on_public)
         self.sig_switch.connect(self._on_switch)
+        self.sig_otp.connect(self._on_otp)
 
         # 전역 단축키 (윈도) — 업무자료 빠른검색
         self.hotkeys = hotkey.HotkeyManager(QApplication.instance(), int(self.winId()))
@@ -122,6 +124,16 @@ class MainWindow(QMainWindow):
             self._switch_timer = QTimer(self)
             self._switch_timer.timeout.connect(self.check_switch)
             self._switch_timer.start(int(config.SWITCH_CHECK_MINUTES * 60 * 1000))
+
+        # 휴대폰 인증번호 — 일정관리기와 같다(otp.py). 설정에서 켜면 4초마다 시트 맨 위를 본다(kb-v1.8.0).
+        self._otp = otp.Watcher()
+        self._otp_busy = False
+        self._otp_skip = 0
+        self._otp_errs = 0
+        self._otp_tick = 0
+        self._otp_timer = QTimer(self)
+        self._otp_timer.timeout.connect(self._poll_otp)
+        self._otp_timer.start(otp.POLL_MS)
 
         self.apply_theme()
         self.refresh_account()
@@ -454,6 +466,48 @@ class MainWindow(QMainWindow):
         self._quick.popup()
         self._pull_if_stale()
 
+    # ------------------------------------------------------------ 휴대폰 인증번호(kb-v1.8.0)
+    def _poll_otp(self) -> None:
+        s = self.settings
+        sid = str(getattr(s, "otp_sheet", "") or "").strip()
+        if not getattr(s, "otp_on", False) or not sid:
+            self._otp.reset()                # 다시 켜면 그때 있던 것은 '본 것' 으로
+            return
+        if self._otp_busy or not self.gauth.is_connected():
+            return
+        if self._otp_skip > 0:               # 방금 못 읽었다 — 조금 쉬었다가
+            self._otp_skip -= 1
+            return
+        self._otp_tick += 1
+        if otp.idle_seconds() > otp.IDLE_SEC and self._otp_tick % otp.IDLE_EVERY:
+            return                           # 자리 비움 — 20초에 한 번만(시트 읽기 한도를 아낀다)
+        self._otp_busy = True
+        tab = str(getattr(s, "otp_tab", "") or "").strip()
+
+        def worker():
+            items, err = [], ""
+            try:
+                items = self._otp.poll(self.gauth, sid, tab)
+            except Exception as e:
+                err = (str(e).splitlines() or ["error"])[0][:160] or "error"
+            self.sig_otp.emit(items, err)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_otp(self, items, err: str) -> None:
+        self._otp_busy = False
+        if err:
+            self._otp_skip = otp.BACKOFF_TICKS
+            self._otp_errs += 1
+            if self._otp_errs == 3:          # 계속 못 읽으면 한 번만 알린다
+                self._set_msg("인증문자 시트를 읽지 못했습니다 — [설정] 의 시트 주소·구글 로그인을 확인하세요", "bad")
+            return
+        self._otp_errs = 0
+        copy = bool(getattr(self.settings, "otp_copy", True))
+        for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
+            if copy:
+                QApplication.clipboard().setText(it["code"])
+            otp_popup.show(it, copied=copy)
+
     # ------------------------------------------------------------ 설정
     def open_settings(self) -> None:
         self.show_window()
@@ -466,6 +520,8 @@ class MainWindow(QMainWindow):
                 self._set_msg(f"설정을 저장했습니다 — 빠른검색 {self.settings.hotkey_text()}", "ok")
             elif not self.settings.kb_hot_on:
                 self._set_msg("설정을 저장했습니다 — 빠른검색 단축키 꺼짐")
+            if self.settings.otp_on and not self.gauth.is_connected():
+                self._set_msg("인증번호 받기를 켰습니다 — [동기화] 로 구글 로그인하면 시작합니다")
 
     # ------------------------------------------------------------ 자료 편집
     def _account(self) -> str:

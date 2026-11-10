@@ -14,6 +14,15 @@ from . import config
 FILE = "settings.json"
 
 
+def otp_where(sheet, tab) -> tuple:
+    """인증문자 시트·탭 — 비어 있으면 지점 기본 시트(일정관리기 models.otp_where 와 같다). 기본 시트에 탭이 비면 '시트1'."""
+    sid = str(sheet or "").strip() or config.OTP_DEF_SHEET_ID
+    t = str(tab or "").strip()
+    if not t and sid == config.OTP_DEF_SHEET_ID:
+        t = config.OTP_DEF_TAB
+    return sid, t
+
+
 @dataclass
 class Settings:
     theme: str = "light"
@@ -24,6 +33,11 @@ class Settings:
     kb_hot_key: str = "F"
     tray_hint_shown: bool = False    # '트레이로 내려갔습니다' 안내를 한 번 보였다
     geometry: str = ""               # 창 위치·크기(Qt saveGeometry, base64)
+    # 휴대폰 인증번호 받기(kb-v1.8.0) — 일정관리기와 같다. 처음 설치하면 꺼짐(일정관리기와 함께 켜면 두 번 뜬다).
+    otp_on: bool = False
+    otp_sheet: str = config.OTP_DEF_SHEET_ID
+    otp_tab: str = config.OTP_DEF_TAB
+    otp_copy: bool = True
 
     @classmethod
     def load(cls) -> "Settings":
@@ -39,6 +53,7 @@ class Settings:
         except Exception:
             pass
         s.kb_hot_key = (s.kb_hot_key or "F").strip().upper() or "F"
+        s.otp_sheet, s.otp_tab = otp_where(s.otp_sheet, s.otp_tab)
         return s
 
     def save(self) -> None:

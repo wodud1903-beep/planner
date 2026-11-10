@@ -1,19 +1,20 @@
-"""설정 창 — 딱 세 가지만 둔다.
+"""설정 창.
 
   1. PC 시작 시 자동 실행
   2. 화면 테마
   3. 업무자료 빠른검색 단축키
+  4. 휴대폰 인증번호 받기(kb-v1.8.0 — 일정관리기와 같다)
 """
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QGroupBox, QHBoxLayout,
-    QLabel, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QVBoxLayout,
 )
 
 from . import config, searchcombo, startup, theme
-from .settings import Settings
+from .settings import Settings, otp_where
 
 KEYS = [chr(c) for c in range(ord("A"), ord("Z") + 1)] + [f"F{i}" for i in range(1, 13)]
 
@@ -88,6 +89,28 @@ class SettingsDialog(QDialog):
         hl.addWidget(self.lbl_hot)
         root.addWidget(gb_h)
 
+        # ---- 4. 휴대폰 인증번호 받기 ----
+        gb_o = QGroupBox("휴대폰 인증번호 받기")
+        ofl = QFormLayout(gb_o)
+        self.chk_otp = QCheckBox("사용 (폰으로 온 인증번호를 화면 오른쪽 아래에 띄우고 복사)")
+        self.chk_otp.setChecked(bool(settings.otp_on))
+        ofl.addRow(self.chk_otp)
+        self.ed_otp_sheet = QLineEdit(settings.otp_sheet or "")
+        self.ed_otp_sheet.setPlaceholderText("비워 두면 지점 기본 인증문자 시트")
+        ofl.addRow("인증문자 시트", self.ed_otp_sheet)
+        self.ed_otp_tab = QLineEdit(settings.otp_tab or "")
+        self.ed_otp_tab.setPlaceholderText("비워 두면 첫 번째 탭")
+        ofl.addRow("탭 이름", self.ed_otp_tab)
+        self.chk_otp_copy = QCheckBox("오면 바로 클립보드에 복사 (로그인 칸에서 Ctrl+V)")
+        self.chk_otp_copy.setChecked(bool(settings.otp_copy))
+        ofl.addRow("", self.chk_otp_copy)
+        lbl_o = QLabel("기본은 지점 공용 인증문자 시트입니다 — 다른 시트를 쓸 때만 주소를 바꾸세요(비우면 기본으로).\n"
+                       "구글 로그인([동기화])이 돼 있어야 읽을 수 있습니다. 뜬 번호는 10초 뒤 닫힙니다.\n"
+                       "⚠ 일정관리기에서도 켜 두면 같은 번호가 두 번 뜹니다 — 함께 쓰면 한쪽만 켜세요.")
+        lbl_o.setStyleSheet(f"color:{theme.c('subtext')};")
+        ofl.addRow(lbl_o)
+        root.addWidget(gb_o)
+
         self.chk_hot.toggled.connect(self._sync_enabled)
         self._sync_enabled()
 
@@ -117,7 +140,19 @@ class SettingsDialog(QDialog):
         s.kb_hot_alt = self.chk_alt.isChecked()
         s.kb_hot_shift = self.chk_shift.isChecked()
         s.kb_hot_key = self.cmb_key.currentText() or "F"
+        s.otp_on = self.chk_otp.isChecked()
+        # 주소를 붙여넣어도 ID 만 · 비우면 지점 기본 시트(탭이 비면 '시트1')
+        s.otp_sheet, s.otp_tab = otp_where(_sheet_id(self.ed_otp_sheet.text()), self.ed_otp_tab.text())
+        s.otp_copy = self.chk_otp_copy.isChecked()
         want = self.chk_startup.isChecked()
         if want != startup.is_on():
             startup.set_on(want)
         self.accept()
+
+
+def _sheet_id(text: str) -> str:
+    """스프레드시트 주소를 붙여넣어도 ID 만(일정관리기 sheets.parse_sheet_id 와 같다)."""
+    import re
+    t = (text or "").strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", t)
+    return m.group(1) if m else t
