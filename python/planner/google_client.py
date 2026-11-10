@@ -190,6 +190,20 @@ class GoogleAuth:
             return True
         return scope in self.scopes
 
+    def missing_scopes(self, core_only: bool = False) -> list:
+        """로그인할 때 빠진 권한(config.SCOPE_LABELS 의 열쇠). 권한 목록을 모르면(옛 토큰) 빈 목록.
+
+        구글 동의 화면은 항목마다 체크를 받는다 — 빼고 [계속] 하면 로그인은 되는데 그 기능만 안 된다.
+        """
+        if not self.is_connected() or not self.scopes:
+            return []
+        have = set(self.scopes)
+        want = config.SCOPES_CORE if core_only else tuple(config.SCOPE_LABELS)
+        out = [sc for sc in want if sc not in have]
+        if config.SCOPE_DRIVE_READ in have:          # 드라이브 읽기가 있으면 문서도 그것으로 읽는다
+            out = [sc for sc in out if sc != config.SCOPE_DOCS_READ]
+        return out
+
     def is_connected(self) -> bool:
         return bool(self.refresh_token)
 
@@ -744,6 +758,20 @@ def delete_event(auth: GoogleAuth, calendar_id: str, event_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Drive appDataFolder (다중 PC 동기화용 앱 전용 저장공간)
 # ---------------------------------------------------------------------------
+def _drive_fail(what: str, r) -> GoogleError:
+    """드라이브 요청 실패 → 무엇을 하면 되는지까지 적은 오류(v1.31.3).
+
+    401·403 은 거의 언제나 '로그인할 때 드라이브 권한을 뺐다(동의 화면 체크)' 또는 로그인 만료다 —
+    예전엔 'Drive 조회 실패 (HTTP 403)' 뿐이라 무엇을 해야 하는지 알 수 없었다.
+    """
+    code = getattr(r, "status_code", 0)
+    if code in (401, 403):
+        return GoogleError(
+            f"{what} (HTTP {code}) — 구글 로그인에 드라이브(동기화) 권한이 없습니다.\n"
+            "[설정] 에서 [Google 로그아웃] 후 다시 로그인하면서, 동의 화면의 '모두 선택' 에 체크해 주세요.")
+    return GoogleError(f"{what} (HTTP {code})")
+
+
 def drive_find(auth: GoogleAuth, name: str) -> Optional[str]:
     r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
         "spaces": "appDataFolder",
@@ -751,7 +779,7 @@ def drive_find(auth: GoogleAuth, name: str) -> Optional[str]:
         "fields": "files(id,name,modifiedTime)",
     })
     if r.status_code != 200:
-        raise GoogleError(f"Drive 조회 실패 (HTTP {r.status_code})")
+        raise _drive_fail("Drive 조회 실패", r)
     files = r.json().get("files", [])
     return files[0]["id"] if files else None
 
@@ -760,7 +788,7 @@ def drive_read(auth: GoogleAuth, file_id: str) -> str:
     r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
                      timeout=20, params={"alt": "media"})
     if r.status_code != 200:
-        raise GoogleError(f"Drive 다운로드 실패 (HTTP {r.status_code})")
+        raise _drive_fail("Drive 다운로드 실패", r)
     return r.text
 
 
@@ -771,14 +799,14 @@ def drive_write(auth: GoogleAuth, name: str, content: str) -> str:
         meta = _http().post(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
                              json={"name": name, "parents": ["appDataFolder"]})
         if meta.status_code not in (200, 201):
-            raise GoogleError(f"Drive 파일 생성 실패 (HTTP {meta.status_code})")
+            raise _drive_fail("Drive 파일 생성 실패", meta)
         fid = meta.json()["id"]
     hdr = auth._headers()
     hdr["Content-Type"] = "application/json; charset=UTF-8"
     up = _http().patch(f"{config.DRIVE_UPLOAD_URL}/{fid}", headers=hdr, timeout=30,
                         params={"uploadType": "media"}, data=content.encode("utf-8"))
     if up.status_code not in (200, 201):
-        raise GoogleError(f"Drive 업로드 실패 (HTTP {up.status_code})")
+        raise _drive_fail("Drive 업로드 실패", up)
     return fid
 
 

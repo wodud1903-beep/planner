@@ -18,15 +18,27 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 import urllib.parse
 from datetime import date
 
-from . import config, sheets
-from .net import http as _http
+from . import config, net, sheets
+
+
+def _http():
+    # ⚠️ net.http 를 **부를 때** 찾는다. 'from .net import http' 로 묶어 두면 검사들이 net.http 를
+    #    가짜로 바꿔도 여기는 진짜 인터넷으로 나갔다(v1.31.0~1.31.2 의 검사가 4초마다 구글에 갔다).
+    return net.http()
 
 TOP_ROWS = 12            # 머리글 + 맨 위 11줄 — 4초 사이 이보다 많이 오는 일은 없다
 POLL_MS = 4000           # 이만큼마다 본다(같은 계정 PC 두 대여도 구글 읽기 한도 안쪽)
 BACKOFF_TICKS = 7        # 읽기가 탈나면 이만큼 건너뛴다(약 30초)
+# 권한이 없어 못 읽는 것은 기다려도 안 풀린다 — 10분에 한 번만 다시 본다(v1.31.3).
+# 기본으로 켜져 있어서, 그 시트를 볼 수 없는 직원 PC 가 30초마다 헛읽기를 하며 읽기 한도를 썼다.
+DENIED_TICKS = 150
+# 이만큼 넘게 못 봤으면(PC 가 잠들었다 깼다 · 인터넷이 끊겼다 붙었다) 그사이 온 문자는 띄우지 않는다 —
+# 아침에 PC 를 깨우면 새벽에 온 옛 인증번호 세 개가 뜨고 클립보드까지 바뀌었다(v1.31.3).
+GAP_SEC = 120
 # 자리 비움(키보드·마우스를 IDLE_SEC 넘게 안 씀 · 화면 잠금)이면 IDLE_EVERY 번에 한 번만(약 20초) 본다(v1.31.1).
 # 구글 시트 읽기 한도가 프로젝트 전체 분당 300회라, 모든 직원 PC 가 4초마다 읽으면 20대에서 닿는다 —
 # 닿으면 고객 목록 불러오기 등 다른 시트 기능까지 막힌다. 인증번호는 PC 에서 로그인하는 중에 오므로 빠르기는 그대로.
@@ -69,12 +81,18 @@ def range_a1(tab: str) -> str:
     return f"'{tab}'!{a1}" if tab else a1          # 탭을 비우면 첫 번째 탭
 
 
+class NoAccess(Exception):
+    """이 계정으로는 인증문자 시트를 볼 수 없다(403 · 404) — 기다려도 안 풀린다."""
+
+
 def read_top(auth, sheet_id: str, tab: str = "") -> list:
-    """시트 맨 위 몇 줄(글자 그대로)."""
+    """시트 맨 위 몇 줄(글자 그대로). 권한이 없으면 NoAccess."""
     url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id,
                                           rng=urllib.parse.quote(range_a1(tab), safe=""))
     r = _http().get(url, headers=sheets._headers(auth), timeout=10,
                     params={"valueRenderOption": "FORMATTED_VALUE"})
+    if r.status_code in (403, 404):
+        raise NoAccess(f"HTTP {r.status_code}")
     sheets._check(r)
     return (r.json() or {}).get("values", []) or []
 
@@ -166,15 +184,21 @@ class Watcher:
     def __init__(self):
         self.prev = None
         self.where = ("", "")
+        self.seen_at = 0.0                           # 마지막으로 읽은 때(time.time)
 
     def reset(self) -> None:
         self.prev = None
 
-    def poll(self, auth, sheet_id: str, tab: str = "", today: date | None = None) -> list:
+    def poll(self, auth, sheet_id: str, tab: str = "", today: date | None = None,
+             now: float | None = None) -> list:
+        now = time.time() if now is None else now
         where = (sheet_id, tab or "")
         if where != self.where:                      # 시트를 바꿨다 — 그 시트의 지금 것은 '본 것'
             self.where, self.prev = where, None
+        if self.prev is not None and now - self.seen_at > GAP_SEC:
+            self.prev = None                         # 오래 못 봤다 — 그사이 온 것은 옛 문자다
         rows = rows_of(read_top(auth, sheet_id, tab))
         news = new_rows(self.prev, rows)
         self.prev = [r["key"] for r in rows]
+        self.seen_at = now
         return items_of(news, today or date.today())

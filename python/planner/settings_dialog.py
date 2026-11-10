@@ -584,11 +584,13 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, config.APP_NAME, "로그인 실패:\n" + err)
             return
         self.tasks_changed = True
-        # 동의는 했는데 스프레드시트 권한이 실제로는 안 붙는 경우가 있어 바로 알려준다
-        if not self.gauth.has_scope(config.SCOPE_SHEETS):
-            QMessageBox.information(
+        # 동의 화면에서 뺀 항목이 있으면 바로 알린다(v1.31.3) — 구글은 항목마다 체크를 받는다.
+        # 예전엔 스프레드시트만 봤고, 안내도 개발자용(클라우드 콘솔)이라 직원은 무엇을 할지 몰랐다.
+        miss = self.gauth.missing_scopes()
+        if miss:
+            QMessageBox.warning(
                 self, config.APP_NAME,
-                "로그인은 되었지만 스프레드시트 권한이 부여되지 않았습니다.\n\n"
-                "구글 클라우드 → API 및 서비스 → OAuth 동의 화면 → 데이터 액세스에\n"
-                "아래 권한을 추가하고 저장한 뒤, 다시 로그인해 주세요.\n\n"
-                + config.SCOPE_SHEETS)
+                "구글 로그인은 됐지만, 동의 화면에서 빠진 항목이 있어 아래 기능이 동작하지 않습니다.\n\n· "
+                + "\n· ".join(config.SCOPE_LABELS[m] for m in miss)
+                + "\n\n[Google 로그아웃] 후 다시 로그인하면서,\n"
+                  "동의 화면의 '모두 선택' 에 체크하고 [계속] 을 눌러 주세요.")

@@ -1352,7 +1352,9 @@ class KbEditDialog(QDialog):
     def renamed(self) -> list:
         """이름을 바꾼 '이미 올린' 첨부 → [(id, 새 이름)]."""
         out = []
-        for lst in (self.shared, self.mine):
+        # '내 계정에서만 고침' 묶음에 붙인 내 첨부도 이름을 바꿀 수 있다(v1.31.3 — 예전엔 빠져서
+        # 받아 둔 파일·드라이브 이름이 옛 이름으로 남았다)
+        for lst in (self.shared, self.local, self.mine):
             for it in lst:
                 for a in it.get("files") or []:
                     if a.get("id") and a.get("_was") and a.get("_was") != a.get("name"):

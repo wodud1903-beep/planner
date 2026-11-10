@@ -651,7 +651,7 @@ class MainWindow(QMainWindow):
             try:
                 changed = sync.sync_now(self.gauth)
             except Exception as e:
-                err = str(e).splitlines()[0][:120]
+                err = str(e)[:400]           # 둘째 줄의 '무엇을 하면 되는지' 까지(v1.31.3)
             self.sig_sync_done.emit(changed, err, manual)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2071,6 +2071,14 @@ class MainWindow(QMainWindow):
         """시트를 백그라운드로 읽어온다 (창이 멈추지 않게)."""
         if not self._sheet_ready(quiet=not manual):
             return
+        # 이미 읽는 중이면 또 읽지 않는다(v1.31.3) — 켠 직후 설정에서 시트를 켜면 '저절로 불러오기' 와
+        # '설정 저장 뒤 불러오기' 가 겹쳐, 못 읽을 때 같은 오류 창이 두 번 떴다.
+        if getattr(self, "_sheet_loading", None) == self._sheet_epoch:
+            return
+        self._sheet_loading = self._sheet_epoch
+        # 누가 불렀든 이제 읽는다 — 켠 직후의 '저절로 불러오기'(_auto_load_sheet)는 더 조르지 않는다.
+        # 안 그러면 방금 실패한 것을 1.5초 뒤 또 읽어 같은 오류 창이 한 번 더 뜬다.
+        self._auto_load_started = True
         self.btn_cust_load.setEnabled(False)
         self.lbl_cust.setText("고객관리 시트를 불러오는 중…")
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
@@ -2305,6 +2313,7 @@ class MainWindow(QMainWindow):
 
     def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
+        self._sheet_loading = None           # 목록이 왔다(또는 실패) — 다시 불러올 수 있다
         if payload is None:
             if getattr(self, "_sheet_cached_at", "") and not self._sheet_loaded:
                 # 저장해 둔 목록을 보여 주는 중 — 창을 띄우지 않고 조금 뒤 다시 읽는다
@@ -3073,8 +3082,20 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 구글 연동
     def update_google_status(self):
         if self.gauth.is_connected():
-            self.lbl_status.setText("구글: 연결됨  (설정에서 로그인/로그아웃)")
-            self.lbl_status.setStyleSheet(f"color:{theme.c('status_ok')};")
+            miss = self.gauth.missing_scopes(core_only=True)
+            if miss:
+                # 동의 화면에서 뺀 항목이 있다 — 그 기능만 조용히 안 되던 것을 늘 보이게(v1.31.3)
+                names = " · ".join(config.SCOPE_LABELS[m].split("(")[0] for m in miss)
+                self.lbl_status.setText(f"구글: 연결됨 — 권한 빠짐({names}) · 설정에서 다시 로그인하세요")
+                self.lbl_status.setToolTip(
+                    "로그인할 때 구글 동의 화면에서 빠진 항목이 있어 아래 기능이 동작하지 않습니다.\n· "
+                    + "\n· ".join(config.SCOPE_LABELS[m] for m in miss)
+                    + "\n\n[설정] → [Google 로그아웃] 후 다시 로그인하면서 '모두 선택' 에 체크해 주세요.")
+                self.lbl_status.setStyleSheet(f"color:{theme.strong('orange')};")
+            else:
+                self.lbl_status.setText("구글: 연결됨  (설정에서 로그인/로그아웃)")
+                self.lbl_status.setToolTip("")
+                self.lbl_status.setStyleSheet(f"color:{theme.c('status_ok')};")
             self.btn_google.hide()
         else:
             # 단추가 바로 옆에 있으므로 '설정으로 가라'는 안내는 필요 없다
@@ -3110,12 +3131,30 @@ class MainWindow(QMainWindow):
         if not ok:
             QMessageBox.warning(self, config.APP_NAME, "로그인 실패:\n" + err)
             return
+        self._warn_missing_scopes()
         # 로그인 직후엔 켤 때 연결돼 있던 것과 같은 일을 해 줘야 한다 —
         # 계정 확인 → 계정 폴더 정하기 → 동기화 → 일정/할일·고객 목록.
         # _start_account_sync 가 그 줄을 통째로 밟는다(끝에서 fetch_all_async).
         self._reset_sheet_cache()
         self._auto_load_started = False
         self._start_account_sync(relogin=True)
+
+    def _warn_missing_scopes(self) -> bool:
+        """방금 로그인했는데 동의 화면에서 뺀 항목이 있으면 바로 알린다(v1.31.3). 알렸으면 True.
+
+        구글 동의 화면은 항목마다 체크를 받는다. 예전엔 빼고 로그인해도 아무 말이 없어서,
+        일정·시트·동기화가 '그냥 안 되는' 채로 지냈다(일반 직원 PC 에서 흔하다).
+        """
+        miss = self.gauth.missing_scopes()
+        if not miss:
+            return False
+        QMessageBox.warning(
+            self, config.APP_NAME,
+            "구글 로그인은 됐지만, 동의 화면에서 빠진 항목이 있어 아래 기능이 동작하지 않습니다.\n\n· "
+            + "\n· ".join(config.SCOPE_LABELS[m] for m in miss)
+            + "\n\n[설정] → [Google 로그아웃] 후 다시 로그인하면서,\n"
+              "동의 화면의 '모두 선택' 에 체크하고 [계속] 을 눌러 주세요.")
+        return True
 
     def _on_autofetch_toggled(self, on: bool):
         self.settings.auto_fetch = on
@@ -3258,6 +3297,8 @@ class MainWindow(QMainWindow):
             return
         if self._otp_busy or not self.gauth.is_connected() or not self._account_verified:
             return
+        if not self.gauth.has_scope(config.SCOPE_SHEETS):
+            return                           # 시트 권한 없이 로그인했다 — 상태 줄이 다시 로그인하라고 알린다
         if self._otp_skip > 0:               # 방금 못 읽었다 — 조금 쉬었다가
             self._otp_skip -= 1
             return
@@ -3268,9 +3309,14 @@ class MainWindow(QMainWindow):
         tab = str(getattr(s, "otp_tab", "") or "").strip()
 
         def worker():
+            import requests
             items, err = [], ""
             try:
                 items = self._otp.poll(self.gauth, sid, tab)
+            except otp.NoAccess:
+                err = "denied"               # 이 계정은 그 시트를 볼 수 없다
+            except requests.RequestException:
+                err = "net"                  # 인터넷이 잠깐 끊겼다 — 알리지 않는다
             except Exception as e:
                 err = (str(e).splitlines() or ["error"])[0][:160] or "error"
             self.sig_otp.emit(items, err)
@@ -3278,14 +3324,27 @@ class MainWindow(QMainWindow):
 
     def _on_otp(self, items, err: str):
         self._otp_busy = False
+        if err == "denied":
+            # 기다려도 안 풀린다 — 10분에 한 번만 다시 보고, 한 번만 알린다(v1.31.3)
+            self._otp_skip = otp.DENIED_TICKS
+            if not getattr(self, "_otp_denied_told", False):
+                self._otp_denied_told = True
+                self.sig_toast.emit(
+                    "휴대폰 인증번호 받기",
+                    "이 구글 계정으로는 인증문자 시트를 볼 수 없어 인증번호를 받지 못합니다. "
+                    "시트 주인에게 공유를 요청하거나, 쓰지 않으면 [설정] 에서 끄세요.")
+            return
         if err:
             self._otp_skip = otp.BACKOFF_TICKS
+            if err == "net":
+                return                       # 인터넷이 끊긴 것은 다른 곳에서 이미 보인다
             self._otp_errs += 1
             if self._otp_errs == 3:          # 계속 못 읽으면 한 번만 알린다
                 self.lbl_status.setText("인증문자 시트를 읽지 못했습니다 — [설정] 의 시트 주소·로그인 계정을 확인하세요")
                 self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
             return
         self._otp_errs = 0
+        self._otp_denied_told = False        # 다시 읽힌다(공유받았다) — 또 막히면 다시 알린다
         copy = bool(getattr(self.settings, "otp_copy", True))
         for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
             if copy:

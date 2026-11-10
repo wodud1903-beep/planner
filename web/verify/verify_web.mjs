@@ -2241,7 +2241,8 @@ console.log("\n[27] v1.30 — PC 설정·고친 자료를 내 계정으로 실�
     asked.push(u);
     if (u.includes("업무자료")) {
       return r.fulfill({ json: { values: [["카테고리", "금융사", "제목", "태그", "본문"],
-                                          ["캐피탈", "KB", "KB 연락처", "", "1588"],
+                                          // 시트 칸에 줄 끝 공백·빈 줄이 섞여 있다(손으로 고친 시트에 흔하다)
+                                          ["캐피탈", "KB", "KB 연락처", "", "1588  \n\n"],
                                           ["캐피탈", "현대", "현대캐피탈", "", "1577"]] } });
     }
     return r.fulfill({ json: { values: [] } });
@@ -2357,6 +2358,15 @@ console.log("\n[27] v1.30 — PC 설정·고친 자료를 내 계정으로 실�
   const det = await pA.locator("#kbdetail").innerText();
   ok("열면 고친 내용(팩스번호)이 보인다 · 나만 보인다는 표시", det.includes("0504-111-2222") && !det.includes("1588")
      && det.includes("내 계정에서 고침"), det.slice(0, 120));
+  ok("시트 칸의 줄 끝 공백·빈 줄 때문에 '회사가 또 고쳤다' 로 잘못 알리지 않는다(PC 와 같게 다듬어 견준다)",
+     !det.includes("회사에서 이 자료를 새로 고쳤습니다"), det.slice(0, 160));
+  // 고친 것 없이 [저장] 하면 계정에 쓰지 않는다
+  uploads.length = 0;
+  await pA.click("#kbedit");
+  await pA.click("#kbsave");
+  await pA.waitForTimeout(500);
+  ok("바뀐 것 없이 저장하면 계정에 쓰지 않는다", !uploads.some((x) => x.id === "KBE1")
+     && (await pA.locator("#kbeditor").count()) === 0, uploads.map((x) => x.id).join(","));
   // 웹에서 고친다 → 내 계정(kb_edits.json)에 저장
   uploads.length = 0;
   await pA.click("#kbedit");
