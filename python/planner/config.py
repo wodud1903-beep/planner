@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.31.3"
+APP_VERSION = "1.32.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -25,6 +25,9 @@ try:
 except Exception:
     GITHUB_TOKEN = ""
 UPDATE_ASSET_NAME = "일정관리기.exe"
+# 업데이트 우회 길(v1.32) — 저장소를 비공개로 돌리면 깃허브 릴리스가 404 가 된다. 그때 여기로 묻는다
+# (웹 서버가 읽기 전용 토큰으로 대신 읽어 준다 — api/update.js). 서버에 토큰을 넣기 전에는 503 이라 쓰지 않는다.
+UPDATE_PROXY_URL = "https://jyplanner.vercel.app/api/update?app=planner"
 
 # ---------------------------------------------------------------------------
 # 구글 OAuth (데스크톱 앱 클라이언트 내장)
@@ -136,6 +139,9 @@ DEF_SHEET_NAME = "미출고차량"
 #    지점장께 알렸고, 그대로 두기로 하셨다(2026-11-09). 공유를 '제한됨'으로 바꾸면 직원 계정만 열린다.
 OTP_DEF_SHEET_ID = "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw"
 OTP_DEF_TAB = "시트1"
+# 지점 공유 캘린더(v1.32) — 지점 공용 구글 캘린더의 ID. 비어 있으면 각자 [설정] 에서 넣는다.
+# (지점장이 캘린더 ID 를 정해 주면 여기에 넣어 모든 PC 의 기본값으로 한다)
+DEF_BRANCH_CAL = ""
 
 # 차종별 수당율 전용 스프레드시트 — **고정**.
 # 수당율은 회사가 한 곳에서 관리하는 값이라, 각 PC 가 어떤 고객관리 시트를 쓰든

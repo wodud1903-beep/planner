@@ -47,7 +47,8 @@ print("[2] 어디에 쓰나 — 자료검색은 업무자료 관리자, 설정�
 src = lambda f: (_ROOT / "python" / "planner" / f).read_text(encoding="utf-8")  # noqa: E731
 ok("자료검색 편집(kb_tab)은 is_kb_admin", src("kb_tab.py").count("config.is_kb_admin(") == 2
    and "is_rates_admin" not in src("kb_tab.py"))
-ok("수당율 편집(설정)은 그대로 is_rates_admin", src("settings_dialog.py").count("config.is_rates_admin(") == 2
+# 수당율 2곳 + 인증문자 시트 자동 정리(v1.32 — 지점장 PC 만 지운다) 1곳
+ok("수당율 편집(설정)은 그대로 is_rates_admin", src("settings_dialog.py").count("config.is_rates_admin(") == 3
    and "is_kb_admin" not in src("settings_dialog.py"))
 
 print("[3] 편집 창 — 새 계정은 '회사 공통' 을 고칠 수 있다")

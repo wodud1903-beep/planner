@@ -103,6 +103,25 @@ def merge(recs: list, dead: dict, remote: dict, now: str, shared: list) -> dict:
     return {"recs": out_recs, "dead": out_dead, "edits": edits, "changed": changed, "push": push}
 
 
+def merge_me(local: dict, remote, now: str) -> tuple:
+    """내 정보 — (쓸 것, 올려야 하나, 이 PC 를 바꿔야 하나). 나중에 고친 쪽(at). 같으면 그대로.
+
+    예전 판(v1.31 까지)은 파일을 쓸 때 "me" 를 빼먹는다 — 드라이브에 없고 이 PC 에 있으면 다시 올린다.
+    """
+    L = kb.clean_me(local)
+    R = kb.clean_me(remote) if isinstance(remote, dict) else None
+    vals = lambda d: {k: d.get(k, "") for k, _l in kb.ME_FIELDS}  # noqa: E731
+    if R is None or not (kb.has_me(R) or R.get("at")):
+        if kb.has_me(L):
+            return dict(L, at=L.get("at") or now), True, False
+        return L, False, False
+    if vals(L) == vals(R):
+        return L, False, False
+    if L.get("at") and L["at"] > (R.get("at") or ""):
+        return L, True, False
+    return R, False, True
+
+
 def sync(auth) -> list:
     """드라이브와 맞춘다. 받아서 바뀐 제목 목록. 못 읽으면 EditsError(쓰지 않는다)."""
     try:
@@ -118,12 +137,19 @@ def sync(auth) -> list:
     stamp = kb.utc_stamp()
     recs0, dead0 = kb.load_local(), kb.load_local_dead()
     m = merge(recs0, dead0, remote, stamp, kb.load_shared())
-    if m["push"]:
+    # 내 정보(v1.32 — {내 팩스} 자리에 들어갈 값)도 같은 파일의 "me" 로. 나중에 고친 쪽(at)이 이긴다.
+    me, me_push, me_pull = merge_me(kb.load_me(), o.get("me") if isinstance(o, dict) else None, stamp)
+    if m["push"] or me_push:
+        doc = {"v": 1, "updatedAt": stamp, "edits": m["edits"]}
+        if kb.has_me(me) or me.get("at"):
+            doc["me"] = me
         try:
-            google_client.drive_write(auth, FILE, json.dumps(
-                {"v": 1, "updatedAt": stamp, "edits": m["edits"]}, ensure_ascii=False, indent=1))
+            google_client.drive_write(auth, FILE, json.dumps(doc, ensure_ascii=False, indent=1))
         except Exception as e:
             raise EditsError(f"고친 자료를 올리지 못했습니다: {e}")
+    if me_pull:
+        kb.save_me(me, at=me.get("at") or "")
+        m["changed"] = list(m["changed"]) + ["내 정보"]
     # 바뀐 것이 있을 때만 쓴다 — 쓸 때마다 파일 시각이 바뀌어 동기화가 또 도는 일이 없게
     shape = lambda recs: sorted((list(r["key"]), r["item"], r.get("base"), r.get("at") or "") for r in recs)  # noqa: E731
     if shape(m["recs"]) != shape(recs0) or m["dead"] != dead0:

@@ -484,5 +484,74 @@ r = res();
 await cron(cronReq(), r);
 ok("주간 보고를 보낸 뒤에도 아침 브리핑은 따로 간다", r.json().sent === 1);
 
+console.log("\n[업데이트 우회 길] 저장소가 비공개가 돼도 PC 가 새 판을 받는다(api/update.js — v1.32)");
+{
+  const TOKEN = "t-" + randomBytes(8).toString("hex");
+  const rels = [
+    { tag_name: "kb-v1.9.0", name: "업무자료검색 1.9.0", body: "kb", assets: [{ name: "kbsearch.exe", url: "https://api.github.com/repos/x/assets/22", size: 20 }] },
+    { tag_name: "v9.9.9-rc", name: "시험판", prerelease: true, assets: [{ name: "a.exe", url: "u" }] },
+    { tag_name: "v1.32.0", name: "일정관리기 1.32.0", body: "· 고침", assets: [
+      { name: "notes.txt", url: "n" }, { name: "default.exe", label: "일정관리기.exe", url: "https://api.github.com/repos/x/assets/11", size: 10 }] },
+    { tag_name: "v1.31.3", name: "옛 판", assets: [{ name: "p.exe", url: "https://api.github.com/repos/x/assets/10" }] },
+    { tag_name: "v1.0.0", draft: true, assets: [] },
+  ];
+  const seen = [];
+  let listStatus = 200;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    seen.push({ url: String(url), headers: init.headers || {}, redirect: init.redirect });
+    if (String(url).includes("/releases?")) {
+      return { ok: listStatus === 200, status: listStatus, json: async () => rels, headers: new Map() };
+    }
+    return { ok: false, status: 302, headers: new Map([["location", "https://objects.example/signed?sig=abc"]]) };
+  };
+  const call = async (url, method = "GET") => {
+    const r = res();
+    await load("update.js")(req({ method, url }), r);
+    return r;
+  };
+  delete process.env.GITHUB_UPDATE_TOKEN;
+  let u = await call("/api/update?app=planner");
+  ok("토큰을 안 넣었으면 503 not_configured(PC 는 예전 안내 그대로) · 깃허브에 묻지 않는다",
+     u.statusCode === 503 && u.json().error === "not_configured" && seen.length === 0);
+  process.env.GITHUB_UPDATE_TOKEN = TOKEN;
+  u = await call("/api/update?app=planner");
+  const j = u.json();
+  ok("일정관리기 — kb-v… · 시험판 · 초안을 빼고 가장 새 판", u.statusCode === 200 && j.tag === "v1.32.0" && j.notes === "· 고침", u.body);
+  ok("내려받기 주소는 이 서버(판 번호까지 못 박아)", j.asset_url === "https://jyplanner.vercel.app/api/update?app=planner&dl=1&tag=v1.32.0", j.asset_url);
+  ok("응답에 토큰이 없다 · 저장하지 않게(no-store)", !u.body.includes(TOKEN) && u.headers["cache-control"] === "no-store");
+  ok("깃허브에는 토큰을 실어 묻는다", seen[0].headers.Authorization === "Bearer " + TOKEN && seen[0].url.includes("wodud1903-beep/planner/releases"));
+  u = await call("/api/update?app=kb");
+  ok("업무자료검색 — kb-v… 만", u.json().tag === "kb-v1.9.0" && u.json().asset_url.includes("app=kb&dl=1&tag=kb-v1.9.0"), u.body);
+  u = await call("/api/update?app=이상한값");
+  ok("모르는 app 은 일정관리기로", u.json().tag === "v1.32.0");
+  seen.length = 0;
+  u = await call("/api/update?app=planner&dl=1&tag=v1.32.0");
+  ok("dl=1 — exe 자산(이름이 default.exe 여도 label 로 찾는다)을 깃허브가 서명한 주소로 302",
+     u.statusCode === 302 && u.headers.location === "https://objects.example/signed?sig=abc"
+     && seen[1].url.endsWith("/assets/11") && seen[1].headers.Accept === "application/octet-stream" && seen[1].redirect === "manual",
+     JSON.stringify([u.statusCode, u.headers.location, seen[1] && seen[1].url]));
+  ok("302 응답에도 토큰이 없다", !JSON.stringify(u.headers).includes(TOKEN) && !u.body.includes(TOKEN));
+  u = await call("/api/update?app=planner&dl=1&tag=v1.31.3");
+  ok("판을 못 박으면 그 판을(물어본 뒤 새 판이 나와도 본 것과 같은 파일)", seen.at(-1).url.endsWith("/assets/10"));
+  u = await call("/api/update?app=planner&dl=1&tag=kb-v1.9.0");
+  ok("다른 프로그램의 판은 주지 않는다", u.statusCode === 404 && u.json().error === "no_release");
+  u = await call("/api/update?app=planner&tag=v0.0.1");
+  ok("없는 판은 404", u.statusCode === 404);
+  u = await call("/api/update?app=planner", "POST");
+  ok("GET 만 받는다", u.statusCode === 405);
+  listStatus = 401;
+  u = await call("/api/update?app=planner");
+  ok("토큰이 만료·잘못됐으면 502(PC 는 '확인 실패' 로 알고 다음에 다시)", u.statusCode === 502, String(u.statusCode));
+  globalThis.fetch = async () => { throw new Error("net"); };
+  u = await call("/api/update?app=planner");
+  ok("깃허브에 못 닿으면 502", u.statusCode === 502 && u.json().error === "github");
+  const src = readFileSync(join(ROOT, "api", "update.js"), "utf-8");
+  ok("토큰은 환경 변수에서만 읽는다(소스·저장소에 없다)", src.includes("process.env.GITHUB_UPDATE_TOKEN")
+     && !/ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}/.test(src));
+  delete process.env.GITHUB_UPDATE_TOKEN;
+  globalThis.fetch = realFetch;
+}
+
 console.log(fails ? `\n${fails}건 실패` : "\n전부 통과");
 process.exit(fails ? 1 : 0);

@@ -14,7 +14,9 @@ import { toast } from "./chrome.js";
 
 let _shared = [];        // 회사 공통 자료(시트 그대로)
 let _edits = {};         // 내 계정에서 고친 것 {제목: 기록} — kb_edits.json(v1.30)
-let _items = [];         // 화면에 보이는 것 = 회사 자료 + 내가 고친 것
+let _me = {};            // 내 정보(팩스·이름·연락처·이메일) — 본문의 {내 팩스} 자리에 넣는다(v1.32)
+let _items = [];         // 화면에 보이는 것 = 회사 자료 + 내가 고친 것 + 내 정보를 채운 본문(_src = 채우기 전)
+const MINE = "__mine";   // 분류 단추 '내가 고친 것'
 let _idx = [];
 let _q = "";
 let _cat = "";
@@ -25,6 +27,7 @@ const SEARCH_DELAY = 130;   // 타자가 멎으면 찾는다. 한 자마다 훑�
 export async function load({ refresh = true } = {}) {
   const cached = await store.get("data", "kb");
   _edits = (await store.get("data", "kbEdits")) || {};
+  _me = kbedits.cleanMe(await store.get("data", "kbMe"));
   if (cached && cached.length) { _shared = cached; setItems(); }
   else if (!refresh) { _shared = []; setItems(); }   // 계정이 바뀌어 지운 뒤 — 앞사람 것을 남기지 않는다
   if (!refresh) return;
@@ -50,15 +53,20 @@ export async function load({ refresh = true } = {}) {
 /** 내 계정에서 고친 자료를 다시 본다(바뀌었을 때만 받는다 — 30초마다 · 돌아올 때 boot.js). 바뀌면 true. */
 export async function refreshEdits() {
   try {
-    const { edits, changed } = await kbedits.read();
+    const { edits, me, changed } = await kbedits.read();
     if (!changed) return false;
-    if (JSON.stringify(edits) === JSON.stringify(_edits)) return false;
+    // 내 정보 — 나중에 고친 쪽. 예전 판이 계정 파일에서 빼먹었으면 이 기기 것을 다시 올린다
+    const mm = kbedits.mergeMe(_me, me);
+    const meCh = JSON.stringify(mm.me) !== JSON.stringify(_me);
+    if (meCh) { _me = mm.me; await store.put("data", "kbMe", _me); }
+    if (mm.push) kbedits.saveMe(_me, _me.at || null).catch(() => {});
+    if (JSON.stringify(edits) === JSON.stringify(_edits) && !meCh) return false;
     _edits = edits;
     await store.put("data", "kbEdits", edits);
     setItems();
     const cur = router.current();
     const m = cur && cur.path.match(/^\/kb\/(\d+)$/);
-    if (m && !$("#kbeditor")) showDetail(parseInt(m[1], 10));   // 보고 있던 자료도 새 내용으로(고치는 중이면 그대로)
+    if (m && !$("#kbeditor") && !$("#kbmeform")) showDetail(parseInt(m[1], 10));   // 보고 있던 자료도 새 내용으로(고치는 중이면 그대로)
     return true;
   } catch (e) {
     return false;               // 로그인 전 · 오프라인 — 저장본으로 계속 보인다
@@ -66,10 +74,14 @@ export async function refreshEdits() {
 }
 
 function setItems() {
-  const items = kbedits.overlay(_shared, _edits);
+  // 본문의 {내 팩스|기본값} 자리를 내 정보로 채워 보여 준다 — 찾기·복사도 채운 글로. 고칠 때는 _src(자리 그대로).
+  const items = kbedits.overlay(_shared, _edits).map((it) => {
+    const body = kbedits.fillMe(it.body, _me);
+    return body === it.body ? { ...it, _src: it } : { ...it, body, _src: it, _filled: true };
+  });
   _items = items;
   _idx = kb.index(items);
-  if (router.current() && router.current().path.startsWith("/kb")) paintList();
+  if (router.current() && router.current().path.startsWith("/kb")) { paintCats(); paintList(); }
 }
 
 export async function screen(m) {
@@ -84,6 +96,7 @@ export async function screen(m) {
           <div class="searchbar">
             <input id="kbq" type="search" placeholder="캐피탈·서류·연락처 검색 (초성도 됩니다)"
                    value="${_q}" autocomplete="off" enterkeyhint="search">
+            <button class="chip" id="kbme" title="자료 본문의 '내 팩스' 자리에 들어갈 내 정보">내 정보</button>
           </div>
           <div class="cats" id="kbcats"></div>
           <ul class="list" id="kblist"></ul>
@@ -105,6 +118,7 @@ export async function screen(m) {
   });
   input.addEventListener("compositionend", () => { clearTimeout(_timer); run(); });
 
+  $("#kbme").onclick = () => openMe();
   paintCats();
   paintList();
   if (!_items.length) await load();
@@ -114,10 +128,17 @@ export async function screen(m) {
 }
 
 function paintCats() {
+  const box = $("#kbcats");
+  if (!box) return;
   const cats = ["", ...kb.CATEGORIES.filter((c) =>
     _items.some((it) => (it.category || "") === c))];
-  render($("#kbcats"), cats.map((c) =>
-    html`<button data-cat="${c}" aria-pressed="${String(c === _cat)}">${c || "전체"}</button>`
+  // 내 계정에서 고친 자료가 있으면 그것만 모아 보는 단추(v1.32)
+  const mine = _items.filter((it) => it._local).length;
+  if (mine) cats.push(MINE);
+  else if (_cat === MINE) _cat = "";
+  render(box, cats.map((c) =>
+    html`<button data-cat="${c}" aria-pressed="${String(c === _cat)}">${
+      c === MINE ? `내가 고친 것 ${mine}` : c || "전체"}</button>`
   ).join(""));
   for (const b of $$("#kbcats button")) {
     b.onclick = () => {
@@ -132,7 +153,7 @@ function paintCats() {
 function paintList() {
   const el = $("#kblist");
   if (!el) return;
-  const hits = kb.search(_idx, _q, _cat);
+  const hits = _cat === MINE ? kb.search(_idx, _q, "").filter((it) => it._local) : kb.search(_idx, _q, _cat);
   if (!hits.length) {
     render(el, html`<li class="empty">${_items.length
       ? "찾는 자료가 없습니다." : "자료를 불러오는 중입니다…"}</li>`);
@@ -166,6 +187,8 @@ export function showDetail(i) {
       ${[it.finance, it.category].filter(Boolean).join(" · ")}</p>
     ${raw(it._local ? `<p class="s" id="kbmine" style="color:var(--accent);margin:0 0 10px">회사 공통 · 내 계정에서 고침 — 나만 보입니다</p>` : "")}
     ${raw(it._stale ? `<p class="s" style="color:var(--sub);margin:0 0 10px">회사에서 이 자료를 새로 고쳤습니다. 새 내용으로 바꾸려면 [회사 자료로 되돌리기] 를 누르세요.</p>` : "")}
+    ${raw(it.body.includes("〔내 ") ? `<p class="s" style="margin:0 0 10px">내 정보가 비어 있는 자리가 있어요.
+      <button class="chip" id="kbmego">내 정보 적기</button></p>` : "")}
     <div id="kbbodybox">${raw(kb.bodyToHtml(it.body))}</div>
     <p style="margin-top:16px">
       <button class="chip" id="kbcopy">본문 복사</button>
@@ -177,6 +200,8 @@ export function showDetail(i) {
   paintAttachments(it.files || []);
   const ed = $("#kbedit");
   if (ed) ed.onclick = () => openEditor(i);
+  const mg = $("#kbmego");
+  if (mg) mg.onclick = () => openMe(i);
   const rv = $("#kbrevert");
   if (rv) rv.onclick = () => saveMine(i, null);
   const back = $("#kbback");
@@ -201,10 +226,16 @@ async function openEditor(i) {
   const box = $("#kbbodybox");
   if (!it || !box) return;
   const who = (await store.account()) || "";
+  const src = it._src || it;          // 고칠 때는 {내 팩스} 자리를 채우기 전의 글
   render(box, html`
     <div id="kbeditor">
       <p class="kbhead">내 계정에서만 고치기 — 나만 보입니다</p>
-      <textarea id="kbbody" class="bigin" rows="14" style="width:100%;box-sizing:border-box">${it.body || ""}</textarea>
+      <textarea id="kbbody" class="bigin" rows="14" style="width:100%;box-sizing:border-box">${src.body || ""}</textarea>
+      ${raw(String(src.body || "").includes("{내 ") ? `<p class="s" style="color:var(--sub)">{내 팩스} 같은 자리는
+        [내 정보] 에 적은 값으로 바뀌어 보입니다 — 그대로 두면 됩니다.</p>` : "")}
+      <p class="kbhead" style="margin-top:12px">체크리스트 <span class="s" style="color:var(--sub);font-weight:400">— 한 줄에
+        하나(고객관리 서류 체크에 쓰입니다)</span></p>
+      <textarea id="kbcheck" class="bigin" rows="5" style="width:100%;box-sizing:border-box">${(src.checklist || []).join("\n")}</textarea>
       <p class="s" style="color:var(--sub)">저장하면 내 구글 계정${who ? `(${who})` : ""}으로 PC 일정관리기·업무자료검색에도
         반영됩니다. 회사 자료와 다른 사람 화면은 그대로입니다.</p>
       <p><button class="chip" id="kbsave">저장</button> <button class="chip" id="kbcancel">취소</button>
@@ -213,15 +244,68 @@ async function openEditor(i) {
   const ta = $("#kbbody");
   if (ta) ta.focus();
   $("#kbcancel").onclick = () => showDetail(i);
-  $("#kbsave").onclick = () => saveMine(i, $("#kbbody").value);
+  $("#kbsave").onclick = () => saveMine(i, $("#kbbody").value, $("#kbcheck").value);
 }
 
-async function saveMine(i, body) {
+// ---------------------------------------------------------------- 내 정보(v1.32)
+//
+// 회사 자료 본문에 관리자가 {내 팩스|0504-…} 같은 자리를 넣어 두면, 여기 적은 값이 그 자리에 들어가 보인다
+// (직원마다 팩스번호가 달라 자료마다 따로 고치던 것을 한 번에). 내 구글 계정에 저장되어 PC 에도 똑같이 보인다.
+async function openMe(backTo = -1) {
+  const box = $("#kbdetail");
+  const split = $("#kbsplit");
+  if (!box) return;
+  if (split) split.classList.add("detail");
+  const who = (await store.account()) || "";
+  const types = { fax: "tel", phone: "tel", email: "email", name: "text" };
+  render(box, html`
+    <button class="chip backbtn" id="kbback">← 목록</button>
+    <div id="kbmeform">
+      <h2 style="margin:10px 0 2px">내 정보</h2>
+      <p class="s" style="color:var(--sub);margin:0 0 12px">여기 적어 두면 자료 본문의 '내 팩스' 같은 자리에
+        저절로 들어갑니다. 나만 보이고, 내 구글 계정${who ? `(${who})` : ""}으로 PC 에도 반영됩니다.</p>
+      ${raw(kbedits.ME_FIELDS.map(([k, label]) => `<p style="margin:0 0 10px"><label class="flab" for="kbme_${k}">${label}</label>
+        <input id="kbme_${k}" class="bigin" type="${types[k]}" maxlength="80" autocomplete="off"
+               style="width:100%;box-sizing:border-box" value="${esc2(_me[k] || "")}"></p>`).join(""))}
+      <p><button class="primary" id="kbmesave">저장</button> <button class="chip" id="kbmecancel">취소</button>
+         <span class="s" id="kbmemsg" style="color:var(--sub)"></span></p>
+    </div>`);
+  const done = () => {
+    if (backTo >= 0) showDetail(backTo);
+    else { if (split) split.classList.remove("detail"); render(box, ""); }
+  };
+  $("#kbback").onclick = done;
+  $("#kbmecancel").onclick = done;
+  $("#kbmesave").onclick = async () => {
+    const vals = {};
+    for (const [k] of kbedits.ME_FIELDS) vals[k] = $("#kbme_" + k).value;
+    const btn = $("#kbmesave");
+    const msg = $("#kbmemsg");
+    btn.disabled = true;
+    msg.textContent = "내 계정에 저장하는 중…";
+    try {
+      _me = await kbedits.saveMe(vals);
+      await store.put("data", "kbMe", _me);
+      setItems();
+      done();
+      toast("내 정보를 저장했어요 — 자료 본문과 PC 에도 반영됩니다.");
+    } catch (e) {
+      btn.disabled = false;
+      msg.textContent = "저장하지 못했습니다 — " + (e instanceof sheets.NeedSignIn ? "구글 로그인이 필요합니다."
+        : e instanceof sheets.Offline ? "인터넷에 연결되지 않았습니다." : (e && e.message) || "잠시 뒤 다시 해 주세요.");
+    }
+  };
+}
+
+async function saveMine(i, body, checklist = undefined) {
   const it = _items[i];
   if (!it) return;
+  const src = it._src || it;          // 내 정보를 채우기 전의 것(채운 글을 원본으로 삼으면 자리가 사라진다)
   const msg = $("#kbmsg");
+  const lines = (v) => (Array.isArray(v) ? v : String(v || "").split("\n")).map((x) => String(x).trim()).filter(Boolean);
+  const sameCheck = checklist === undefined || JSON.stringify(lines(checklist)) === JSON.stringify(lines(src.checklist));
   // 고친 것이 없으면 계정에 쓰지 않는다(v1.31.3) — 예전엔 그대로 [저장] 해도 '되돌림' 기록을 계정에 남겼다
-  if (body !== null && kbedits.norm(body) === kbedits.norm(it.body)) {
+  if (body !== null && kbedits.norm(body) === kbedits.norm(src.body) && sameCheck) {
     showDetail(i);
     toast("바뀐 내용이 없어요.");
     return;
@@ -230,7 +314,7 @@ async function saveMine(i, body) {
   for (const b of btns) b.disabled = true;
   if (msg) msg.textContent = "내 계정에 저장하는 중…";
   try {
-    _edits = body === null ? await kbedits.revert(it) : await kbedits.save(it, body);
+    _edits = body === null ? await kbedits.revert(src) : await kbedits.save(src, body, sameCheck ? undefined : checklist);
     await store.put("data", "kbEdits", _edits);
     setItems();
     showDetail(i);

@@ -35,7 +35,8 @@ async function detail(r) {
   } catch (x) { return ""; }
 }
 
-const rng = (tab, a1) => encodeURIComponent(`'${tab}'!${a1}`);
+// 탭을 비우면 첫 번째 탭(인증문자 시트 — otp.js)
+const rng = (tab, a1) => encodeURIComponent(tab ? `'${tab}'!${a1}` : a1);
 
 // 한 번 조용히 다시 받아 한 번만 재시도한다. 두 번은 안 한다.
 async function call(url, body = null) {

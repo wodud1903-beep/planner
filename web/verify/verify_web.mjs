@@ -2418,6 +2418,264 @@ console.log("\n[27] v1.30 — PC 설정·고친 자료를 내 계정으로 실�
   await cA.close();
 }
 
+console.log("\n[28] v1.32 — 내 정보 자리 · 체크리스트 고치기 · 내가 고친 것만 · 인증번호 화면 · 지점 캘린더");
+{
+  const cB = await browser.newContext({ viewport: { width: 412, height: 900 }, timezoneId: "Asia/Seoul" });
+  await cB.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  const iso = () => new Date().toISOString();
+  const kst = (off = 0) => {
+    const d = new Date(Date.now() + 9 * 3600e3 + off * 86400e3);
+    return `${d.getUTCFullYear()}. ${d.getUTCMonth() + 1}. ${d.getUTCDate()}`;
+  };
+  const BR = "branch1@group.calendar.google.com";
+  const OTPID = "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw";
+  const app = {
+    "kb_edits.json": { id: "KBE2", mod: "2026-11-10T01:00:00.000Z", body: { v: 1, edits: {},
+      me: { fax: "0504-111-2222", name: "", phone: "", email: "", at: "2026-11-10T01:00:00Z" } } },
+    "planner_sync.json": { id: "PCS2", mod: "2026-11-10T01:00:00.000Z", body: {
+      updatedAt: "2026-11-10T01:00:00Z", times: { "plan_cfg.json": "2026-11-10T01:00:00Z" },
+      files: { "plan_cfg.json": JSON.stringify({ branchCal: BR, otpSheet: "", otpTab: "" }) } } },
+  };
+  const byId = (id) => Object.values(app).find((f) => f.id === id);
+  const uploads = [], asked = [], calAsked = [];
+  let otpRows = [["일시", "", "인증번호", "맨위가 최신입니다"],
+                 [kst(0), "수신문자", "[Web발신]\n[우리카드] 로그인 인증번호 (123456) 입니다"],
+                 [kst(-1), "수신문자", "[Web발신]\n어제 인증번호 (999999)"]];
+  let otpStatus = 200, branchOk = true;
+  await cB.route("**/accounts.google.com/**", (r) => r.abort());
+  await cB.route("**/tasks.googleapis.com/**", (r) => r.fulfill({ json: { items: [] } }));
+  await cB.route("**/www.googleapis.com/calendar/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    calAsked.push(u);
+    if (u.includes("calendarList")) return r.fulfill({ json: { items: [{ id: "me@x", summary: "내 캘린더", primary: true }] } });
+    const at = new Date(Date.now() + 3600e3).toISOString();
+    if (u.includes("/calendars/me@x/")) return r.fulfill({ json: { items: [{ id: "m1", summary: "내 상담", start: { dateTime: at } }] } });
+    if (u.includes(`/calendars/${BR}/`)) {
+      return branchOk ? r.fulfill({ json: { items: [{ id: "b1", summary: "지점 회의", start: { dateTime: at } }] } })
+                      : r.fulfill({ status: 404, json: { error: { message: "Not Found" } } });
+    }
+    return r.fulfill({ json: { items: [] } });
+  });
+  await cB.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    asked.push(u);
+    if (u.includes(OTPID)) {
+      return otpStatus === 200 ? r.fulfill({ json: { values: otpRows } })
+        : r.fulfill({ status: otpStatus, json: { error: { message: "The caller does not have permission" } } });
+    }
+    if (u.includes("업무자료") && u.includes("A1:F")) {
+      return r.fulfill({ json: { values: [["카테고리", "금융사", "제목", "태그", "본문", "체크리스트"],
+        ["심사서류", "", "개인 심사서류", "", "1. 신분증\n팩스 {내 팩스|0504-214-5287}\n담당 {내 이름}", "신분증\n등본"],
+        ["캐피탈", "현대", "현대캐피탈", "", "1577", ""]] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  await cB.route("**/upload/drive/v3/**", async (r) => {
+    const id = (r.request().url().match(/files\/([^?]+)/) || [])[1];
+    const body = r.request().postData() || "";
+    uploads.push({ id, body });
+    const f = byId(id);
+    if (f) { f.body = JSON.parse(body); f.mod = iso(); }
+    return r.fulfill({ json: { id } });
+  });
+  await cB.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("spaces=appDataFolder")) {
+      const name = (u.match(/name='([^']+)'/) || [])[1];
+      const f = app[name];
+      return r.fulfill({ json: { files: f ? [{ id: f.id, name, modifiedTime: f.mod }] : [] } });
+    }
+    const m = u.match(/files\/([A-Za-z0-9_]+)\?alt=media/);
+    if (m && byId(m[1])) return r.fulfill({ body: JSON.stringify(byId(m[1]).body), contentType: "application/json" });
+    return r.fulfill({ json: { files: [] } });
+  });
+  const pB = await page(cB);
+  await pB.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pB.waitForTimeout(1800);
+
+  // ---- 내 정보 자리
+  await pB.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();
+  await pB.waitForTimeout(400);
+  let det = await pB.locator("#kbdetail").innerText();
+  ok("본문의 {내 팩스|기본값} 자리에 내 정보가 들어가 보인다", det.includes("팩스 0504-111-2222") && !det.includes("{내 ")
+     && !det.includes("0504-214-5287"), det.slice(0, 160));
+  ok("안 적은 자리는 '미입력' 으로 알리고 [내 정보 적기] 를 보인다", det.includes("〔내 이름 미입력〕")
+     && (await pB.locator("#kbmego").count()) === 1);
+  ok("내 정보만 채운 자료는 '내 계정에서 고침' 이 아니다", !det.includes("내 계정에서 고침")
+     && (await pB.locator('#kbcats button[data-cat="__mine"]').count()) === 0);
+  // 폰 너비에서는 상세를 열면 목록이 가려진다 — 목록으로 돌아가 찾는다
+  await pB.click("#kbback");
+  await pB.waitForTimeout(400);          // 목록 화면을 다시 그린 뒤에 친다
+  await pB.fill("#kbq", "0504-111");
+  await pB.waitForTimeout(400);
+  ok("채운 글(내 팩스번호)로도 찾아진다", (await pB.locator("#kblist button.row").allTextContents()).some((t) => t.includes("개인 심사서류")));
+  await pB.fill("#kbq", "");
+  await pB.waitForTimeout(300);
+  await pB.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();
+  await pB.waitForTimeout(400);
+  uploads.length = 0;
+  await pB.click("#kbmego");
+  ok("[내 정보] — 지금 값이 들어 있다", (await pB.inputValue("#kbme_fax")) === "0504-111-2222" && (await pB.inputValue("#kbme_name")) === "");
+  await pB.fill("#kbme_name", "홍길동");
+  await pB.click("#kbmesave");
+  await pB.waitForTimeout(900);
+  const mu = uploads.find((x) => x.id === "KBE2");
+  const muBody = mu ? JSON.parse(mu.body) : {};
+  ok("저장 — 내 계정(kb_edits.json 의 me)에 · 고친 시각 · 고친 자료는 그대로",
+     muBody.me && muBody.me.name === "홍길동" && muBody.me.fax === "0504-111-2222" && muBody.me.at > "2026-11-10T01:00:00Z"
+     && JSON.stringify(muBody.edits) === "{}", mu ? mu.body.slice(0, 200) : "올리지 않음");
+  det = await pB.locator("#kbdetail").innerText();
+  ok("저장하면 보던 자료로 돌아오고 그 자리에 바로 들어간다", det.includes("담당 홍길동") && !det.includes("미입력"), det.slice(0, 160));
+
+  // ---- 고치기: 자리는 그대로 · 체크리스트
+  await pB.click("#kbedit");
+  ok("고칠 때는 자리 그대로({내 팩스|…}) 보인다 — 채운 글을 저장하지 않는다",
+     (await pB.inputValue("#kbbody")).includes("{내 팩스|0504-214-5287}") && (await pB.inputValue("#kbcheck")) === "신분증\n등본");
+  uploads.length = 0;
+  await pB.click("#kbsave");
+  await pB.waitForTimeout(500);
+  ok("바뀐 것 없이 저장하면 계정에 쓰지 않는다(내 정보를 채운 글과 견주지 않는다)", !uploads.length);
+  await pB.click("#kbedit");
+  await pB.fill("#kbcheck", "신분증\n등본\n\n 인감증명서 ");
+  await pB.click("#kbsave");
+  await pB.waitForTimeout(900);
+  const cu = uploads.find((x) => x.id === "KBE2");
+  const cuBody = cu ? JSON.parse(cu.body) : {};
+  const crec = ((cuBody.edits || {})["개인 심사서류"]) || {};
+  ok("체크리스트를 고쳐 저장 — 줄 목록으로 · 본문의 자리는 그대로 · 내 정보도 그대로",
+     crec.item && JSON.stringify(crec.item.checklist) === JSON.stringify(["신분증", "등본", "인감증명서"])
+     && crec.item.body.includes("{내 팩스|0504-214-5287}") && cuBody.me && cuBody.me.name === "홍길동",
+     cu ? cu.body.slice(0, 260) : "올리지 않음");
+  // 체크리스트를 회사 것으로 되돌리면 그 칸은 싣지 않는다 → 원본과 같아져 '되돌림'
+  await pB.click("#kbedit");
+  await pB.fill("#kbbody", "1. 신분증\n팩스 {내 팩스|0504-214-5287}\n담당 {내 이름}\n2. 등본");
+  await pB.click("#kbsave");
+  await pB.waitForTimeout(900);
+  const rows = await pB.locator("#kblist button.row").allTextContents();
+  const mineBtn = pB.locator('#kbcats button[data-cat="__mine"]');
+  ok("[내가 고친 것 1] 단추가 생긴다", (await mineBtn.count()) === 1 && (await mineBtn.innerText()).includes("1"),
+     (await pB.locator("#kbcats").innerText()));
+  await pB.click("#kbback");
+  await pB.waitForTimeout(200);
+  await mineBtn.click();
+  await pB.waitForTimeout(300);
+  const mineRows = await pB.locator("#kblist button.row").allTextContents();
+  ok("누르면 내 계정에서 고친 자료만 보인다", mineRows.length === 1 && mineRows[0].includes("개인 심사서류") && rows.length === 2,
+     mineRows.join(" | ") + " // 전체 " + rows.length);
+  await pB.locator('#kbcats button[data-cat=""]').click();
+  await pB.waitForTimeout(300);
+
+  // ---- 예전 판(다른 프로그램)이 파일을 쓰며 me 를 빼먹었다 → 이 기기 것을 다시 올린다
+  uploads.length = 0;
+  app["kb_edits.json"].body = { v: 1, edits: app["kb_edits.json"].body.edits };
+  app["kb_edits.json"].mod = iso();
+  await pB.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pB.waitForTimeout(5000);
+  await pB.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pB.waitForTimeout(1500);
+  const ru = uploads.find((x) => x.id === "KBE2");
+  ok("계정 파일에서 내 정보가 빠졌으면 이 기기 것을 다시 올린다(화면도 그대로)",
+     ru && JSON.parse(ru.body).me && JSON.parse(ru.body).me.name === "홍길동"
+     && Object.keys(JSON.parse(ru.body).edits).length === 1, ru ? ru.body.slice(0, 160) : "올리지 않음");
+  // 다른 기기(PC)에서 내 정보를 나중에 고쳤다 → 따라간다
+  app["kb_edits.json"].body.me = { fax: "0504-333-4444", name: "홍길동", phone: "", email: "", at: "2099-01-01T00:00:00Z" };
+  app["kb_edits.json"].mod = iso();
+  await pB.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pB.waitForTimeout(5000);
+  await pB.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await pB.waitForTimeout(1500);
+  await pB.locator("#kblist button.row", { hasText: "개인 심사서류" }).click();
+  await pB.waitForTimeout(400);
+  ok("PC 에서 내 정보를 고치면 다시 열지 않아도 따라간다", (await pB.locator("#kbdetail").innerText()).includes("0504-333-4444"));
+
+  const unit = await pB.evaluate(async () => {
+    const m = await import("./js/kbedits.js");
+    const o = await import("./js/otp.js");
+    const me = { fax: "F", name: "", phone: "", email: "", at: "2026-11-10T00:00:00Z" };
+    return {
+      fill: [m.fillMe("{내 팩스} {내 이름|기본} {내 이메일} {내 주소} {고객}", me), m.fillMe("그대로", me), m.fillMe(null, me)],
+      merge: [m.mergeMe(me, null).push, m.mergeMe({}, null).push,
+              m.mergeMe(me, { fax: "R", at: "2026-11-11T00:00:00Z" }).me.fax,
+              m.mergeMe(me, { fax: "R", at: "2026-11-09T00:00:00Z" }).push,
+              m.mergeMe(me, { fax: "", at: "2026-11-11T00:00:00Z" }).me.fax,
+              m.mergeMe(me, { fax: "F", at: "2020-01-01T00:00:00Z" }).push],
+      codes: ["[Web발신]\n로그인 인증번호 (111111)", "인증번호 [123456] 입니다", "승인번호: 4821 입니다",
+              "010-1234-5678 로 전화 주세요", "결제 12,000원 승인", "보안코드 87654321"].map(o.extractCode),
+      sender: [o.senderOf("[Web발신]\n[우리카드] 인증"), o.senderOf("[Web발신] 인증")],
+      day: [o.parseDay("2026. 11. 9"), o.parseDay("2026-02-30"), o.parseDay("메모")],
+      where: [o.whereOf(null), o.whereOf({ otpSheet: "X", otpTab: "" }), o.whereOf({ otpSheet: "", otpTab: "탭" })],
+      items: o.itemsOf(o.rowsOf([["일시", "", "인증번호", "맨위가 최신입니다"], ["2026. 11. 11", "수신문자", "인증번호 111111"],
+                                 ["2026. 11. 10", "수신문자", "인증번호 222222"], ["", "", ""], ["메모", "", "코드 333333"],
+                                 ["2026. 11. 11", "수신문자", "안녕하세요"]]), "2026-11-11").map((x) => x.code),
+    };
+  });
+  ok("내 정보 채우기 규칙(PC kb.fill_me 와 같다)", JSON.stringify(unit.fill)
+     === JSON.stringify(["F 기본 〔내 이메일 미입력〕 {내 주소} {고객}", "그대로", ""]), JSON.stringify(unit.fill));
+  ok("내 정보 맞추기 — 없으면 올림 · 나중 것 · 지운 것도 나중이면 따른다 · 같으면 가만히",
+     JSON.stringify(unit.merge) === JSON.stringify([true, false, "R", true, "", false]), JSON.stringify(unit.merge));
+  ok("인증번호 뽑기(PC otp.extract_code 와 같다)", JSON.stringify(unit.codes)
+     === JSON.stringify(["111111", "123456", "4821", "", "", "87654321"]), JSON.stringify(unit.codes));
+  ok("보낸 곳 · 날짜 · 어느 시트", JSON.stringify(unit.sender) === JSON.stringify(["우리카드", ""])
+     && JSON.stringify(unit.day) === JSON.stringify(["2026-11-09", "", ""])
+     && unit.where[0].id === OTPID && unit.where[0].tab === "시트1" && unit.where[1].id === "X" && unit.where[1].tab === ""
+     && unit.where[2].id === OTPID && unit.where[2].tab === "탭", JSON.stringify([unit.sender, unit.day, unit.where]));
+  ok("오늘 것만 · 머리글·빈 줄·번호 없는 문자는 뺀다 · 날짜를 못 읽는 줄은 둔다",
+     JSON.stringify(unit.items) === JSON.stringify(["111111", "333333"]), JSON.stringify(unit.items));
+
+  // ---- 홈: 지점 캘린더 · 인증번호
+  await pB.click('nav.tabs a[data-tab="/agenda"]');
+  await pB.waitForTimeout(1500);
+  const evs = await pB.locator("#agevents").innerText();
+  ok("PC 설정의 지점 공유 캘린더를 함께 읽는다(내 목록에 없어도) — [지점] 표시",
+     evs.includes("내 상담") && evs.includes("[지점] 지점 회의") && calAsked.some((u) => u.includes(`/calendars/${BR}/`)), evs.slice(0, 120));
+  ok("홈에 [인증번호] 가 있다", (await pB.locator("#agotp").count()) === 1);
+  await pB.click("#agotp");
+  await pB.waitForTimeout(1200);
+  let otpTxt = await pB.locator("#otplist").innerText();
+  ok("인증번호 화면 — 오늘 온 번호를 크게 · 보낸 곳 · 어제 것은 안 보인다",
+     otpTxt.includes("123456") && otpTxt.includes("우리카드") && !otpTxt.includes("999999"), otpTxt.slice(0, 120));
+  ok("지점 기본 시트의 맨 위 몇 줄만 읽는다", asked.some((u) => u.includes(OTPID) && u.includes("'시트1'!A1:F12")),
+     asked.filter((u) => u.includes(OTPID)).slice(0, 1).join(""));
+  ok("처음 열 때 있던 것은 '방금' 이 아니다", !otpTxt.includes("방금"));
+  otpRows = [otpRows[0], [kst(0), "수신문자", "[Web발신]\n[국민은행] 인증번호 [654321]"], ...otpRows.slice(1)];
+  await pB.waitForTimeout(5500);
+  otpTxt = await pB.locator("#otplist").innerText();
+  ok("보고 있으면 새 문자가 저절로 맨 위에 — '방금' 표시", otpTxt.indexOf("654321") >= 0 && otpTxt.indexOf("654321") < otpTxt.indexOf("123456")
+     && otpTxt.includes("국민은행 · 방금"), otpTxt.slice(0, 160));
+  await pB.locator("#otplist .otpcode").first().click();
+  await pB.waitForTimeout(300);
+  const tmsg = await pB.locator("#toast").innerText();
+  ok("번호를 누르면 복사를 시도하고 알린다", /654321 복사했어요|복사하지 못했습니다/.test(tmsg), tmsg);
+  otpStatus = 403;
+  await pB.waitForTimeout(5000);
+  otpTxt = await pB.locator(".pane").innerText();
+  ok("읽다가 권한이 없어지면 까닭을 알리고 보던 번호는 그대로", otpTxt.includes("이 계정으로는 인증문자 시트를 볼 수 없습니다")
+     && otpTxt.includes("654321") && otpTxt.includes("멈춤"), otpTxt.slice(0, 200));
+  const nAsk = asked.filter((u) => u.includes(OTPID)).length;
+  await pB.waitForTimeout(9000);
+  ok("권한이 없으면 4초마다 조르지 않는다", asked.filter((u) => u.includes(OTPID)).length === nAsk,
+     `${nAsk} → ${asked.filter((u) => u.includes(OTPID)).length}`);
+  await pB.click("#otpback");
+  await pB.waitForTimeout(600);
+  const nAsk2 = asked.filter((u) => u.includes(OTPID)).length;
+  otpStatus = 200;
+  await pB.waitForTimeout(9000);
+  ok("다른 화면으로 가면 읽기를 멈춘다", asked.filter((u) => u.includes(OTPID)).length === nAsk2);
+
+  // ---- 지점 캘린더를 공유받지 못한 계정 — 내 일정은 그대로, 경고 없이
+  branchOk = false;
+  await pB.evaluate(async () => { const m = await import("./js/ui/agenda.js"); await m.load(); });
+  await pB.waitForTimeout(600);
+  const evs2 = await pB.locator("#agevents").innerText();
+  ok("지점 캘린더를 못 읽어도 내 일정은 보이고 경고를 띄우지 않는다",
+     evs2.includes("내 상담") && !evs2.includes("지점 회의") && (await pB.locator("#agwarn").innerText()).trim() === "",
+     evs2.slice(0, 80) + " / " + (await pB.locator("#agwarn").innerText()));
+  await cB.close();
+}
+
 console.log("\n[8] 폴드 — 접었다 펴기");
 await p.setViewportSize({ width: 412, height: 900 });
 await p.click('nav.tabs a[data-tab="/kb"]');

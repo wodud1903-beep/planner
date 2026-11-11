@@ -130,8 +130,25 @@ export async function loadSettings({ light = false } = {}) {
   }
   const [web, pc, acct] = await Promise.all([
     readJson(WEB_FILE), readJson(PC_FILE), readIfChanged(ACCT_FILE).then((x) => x.data)]);
+  _pcExtras = pcExtras(pc);
   return pickSettings(web, pc, acct);
 }
+
+// PC 설정에서 웹이 따라가는 나머지(v1.32) — 인증문자 시트 · 지점 공유 캘린더. 묶음을 읽는 김에 같이 뽑아 둔다.
+let _pcExtras = null;
+/** PC 묶음 → {otpSheet, otpTab, branchCal(PC 가 적은 적 없으면 undefined)}. PC 설정이 없으면 null. 통신 없는 계산. */
+export function pcExtras(pc) {
+  const txt = pc && pc.files && pc.files[PC_CFG];
+  if (!txt) return null;
+  let cfg = null;
+  try { cfg = JSON.parse(txt); } catch (e) { cfg = null; }
+  if (!cfg || typeof cfg !== "object") return null;
+  const out = { otpSheet: String(cfg.otpSheet || "").trim(), otpTab: String(cfg.otpTab || "").trim() };
+  if (typeof cfg.branchCal === "string") out.branchCal = cfg.branchCal.trim();
+  return out;
+}
+/** 마지막으로 읽은 PC 설정의 나머지(loadSettings 를 가볍지 않게 부른 뒤). */
+export const lastPcExtras = () => _pcExtras;
 
 const when = (s) => { const t = Date.parse(String(s || "")); return isNaN(t) ? 0 : t; };
 

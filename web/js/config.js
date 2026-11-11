@@ -20,6 +20,13 @@ export const KB_TAB = "업무자료";
 export const DEF_SHEET_ID = "";
 export const DEF_SHEET_NAME = "미출고차량";
 
+// 휴대폰 인증문자 시트(지점 공용) — PC 앱(planner/config.py OTP_DEF_*)과 같은 값. PC 설정에서 바꿨으면 그쪽을 따른다.
+export const OTP_DEF_SHEET_ID = "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw";
+export const OTP_DEF_TAB = "시트1";
+
+// 지점 공유 캘린더 — PC 앱(planner/config.py DEF_BRANCH_CAL)과 같은 값. 비어 있으면 PC 설정에 적은 것만 따른다.
+export const DEF_BRANCH_CAL = "";
+
 export const SCOPES = [
   "openid",
   "email",

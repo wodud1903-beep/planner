@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 from . import config, hangul, tombs
@@ -154,15 +155,76 @@ def load_all() -> list:
     공통 자료는 내 계정에서 고친 것을 덮어서 보여 준다(SRC_LOCAL).
     """
     out = []
+    me = load_me()
     for it in local_view():
         it = dict(it)
         it["source"] = SRC_LOCAL if it.get("_local") else SRC_SHARED
+        it["body"] = fill_me(it.get("body", ""), me)     # {내 팩스} 같은 자리를 내 정보로(v1.32)
         out.append(it)
     for it in load_mine():
         it = dict(it)
         it["source"] = SRC_MINE
+        it["body"] = fill_me(it.get("body", ""), me)
         out.append(it)
     return out
+
+
+# ---------------------------------------------------------------------------
+# 내 정보 자동 넣기(v1.32) — 회사 자료의 {내 팩스} · {내 이름} · {내 연락처} · {내 이메일} 자리에 각자 값이 들어간다.
+#
+# 지점장: "팩스번호를 본인 걸로". 자료마다 '내 계정에서만 고침' 으로 고치면 회사가 원본을 바꿀 때마다 다시
+# 고쳐야 한다. 관리자가 회사 자료에 자리(예: `팩스 {내 팩스|0504-214-5287}`)를 한 번 넣어 두면, 직원은
+# [내 정보] 에 한 번만 적으면 된다. `|` 뒤는 내 정보를 안 적은 사람에게 보일 기본값.
+# 내 정보는 고친 자료와 같은 파일(kb_edits.json 의 "me")로 내 계정에 저장돼 PC·웹 어디서나 같다.
+# 업무자료검색(PC·웹)·jyplanner 웹과 **같은 규칙**이다.
+# ---------------------------------------------------------------------------
+ME_FILE = "kb_me.json"
+ME_FIELDS = (("fax", "팩스"), ("name", "이름"), ("phone", "연락처"), ("email", "이메일"))
+_ME_KEY = {label: key for key, label in ME_FIELDS}
+_ME_RE = re.compile(r"\{내 (팩스|이름|연락처|이메일)(?:\|([^{}\n]*))?\}")
+
+
+def clean_me(o) -> dict:
+    o = o if isinstance(o, dict) else {}
+    out = {k: str(o.get(k) or "").strip()[:80] for k, _l in ME_FIELDS}
+    out["at"] = str(o.get("at") or "")
+    return out
+
+
+def load_me() -> dict:
+    try:
+        p = config.data_file(ME_FILE)
+        if p.exists():
+            return clean_me(json.loads(p.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+    return clean_me({})
+
+
+def save_me(values: dict, at: str | None = None) -> dict:
+    """내 정보를 저장한다. at 을 안 주면 지금 고친 것으로(나중에 고친 쪽이 이긴다)."""
+    me = clean_me(dict(values or {}, at=at if at is not None else utc_stamp()))
+    config.atomic_write(config.data_file(ME_FILE), json.dumps(me, ensure_ascii=False, indent=2))
+    return me
+
+
+def has_me(me: dict) -> bool:
+    return any((me or {}).get(k) for k, _l in ME_FIELDS)
+
+
+def fill_me(text: str, me: dict | None) -> str:
+    """{내 팩스|기본값} 자리를 내 정보로 바꾼다. 안 적었으면 기본값, 그것도 없으면 '〔내 팩스 미입력〕'."""
+    s = str(text or "")
+    if "{내 " not in s:
+        return s
+
+    def rep(m):
+        v = str((me or {}).get(_ME_KEY[m.group(1)]) or "").strip()
+        if v:
+            return v
+        d = (m.group(2) or "").strip()
+        return d if d else f"〔내 {m.group(1)} 미입력〕"
+    return _ME_RE.sub(rep, s)
 
 
 # ---------------------------------------------------------------------------

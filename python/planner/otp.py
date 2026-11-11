@@ -115,7 +115,10 @@ def rows_of(values: list) -> list:
             continue
         if i == 0 and _is_header(cells):
             continue
-        body = max(cells, key=lambda c: len(c.strip())).strip()
+        # 본문 = 날짜 칸(A) 뒤에서 가장 긴 칸. ⚠️ 날짜 칸까지 넣고 고르면 "인증 1234" 처럼 짧은 문자는
+        #    날짜("2026. 11. 9")가 더 길어 본문으로 뽑혀 번호를 놓쳤다(v1.32 에서 고침).
+        rest = [c.strip() for c in cells[1:] if c.strip()]
+        body = max(reversed(rest), key=len) if rest else cells[0].strip()   # 길이가 같으면 뒤 칸
         d = cells[0].strip() if cells else ""
         out.append({"date": d, "body": body, "key": d + "\x1f" + body})
     return out
@@ -202,3 +205,108 @@ class Watcher:
         self.prev = [r["key"] for r in rows]
         self.seen_at = now
         return items_of(news, today or date.today())
+
+
+# ---------------------------------------------------------------- 같은 PC 에서 한 번만(v1.32)
+# 일정관리기와 업무자료검색을 한 PC 에서 둘 다 켜 두면 같은 인증번호가 두 번 떴다.
+# 먼저 본 쪽이 임시 폴더에 표식을 남기고, 다른 쪽은 그 표식이 있으면 띄우지 않는다.
+CLAIM_SEC = 120
+
+
+def _claim_dir():
+    import tempfile
+    from pathlib import Path
+    d = Path(tempfile.gettempdir()) / "jy_otp_claims"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def claim(item: dict, now: float | None = None) -> bool:
+    """이 인증번호를 이 PC 에서 처음 띄우는가. 다른 프로그램이 방금(2분 안) 띄웠으면 False."""
+    import hashlib
+    import os
+    now = time.time() if now is None else now
+    try:
+        d = _claim_dir()
+        key = hashlib.sha1("\x1f".join(str(item.get(k) or "") for k in ("code", "date", "body"))
+                           .encode("utf-8")).hexdigest()[:20]
+        for f in d.iterdir():                        # 오래된 표식은 치운다
+            try:
+                if now - f.stat().st_mtime > 600:
+                    f.unlink()
+            except OSError:
+                pass
+        p = d / key
+        try:
+            if p.exists() and now - p.stat().st_mtime <= CLAIM_SEC:
+                return False
+        except OSError:
+            pass
+        try:
+            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except FileExistsError:
+            try:
+                os.utime(str(p), None)               # 오래된 표식 — 내가 새로 맡는다
+            except OSError:
+                pass
+        return True
+    except Exception:
+        return True                                  # 표식을 못 남겨도 번호는 띄운다
+
+
+# ---------------------------------------------------------------- 지난 문자 지우기(v1.32)
+# 지점장: "2일만 지나도 자동 삭제". 인증문자 시트에 줄이 끝없이 쌓였다(1,400줄 넘게).
+# 관리자 PC 가 가끔(켤 때 · 6시간마다) 맨 아래의 옛 줄을 지운다 — 맨 위가 최신이라 아래부터 본다.
+KEEP_DAYS = 2            # 오늘·어제 것만 남긴다(날짜가 이만큼 지난 줄부터 지운다)
+CLEAN_EVERY_SEC = 6 * 3600
+
+
+def old_tail(colA: list, today: date, keep_days: int = KEEP_DAYS) -> tuple:
+    """A열 값(1행부터) → 지울 줄 (start, end) 0부터 · end 는 포함 안 함. 지울 것이 없으면 None.
+
+    맨 아래에서 위로 올라가며 '지난 줄(또는 빈 줄)' 이 이어지는 데까지만 — 날짜를 못 읽는 줄을 만나면 멈춘다.
+    1행(머리글)은 건드리지 않는다.
+    """
+    from datetime import timedelta
+    cutoff = today - timedelta(days=keep_days)
+    n = len(colA)
+    start, any_old = n, False
+    for i in range(n - 1, 0, -1):
+        v = str((colA[i][0] if colA[i] else "") or "").strip()
+        if not v:
+            start = i
+            continue
+        d = parse_day(v)
+        if d is None or d > cutoff:
+            break
+        start, any_old = i, True
+    return (start, n) if any_old and start < n else None
+
+
+def clean_old(auth, sheet_id: str, tab: str = "", today: date | None = None) -> int:
+    """2일 지난 문자 줄을 시트에서 지운다. 지운 줄 수. (시트를 고칠 수 있는 계정만 된다)"""
+    today = today or date.today()
+    h = sheets._headers(auth)
+    meta = _http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id), headers=h, timeout=15,
+                       params={"fields": "sheets(properties(sheetId,title))"})
+    sheets._check(meta)
+    props = [x.get("properties", {}) for x in (meta.json() or {}).get("sheets", [])]
+    tab = (tab or "").strip()
+    pick = next((x for x in props if x.get("title") == tab), None) if tab else (props[0] if props else None)
+    if pick is None:
+        return 0
+    title = pick.get("title", "")
+    r = _http().get(config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=urllib.parse.quote(f"'{title}'!A1:A", safe="")), headers=h, timeout=15,
+        params={"valueRenderOption": "FORMATTED_VALUE"})
+    sheets._check(r)
+    span = old_tail((r.json() or {}).get("values", []) or [], today)
+    if not span:
+        return 0
+    body = {"requests": [{"deleteDimension": {"range": {
+        "sheetId": int(pick.get("sheetId", 0)), "dimension": "ROWS",
+        "startIndex": span[0], "endIndex": span[1]}}}]}
+    w = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id), headers=h, json=body, timeout=20)
+    sheets._check(w)
+    return span[1] - span[0]
