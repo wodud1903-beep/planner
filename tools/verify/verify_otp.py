@@ -196,7 +196,19 @@ p1.copy()
 ok("[복사] 하면 클립보드에", QApplication.clipboard().text() == "989365")
 ps = [otp_popup.show({"code": str(100000 + i), "body": ""}) for i in range(4)]
 app.processEvents()
-ok("많아야 셋 — 오래된 것부터 닫는다", len(otp_popup._open) == 3 and p1 not in otp_popup._open)
+ok("많아야 셋 — 오래된 것부터 닫는다(가장 최근 셋이 보인다)", len(otp_popup._open) == 3
+   and [w.code for w in otp_popup._open] == ["100001", "100002", "100003"], [w.code for w in otp_popup._open])
+# v1.32.1 — 창을 지우지 않고 다시 쓴다(v1.31.3 access violation 대비 — otp_popup 머리말)
+import shiboken6  # noqa: E402
+ok("창은 많아야 셋만 만들고 다시 쓴다", len(otp_popup._pool) <= otp_popup.POOL_MAX and all(w in otp_popup._pool for w in ps))
+_shut = otp_popup._open[0]
+_shut.close()
+app.processEvents()
+ok("닫으면 숨기기만(지우지 않는다) — 다음 번호에 그 창을 다시 쓴다", shiboken6.isValid(_shut) and not _shut.isVisible()
+   and otp_popup.show({"code": "777777", "body": ""}) is _shut and _shut.code == "777777")
+ok("다시 쓴 창은 10초 시계를 새로 잰다", _shut._life.isActive() and _shut._life.remainingTime() > 9000)
+ok("번호 칸을 눌러도 복사(창을 되잡는 람다 없이)", not hasattr(_shut.lbl_code, "__dict__")
+   or "mousePressEvent" not in vars(_shut.lbl_code))
 ok("쌓이면 위로(새 것이 맨 아래)", otp_popup._open[-1].y() > otp_popup._open[0].y())
 for x in list(otp_popup._open):
     x.close()

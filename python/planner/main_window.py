@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 import webbrowser
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta
 from html import escape as html_escape
 
@@ -620,13 +620,14 @@ class MainWindow(QMainWindow):
         # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
         self._backup(manual=False)
 
-        # Drive 에서 최신본 받아오기(백그라운드)
+        # Drive 에서 최신본 받아오기(백그라운드) — 동기화 묶음 + 계정 설정 파일(v1.32.1, 웹·다른 PC 에서 정한 시트·폴더)
         def worker():
             changed = False
             try:
                 changed = sync.pull(self.gauth)
             except Exception:
                 changed = False
+            self._acct_remote = account_settings.fetch(self.gauth)
             self.sig_synced.emit(changed)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -659,6 +660,7 @@ class MainWindow(QMainWindow):
                 changed = sync.sync_now(self.gauth)
             except Exception as e:
                 err = str(e)[:400]           # 둘째 줄의 '무엇을 하면 되는지' 까지(v1.31.3)
+            self._acct_remote = account_settings.fetch(self.gauth) if not err else None
             self.sig_sync_done.emit(changed, err, manual)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -671,6 +673,7 @@ class MainWindow(QMainWindow):
             self.refresh_calendar()
             self.refresh_todo()
             self.refresh_alarm()
+        self._adopt_account_settings()       # 웹·다른 PC 에서 바꾼 시트·서류 폴더(v1.32.1)
         if not manual:
             if changed:
                 self.sig_toast.emit(config.APP_NAME,
@@ -690,6 +693,9 @@ class MainWindow(QMainWindow):
         if changed:
             self.reload_data()
             self.sig_toast.emit(config.APP_NAME, "다른 PC의 변경사항을 동기화했습니다.")
+        # 설정 창 안에서 로그인하며 고친 것(그 계정 폴더로 옮겨 담는다) → 구글 계정에 저장된 시트·서류 폴더
+        self._apply_carry()
+        self._adopt_account_settings()
         # 자동 규칙을 없앴다(v1.28) — 그것이 만든, 아직 안 한 할일을 거둔다(받은 뒤라 덮어쓰지 않는다)
         QTimer.singleShot(0, self._cleanup_auto_rule_todos)
         # 받기 전에 시트를 먼저 다 읽었으면 그때 미뤄 둔 월 마감을 지금(v1.27)
@@ -3312,13 +3318,28 @@ class MainWindow(QMainWindow):
                       self.settings.drive_api_on,
                       self.settings.files_drive_folder.strip())
         prev_acct = account_settings.local_items(self.settings)
+        before = replace(self.settings)
         dlg = SettingsDialog(self.gauth, self.settings, self,
                              account=getattr(self, 'account_email', ''),
                              on_backup=self.open_backup,
                              on_sync=lambda: self.sync_now_async(manual=True),
-                             on_status=lambda: QTimer.singleShot(0, self.open_status))
+                             on_status=lambda: QTimer.singleShot(0, self.open_status),
+                             on_auth=self._on_dialog_auth)
         prev_branch = getattr(self.settings, "branch_cal", "")
         accepted = dlg.exec() == SettingsDialog.Accepted
+        if dlg.logged_in or dlg.logged_out:
+            # ⚠️ 이 창 안에서 로그인·로그아웃했다(v1.32.1 — 직원 설정 초기화의 원인).
+            #    예전엔 계정을 다시 확인하지 않아, 고친 설정이 **앞사람(또는 공용) 폴더**에 저장되고
+            #    다음에 켤 때 그 계정 폴더의 빈 설정으로 보였다. 이제 고친 칸만 들고 있다가
+            #    새 계정 폴더·구글 계정 설정을 받은 다음에 얹어 저장한다(_apply_carry).
+            if accepted:
+                account_settings.stamp_changes(self.settings, prev_acct,
+                                               account_settings.local_items(self.settings))
+                self._carry = {f.name: getattr(self.settings, f.name) for f in fields(self.settings)
+                               if getattr(self.settings, f.name) != getattr(before, f.name)}
+            self._after_dialog_auth()
+            self.update_google_status()
+            return
         if accepted:
             # 시트·서류 폴더를 바꿨으면 바꾼 때를 적고 **그 자리에서** 내 계정에 올린다(v1.30) —
             # 같은 계정으로 로그인한 웹(jyplanner)이 바로 따라온다.
@@ -3370,6 +3391,84 @@ class MainWindow(QMainWindow):
         elif accepted:
             # 설정만 바뀐 경우에도 팔로업 재스캔
             self._run_followups()
+
+    # ---- 설정 창 안에서 로그인·로그아웃 · 구글 계정의 설정 받기(v1.32.1) ----
+    def _on_dialog_auth(self):
+        """설정 창에서 로그인·로그아웃하는 그 순간 — 확인하기 전엔 지금 폴더를 어느 계정에도 올리지 않는다."""
+        self._account_verified = False
+
+    def _after_dialog_auth(self):
+        """설정 창을 닫았다 — 메인 창의 [구글 로그인] 과 똑같이 계정을 확인하고 그 계정 폴더로 옮긴다."""
+        self._reset_sheet_cache()
+        self._auto_load_started = False
+        if self.gauth.is_connected():
+            # (빠진 권한은 설정 창이 로그인하자마자 이미 알렸다)
+            self._start_account_sync(relogin=True)     # 확인 → 그 계정 폴더 → 받기 → _on_synced 에서 얹는다
+            return
+        # 로그아웃 — 이 사람 폴더를 그만 쓰고 공용 폴더로(다음에 켤 때 앞사람 폴더를 열지 않게)
+        self._account_verified = False
+        self.account_email = ""
+        self._provisional_account = ""
+        config.forget_account()
+        config.set_account("")
+        self.reload_data()
+        self._apply_carry()
+        self.lbl_account.setText("")
+        self.cal_events, self.gtasks = [], []
+        self.refresh_calendar()
+        self.refresh_todo()
+
+    def _settings_snapshot(self) -> tuple:
+        s = self.settings
+        return ((s.sheet_id.strip(), s.sheet_name.strip()),
+                (s.files_dir.strip(), s.drive_api_on, s.files_drive_folder.strip()),
+                getattr(s, "theme", ""))
+
+    def _settings_follow_up(self, prev: tuple) -> None:
+        """설정이 밖에서 바뀌었다(계정 설정 받기 · 옮겨 담기) — 고객 목록·서류 탭·테마를 맞춘다."""
+        now = self._settings_snapshot()
+        if now[0] != prev[0]:
+            self._reset_sheet_cache()
+            self._auto_load_started = False
+            if self.gauth.is_connected():
+                self.load_sheet_async(manual=False)
+        if now[1] != prev[1] and hasattr(self, "tab_files"):
+            self.tab_files.set_settings(self.settings)
+            self._files_loaded = True
+            self.tab_files.reload()
+        if now[2] != prev[2]:
+            self.apply_theme()
+        self._apply_hotkeys()
+
+    def _apply_carry(self):
+        """설정 창 안에서 로그인하며 고친 칸을 지금(새) 계정 설정에 얹고 저장한다."""
+        carry = getattr(self, "_carry", None)
+        if not carry:
+            return
+        self._carry = None
+        prev = self._settings_snapshot()
+        for k, v in carry.items():
+            if hasattr(self.settings, k):
+                setattr(self.settings, k, v)
+        self._save_settings()
+        self._push_account_settings()
+        self._settings_follow_up(prev)
+
+    def _adopt_account_settings(self):
+        """구글 계정에 저장된 시트·서류 폴더(account_settings.json)를 받는다 — 이 PC 에 없거나 계정 것이 나중일 때."""
+        remote = getattr(self, "_acct_remote", None)
+        self._acct_remote = None
+        if remote is None or not self._account_verified:
+            return
+        prev = self._settings_snapshot()
+        got = account_settings.adopt(self.settings, remote)
+        if not got:
+            return
+        self._save_settings()
+        self._settings_follow_up(prev)
+        what = " · ".join({"sheet": "고객관리 시트", "folder": "서류 폴더"}[k] for k in got)
+        crashlog.note(f"구글 계정의 설정을 받음: {what}")
+        self.sig_toast.emit(config.APP_NAME, f"구글 계정에 저장된 {what} 설정을 불러왔습니다.")
 
     def _push_account_settings(self, announce: bool = False):
         """시트·서류 폴더를 계정 설정 파일(account_settings.json)에 바로 올린다(v1.30).

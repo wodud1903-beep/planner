@@ -63,7 +63,7 @@ class SettingsDialog(QDialog):
     _sig_login = Signal(bool, str)
 
     def __init__(self, gauth, settings: AppSettings, parent=None, account: str = "",
-                 on_backup=None, on_sync=None, on_status=None):
+                 on_backup=None, on_sync=None, on_status=None, on_auth=None):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
         # 안내문이 여러 줄이라 좁으면 줄이 자꾸 접힌다 → 예전(560/620)보다 30% 넓게
@@ -74,6 +74,10 @@ class SettingsDialog(QDialog):
         self._on_backup = on_backup
         self._on_sync = on_sync
         self._on_status = on_status
+        # 이 창 안에서 로그인·로그아웃했나(v1.32.1) — 메인 창이 닫힌 뒤 계정 폴더를 다시 정한다
+        self._on_auth = on_auth
+        self.logged_in = False
+        self.logged_out = False
         self.account = (account or "").strip().lower()
         self.tasks_changed = False  # 로그인/로그아웃 발생 여부
 
@@ -625,6 +629,9 @@ class SettingsDialog(QDialog):
             if QMessageBox.question(self, config.APP_NAME, "구글 연결을 해제할까요?") == QMessageBox.Yes:
                 self.gauth.disconnect()
                 self.tasks_changed = True
+                self.logged_out = True
+                if callable(self._on_auth):
+                    self._on_auth()          # 지금 계정 폴더로는 더 동기화하지 않게(바로)
                 self._update_gstatus()
             return
         self.btn_login.setEnabled(False)
@@ -651,6 +658,9 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, config.APP_NAME, "로그인 실패:\n" + err)
             return
         self.tasks_changed = True
+        self.logged_in = True
+        if callable(self._on_auth):
+            self._on_auth()                  # 다른 계정일 수 있다 — 확인하기 전엔 동기화하지 않게(바로)
         # 동의 화면에서 뺀 항목이 있으면 바로 알린다(v1.31.3) — 구글은 항목마다 체크를 받는다.
         # 예전엔 스프레드시트만 봤고, 안내도 개발자용(클라우드 콘솔)이라 직원은 무엇을 할지 몰랐다.
         miss = self.gauth.missing_scopes()

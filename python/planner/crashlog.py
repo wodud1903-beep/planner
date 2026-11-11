@@ -353,6 +353,8 @@ def _watch_loop(freeze_sec: float, every: float, mem_step: int = MEM_STEP) -> No
         if now - last > every * 3:
             beat()
             dumped = False
+            # 꺼짐이 잠자기·화면 잠금 직후에 나는지 보이게(v1.32.1 — access violation 단서 모으기)
+            write(f"참고 — PC 가 잠자기·멈춤에서 깸({int(now - last)}초 만)", "")
         last = now
         idle = now - _beat
         if idle > freeze_sec and not dumped:

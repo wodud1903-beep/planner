@@ -164,6 +164,14 @@ def main() -> int:
 
     win = MainWindow()
     crashlog.start_watchdog(app)        # 화면이 15초 넘게 멈추면 그때 상황을 적는다
+    # 모니터가 꺼졌다 켜지거나(절전·원격 접속) 바뀌면 적어 둔다 — 꺼짐이 또 나면 그 직전에 무엇이
+    # 있었는지 보이게(v1.32.1, v1.31.3 의 access violation 단서 모으기)
+    try:
+        app.screenAdded.connect(lambda s: crashlog.note(f"모니터 연결됨: {s.name()}"))
+        app.screenRemoved.connect(lambda s: crashlog.note(f"모니터 빠짐: {s.name()}"))
+        app.primaryScreenChanged.connect(lambda s: crashlog.note(f"주 모니터 바뀜: {s.name()}"))
+    except Exception:
+        pass
     if prev_crash:
         from PySide6.QtCore import QTimer
         QTimer.singleShot(2500, lambda: crashlog.show_notice(win, prev_crash))
