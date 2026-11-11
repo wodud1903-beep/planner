@@ -8,7 +8,7 @@
 //   · /api/*(자료·로그인·스위치·첨부)와 다른 주소(구글 등)는 건드리지 않는다
 //     — 로그인과 '서버 끄기' 가 그대로 돈다.
 // 화면 파일 목록(SHELL)을 바꾸면 VERSION 도 올린다 → 새 판이 깔리며 한꺼번에 새로 받는다.
-const VERSION = "kbweb-2026-11-09";
+const VERSION = "kbweb-2026-11-11";
 const SHELL = [
   "/", "/app.js", "/kb.js", "/hangul.js", "/sync.js", "/style.css", "/icon.svg",
   "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png",
