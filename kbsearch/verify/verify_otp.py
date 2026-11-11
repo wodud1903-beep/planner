@@ -279,6 +279,24 @@ _short = otp.rows_of([HEAD, [D, "수신문자", "인증 1234"]])
 ok("짧은 문자도 본문을 제대로 고른다(날짜 칸을 본문으로 삼지 않는다)", _short[0]["body"] == "인증 1234"
    and otp.extract_code(_short[0]["body"]) == "1234", _short)
 
+print("[8] kb-v1.9.1 — 팝업 창을 지우지 않고 다시 쓴다(갑자기 꺼짐 막기 · 일정관리기 v1.32.1 과 같다)")
+import shiboken6  # noqa: E402
+for _x in list(otp_popup._open):
+    _x.close()
+_ws = [otp_popup.show({"code": str(200000 + i), "body": ""}) for i in range(5)]
+app.processEvents()
+ok("창은 많아야 셋 · 가장 최근 셋이 보인다", len(otp_popup._pool) <= otp_popup.POOL_MAX
+   and [w.code for w in otp_popup._open] == ["200002", "200003", "200004"], [w.code for w in otp_popup._open])
+_c = otp_popup._open[0]
+_c.close()
+app.processEvents()
+ok("닫으면 숨기기만 — 다음 번호에 그 창을 다시 쓴다", shiboken6.isValid(_c) and not _c.isVisible()
+   and otp_popup.show({"code": "888888", "body": ""}) is _c and _c.code == "888888")
+ok("팝업 코드가 일정관리기와 같다", (_pl.Path(otp_popup.__file__).read_text(encoding="utf-8").split('"""', 2)[2]
+   == (_pl.Path(__file__).resolve().parents[2] / "python" / "planner" / "otp_popup.py").read_text(encoding="utf-8").split('"""', 2)[2]))
+for _x in list(otp_popup._open):
+    _x.close()
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

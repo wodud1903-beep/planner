@@ -4,11 +4,17 @@
   · 뜨자마자 클립보드에 넣는다(설정에서 끌 수 있다). 번호를 눌러도 복사된다.
   · 10초 뒤 저절로 닫힌다(v1.31.1 지점장 요청 — 이미 복사돼 있다). 마우스를 올려 두면 닫지 않는다.
   · 여러 개가 오면 위로 쌓인다. 언제나 주 모니터 · 화면(작업표시줄 제외) 밖으로 나가지 않는다.
+
+⚠️ kb-v1.9.1(일정관리기 v1.32.1 과 같다) — 창을 **만들었다 지우지 않는다.** 처음 쓸 때 만든 창 몇 개를 숨겼다 다시 쓴다.
+   v1.31.3 에서 'Windows fatal exception: access violation'(화면 스레드가 app.exec 안에서 꺼짐)이
+   있었다. 그 판에서 새로 생긴, 자주 만들고 지우는 최상위 창은 이 팝업뿐이었다 — 부모 없는 창 +
+   WA_DeleteOnClose(Qt 가 지움) + 파이썬이 쥔 참조(번호 칸 클릭 람다가 창을 되잡는 고리)가 겹쳐
+   한 창을 두 번 지울 수 있었다. 이제 지우지 않으니 그런 일이 없다.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -18,6 +24,17 @@ LIFE_MS = 10 * 1000
 _EDGE = 16
 _GAP = 10
 _open: list["OtpPopup"] = []
+_pool: list["OtpPopup"] = []          # 만든 창(숨긴 것 포함) — 지우지 않고 다시 쓴다
+POOL_MAX = 3
+
+
+class _ClickLabel(QLabel):
+    """누르면 clicked — 예전엔 mousePressEvent 에 람다를 끼워 창을 되잡는 고리가 생겼다."""
+    clicked = Signal()
+
+    def mousePressEvent(self, e):          # noqa: N802 — Qt 이름
+        self.clicked.emit()
+        super().mousePressEvent(e)
 
 
 def _screen():
@@ -28,10 +45,10 @@ def _screen():
 class OtpPopup(QWidget):
     def __init__(self, item: dict, copied: bool = False):
         super().__init__()
-        self.code = str(item.get("code") or "")
+        self.code = ""
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)   # 닫으면 숨기기만 — 다음 번호에 다시 쓴다
         self.setFixedWidth(340)
         self.setObjectName("otp")
         self.setStyleSheet(
@@ -46,8 +63,7 @@ class OtpPopup(QWidget):
         v.setContentsMargins(18, 12, 12, 14)
         v.setSpacing(6)
         top = QHBoxLayout()
-        who = str(item.get("sender") or "").strip()
-        self.lbl_head = QLabel("📱 인증번호" + (f" · {who}" if who else ""))
+        self.lbl_head = QLabel("📱 인증번호")
         self.lbl_head.setStyleSheet(f"color:{theme.c('subtext')};font-weight:bold;")
         top.addWidget(self.lbl_head, 1)
         self.btn_x = QPushButton("✕")
@@ -57,22 +73,21 @@ class OtpPopup(QWidget):
         top.addWidget(self.btn_x)
         v.addLayout(top)
 
-        self.lbl_code = QLabel(self.code)
+        self.lbl_code = _ClickLabel("")
         self.lbl_code.setCursor(Qt.PointingHandCursor)
         self.lbl_code.setToolTip("누르면 복사")
         self.lbl_code.setStyleSheet(
             f"color:{theme.c('accent')};font-size:34px;font-weight:bold;letter-spacing:4px;")
-        self.lbl_code.mousePressEvent = lambda e: self.copy()
+        self.lbl_code.clicked.connect(self.copy)
         v.addWidget(self.lbl_code)
 
-        body = " ".join(str(item.get("body") or "").replace("[Web발신]", "").split())
-        self.lbl_body = QLabel(body[:90] + ("…" if len(body) > 90 else ""))
+        self.lbl_body = QLabel("")
         self.lbl_body.setWordWrap(True)
         self.lbl_body.setStyleSheet(f"color:{theme.c('subtext')};font-size:12px;")
         v.addWidget(self.lbl_body)
 
         row = QHBoxLayout()
-        self.lbl_state = QLabel("복사해 두었습니다 — Ctrl+V 로 붙여 넣으세요" if copied else "")
+        self.lbl_state = QLabel("")
         self.lbl_state.setStyleSheet(f"color:{theme.c('status_ok')};font-size:12px;")
         row.addWidget(self.lbl_state, 1)
         self.btn_copy = QPushButton("복사")
@@ -83,6 +98,17 @@ class OtpPopup(QWidget):
         self._life = QTimer(self)                 # 창과 함께 사라지는 타이머(닫은 뒤에 울리지 않게)
         self._life.setSingleShot(True)
         self._life.timeout.connect(self.close)
+        self.set_item(item, copied)
+
+    def set_item(self, item: dict, copied: bool = False) -> None:
+        """이 창에 새 번호를 싣는다(다시 쓸 때도 이것으로)."""
+        self.code = str(item.get("code") or "")
+        who = str(item.get("sender") or "").strip()
+        self.lbl_head.setText("📱 인증번호" + (f" · {who}" if who else ""))
+        self.lbl_code.setText(self.code)
+        body = " ".join(str(item.get("body") or "").replace("[Web발신]", "").split())
+        self.lbl_body.setText(body[:90] + ("…" if len(body) > 90 else ""))
+        self.lbl_state.setText("복사해 두었습니다 — Ctrl+V 로 붙여 넣으세요" if copied else "")
         self._life.start(LIFE_MS)
 
     def enterEvent(self, e):
@@ -106,9 +132,10 @@ class OtpPopup(QWidget):
         self.lbl_state.setText("복사했습니다 — Ctrl+V 로 붙여 넣으세요")
 
     def closeEvent(self, e):
+        self._life.stop()
         if self in _open:
             _open.remove(self)
-        super().closeEvent(e)
+        super().closeEvent(e)              # 숨기기만 한다(WA_DeleteOnClose 없음)
         _arrange()
 
 
@@ -126,11 +153,32 @@ def _arrange() -> None:
         y -= _GAP
 
 
+def _take(item: dict, copied: bool) -> OtpPopup:
+    """숨어 있는 창을 다시 쓴다. 없으면 새로 만들고(많아야 POOL_MAX), 다 떠 있으면 가장 오래된 것을."""
+    for w in _pool:
+        if w not in _open and not w.isVisible():
+            w.set_item(item, copied)
+            return w
+    if len(_pool) < POOL_MAX:
+        w = OtpPopup(item, copied=copied)
+        _pool.append(w)
+        return w
+    w = _open[0]
+    _open.remove(w)
+    w.set_item(item, copied)
+    return w
+
+
 def show(item: dict, copied: bool = False) -> OtpPopup:
-    w = OtpPopup(item, copied=copied)
+    w = _take(item, copied)
     _open.append(w)
-    while len(_open) > 3:                     # 많아야 셋 — 오래된 것부터 닫는다
+    while len(_open) > POOL_MAX:              # 많아야 셋 — 오래된 것부터 닫는다
         _open[0].close()
     w.show()
     _arrange()
+    try:
+        from . import crashlog
+        crashlog.note("인증번호 팝업")      # 꺼짐이 또 나면 그 직전에 무엇을 했는지 보이게
+    except Exception:
+        pass
     return w
