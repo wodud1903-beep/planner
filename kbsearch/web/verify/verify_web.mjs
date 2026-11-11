@@ -493,10 +493,27 @@ console.log("[5] 구글 동기화 — 나만 고친 회사 자료를 같은 계�
   await pg.click("#ed-save");
   ok("다른 회사 자료를 고친 것도 내 계정(드라이브)으로", await until(() =>
      ((remote()[nonSync.title] || {}).item || {}).body === "나만 쓰는 메모"), nonSync.title);
+  // 내 정보(kb-v1.9.0) — 일정관리기·PC 에서 적은 팩스번호가 회사 자료의 {내 팩스} 자리에 들어간다
+  pcEdit(T1, "팩스 {내 팩스|0504-214-5287}\n담당 {내 이름}", "2026-11-08T00:00:00Z");
+  { const o = JSON.parse(drive.file);
+    o.me = { fax: "0504-555-6666", name: "", phone: "", email: "", at: "2026-11-10T00:00:00Z" };
+    drive.file = JSON.stringify(o); }
+  await pg.reload();
+  await pg.waitForSelector("#list button.row");
+  await until(async () => (await pg.evaluate(() => localStorage.getItem("kbsearch:me:v1") || "")).includes("0504-555-6666"));
+  await open(T1);
+  const meBody = await bodyNow();
+  ok("내 정보 — {내 팩스} 자리에 내 팩스 · 안 적은 자리는 '미입력'", /팩스 0504-555-6666/.test(meBody)
+     && /〔내 이름 미입력〕/.test(meBody) && !/\{내 /.test(meBody), meBody.slice(0, 80));
+  await pg.click("#edit");
+  ok("고칠 때는 자리 그대로({내 팩스|…}) — 채운 글로 덮지 않는다",
+     (await pg.locator("#ed-body").inputValue()).includes("{내 팩스|0504-214-5287}"));
   // 되돌리면 되돌림도 전한다
   await open(T1);
   await pg.click("#revert");
   ok("되돌리면 PC 에도 되돌림을 전한다(item=null)", await until(() => remote()[T1] && remote()[T1].item === null));
+  ok("계정 파일을 다시 써도 내 정보(me)는 지우지 않는다(예전엔 지웠다)",
+     (JSON.parse(drive.file).me || {}).fax === "0504-555-6666", drive.file.slice(0, 120));
   ok("웹은 회사 원본", /0504-214-5287/.test(await bodyNow()));
 
   // 그사이 PC 에서 법인 심사서류를 고침 → 다시 열면 저절로 받는다

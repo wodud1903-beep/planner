@@ -113,6 +113,11 @@ def check(timeout=(5, 10)) -> dict | None:
                              params={"per_page": 100, "page": page}, timeout=timeout)
         except requests.RequestException as e:
             raise UpdateError(f"업데이트를 확인하지 못했습니다(인터넷 연결): {e}")
+        if r.status_code in (401, 403, 404) and not _token():
+            # 저장소가 비공개로 바뀌었다(또는 깃허브가 익명 조회를 막았다) — 우회 길로 묻는다(kb-v1.9.0)
+            via = check_proxy(timeout)
+            if via is not NotImplemented:
+                return via
         if r.status_code != 200:
             raise UpdateError(f"업데이트를 확인하지 못했습니다 (HTTP {r.status_code})")
         try:
@@ -137,6 +142,33 @@ def check(timeout=(5, 10)) -> dict | None:
             "size": int(asset.get("size") or 0),
             "sha256": digest[7:].lower() if digest.startswith("sha256:") else "",
             "notes": rel.get("body", "") or "", "name": rel.get("name", "") or ""}
+
+
+def check_proxy(timeout=(5, 10)):
+    """우회 길(웹 서버)로 최신 판을 묻는다. 새 판이면 dict, 없으면 None, 못 쓰면 NotImplemented.
+
+    서버는 503(토큰을 아직 안 넣음)이면 못 쓴다고 본다 — 그때는 원래 오류를 그대로 알린다.
+    이 PC 의 계정·토큰은 보내지 않는다. 내려받기 주소는 서버가 깃허브의 서명 주소로 넘겨 준다.
+    """
+    base = getattr(config, "UPDATE_PROXY_URL", "")
+    if not base:
+        return NotImplemented
+    try:
+        r = requests.get(base, headers={"User-Agent": f"{config.APP_ID}/{config.APP_VERSION}"}, timeout=timeout)
+        if r.status_code != 200:
+            return NotImplemented
+        j = r.json()
+    except Exception:
+        return NotImplemented
+    tag = str((j or {}).get("tag", ""))
+    if not tag.startswith(config.UPDATE_TAG_PREFIX) or not j.get("asset_url"):
+        return NotImplemented
+    if parse_ver(tag) <= parse_ver(config.APP_VERSION):
+        return None
+    return {"version": ".".join(str(x) for x in parse_ver(tag)), "tag": tag,
+            "api_url": "", "download_url": str(j["asset_url"]),
+            "size": int(j.get("size") or 0), "sha256": "",
+            "notes": str(j.get("notes") or ""), "name": str(j.get("name") or "")}
 
 
 def _rm(path: str) -> None:

@@ -118,7 +118,10 @@ def rows_of(values: list) -> list:
             continue
         if i == 0 and _is_header(cells):
             continue
-        body = max(cells, key=lambda c: len(c.strip())).strip()
+        # 본문 = 날짜 칸(A) 뒤에서 가장 긴 칸. ⚠️ 날짜 칸까지 넣고 고르면 "인증 1234" 처럼 짧은 문자는
+        #    날짜("2026. 11. 9")가 더 길어 본문으로 뽑혀 번호를 놓쳤다(kb-v1.9.0 · 일정관리기 v1.32 에서 고침).
+        rest = [c.strip() for c in cells[1:] if c.strip()]
+        body = max(reversed(rest), key=len) if rest else cells[0].strip()   # 길이가 같으면 뒤 칸
         d = cells[0].strip() if cells else ""
         out.append({"date": d, "body": body, "key": d + "\x1f" + body})
     return out
@@ -205,3 +208,51 @@ class Watcher:
         self.prev = [r["key"] for r in rows]
         self.seen_at = now
         return items_of(news, today or date.today())
+
+
+# ---------------------------------------------------------------- 같은 PC 에서 한 번만(v1.32)
+# 일정관리기와 업무자료검색을 한 PC 에서 둘 다 켜 두면 같은 인증번호가 두 번 떴다.
+# 먼저 본 쪽이 임시 폴더에 표식을 남기고, 다른 쪽은 그 표식이 있으면 띄우지 않는다.
+CLAIM_SEC = 120
+
+
+def _claim_dir():
+    import tempfile
+    from pathlib import Path
+    d = Path(tempfile.gettempdir()) / "jy_otp_claims"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def claim(item: dict, now: float | None = None) -> bool:
+    """이 인증번호를 이 PC 에서 처음 띄우는가. 다른 프로그램이 방금(2분 안) 띄웠으면 False."""
+    import hashlib
+    import os
+    now = time.time() if now is None else now
+    try:
+        d = _claim_dir()
+        key = hashlib.sha1("\x1f".join(str(item.get(k) or "") for k in ("code", "date", "body"))
+                           .encode("utf-8")).hexdigest()[:20]
+        for f in d.iterdir():                        # 오래된 표식은 치운다
+            try:
+                if now - f.stat().st_mtime > 600:
+                    f.unlink()
+            except OSError:
+                pass
+        p = d / key
+        try:
+            if p.exists() and now - p.stat().st_mtime <= CLAIM_SEC:
+                return False
+        except OSError:
+            pass
+        try:
+            fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except FileExistsError:
+            try:
+                os.utime(str(p), None)               # 오래된 표식 — 내가 새로 맡는다
+            except OSError:
+                pass
+        return True
+    except Exception:
+        return True                                  # 표식을 못 남겨도 번호는 띄운다

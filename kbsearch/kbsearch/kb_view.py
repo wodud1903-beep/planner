@@ -22,7 +22,7 @@ from html import escape as _esc
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QMenu,
     QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextBrowser,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -635,6 +635,53 @@ class _BodyEdit(QTextEdit):
         super().insertFromMimeData(md)
 
 
+class MeInfoDialog(QDialog):
+    """내 정보 — 회사 자료의 {내 팩스} · {내 이름} · {내 연락처} · {내 이메일} 자리에 들어갈 값(kb-v1.9.0 · 일정관리기 v1.32 와 같다)."""
+
+    def __init__(self, me: dict, account: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("내 정보")
+        self.setMinimumWidth(460)
+        v = QVBoxLayout(self)
+        lbl = QLabel("여기 한 번만 적어 두면, 회사 자료에서 '내 팩스' 같은 자리가 저절로 내 것으로 보입니다.\n"
+                     "자료마다 고칠 필요가 없고, 회사가 자료를 새로 고쳐도 그대로입니다.\n"
+                     + (f"내 구글 계정({account})에 저장되어 다른 PC·웹·일정관리기에서도 같습니다."
+                        if account else "구글 로그인하면 내 계정에 저장되어 다른 PC·웹에서도 같습니다."))
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color:{theme.c('subtext')};")
+        v.addWidget(lbl)
+        self.eds = {}
+        hints = {"fax": "예: 0504-123-4567", "name": "예: 홍길동 팀장", "phone": "예: 010-1234-5678",
+                 "email": "예: me@example.com"}
+        for key, label in kb.ME_FIELDS:
+            row = QHBoxLayout()
+            lb = QLabel("내 " + label)
+            lb.setFixedWidth(84)
+            ed = QLineEdit(str((me or {}).get(key) or ""))
+            ed.setPlaceholderText(hints[key])
+            ed.setMaxLength(80)
+            row.addWidget(lb)
+            row.addWidget(ed, 1)
+            v.addLayout(row)
+            self.eds[key] = ed
+        note = QLabel("비워 둔 칸은 회사가 적어 둔 기본값으로 보입니다.")
+        note.setStyleSheet(f"color:{theme.c('subtext')};")
+        v.addWidget(note)
+        brow = QHBoxLayout()
+        brow.addStretch()
+        ok = QPushButton("저장")
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        cancel = QPushButton("취소")
+        cancel.clicked.connect(self.reject)
+        brow.addWidget(ok)
+        brow.addWidget(cancel)
+        v.addLayout(brow)
+
+    def values(self) -> dict:
+        return {k: ed.text().strip() for k, ed in self.eds.items()}
+
+
 class KbEditDialog(QDialog):
     """자료 편집 — 공통(관리자) / 공통을 내 계정에서만 고침 / 내 메모."""
 
@@ -740,7 +787,21 @@ class KbEditDialog(QDialog):
         self.ed_tags.setPlaceholderText("띄어쓰기로 여러 개 — 예: 전자서명 모바일 약정")
         right.addWidget(self.ed_tags)
 
-        right.addWidget(QLabel("본문"))
+        brow_ = QHBoxLayout()
+        brow_.addWidget(QLabel("본문"))
+        brow_.addStretch()
+        # 내 정보 자리(kb-v1.9.0 · 일정관리기 v1.32 와 같다) — 직원마다 다른 팩스번호를 자료 하나로
+        self.btn_me_slot = QPushButton("내 정보 자리 넣기 ▾")
+        self.btn_me_slot.setToolTip(
+            "본문의 커서 자리에 {내 팩스} 같은 자리를 넣습니다.\n"
+            "보는 사람마다 자기 [내 정보] 값으로 바뀌어 보입니다.\n"
+            "고른 글이 있으면 그 글이 '안 적은 사람에게 보일 기본값' 이 됩니다 — 예: {내 팩스|0504-214-5287}")
+        m_ = QMenu(self.btn_me_slot)
+        for _k, label in kb.ME_FIELDS:
+            m_.addAction(f"내 {label}", lambda lb=label: self.insert_me_slot(lb))
+        self.btn_me_slot.setMenu(m_)
+        brow_.addWidget(self.btn_me_slot)
+        right.addLayout(brow_)
         self.txt_body = _BodyEdit(self.drop_attachments)
         right.addWidget(self.txt_body, 5)       # 키운 세로는 대부분 본문이 받는다
 
@@ -1079,6 +1140,16 @@ class KbEditDialog(QDialog):
     # ---- 첨부 ----
     def _editing(self) -> bool:
         return 0 <= self._cur < len(self._cur_list())
+
+    def insert_me_slot(self, label: str) -> None:
+        """본문 커서 자리에 {내 팩스} 자리를 넣는다. 고른 글이 있으면 기본값으로 — {내 팩스|고른 글}."""
+        if not self._editing():
+            return
+        cur = self.txt_body.textCursor()
+        sel = cur.selectedText().replace("\u2029", " ").strip()
+        ok_sel = sel and not any(ch in sel for ch in "{}|")
+        cur.insertText("{내 " + label + ("|" + sel if ok_sel else "") + "}")
+        self.txt_body.setFocus()
 
     def drop_attachments(self, md) -> None:
         """붙여넣기·끌어다 놓기로 들어온 그림·파일을 지금 자료의 첨부로."""

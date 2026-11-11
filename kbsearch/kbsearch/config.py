@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "업무자료검색"
 APP_ID = "KbSearch"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.9.0"
 
 # ---------------------------------------------------------------------------
 # 서비스 스위치 — **자동 업데이트로 끄고 켠다.**
@@ -45,6 +45,9 @@ SWITCH_CHECK_MINUTES = 5
 UPDATE_REPO = "wodud1903-beep/planner"
 UPDATE_TAG_PREFIX = "kb-v"
 UPDATE_ASSET_NAME = "업무자료검색.exe"
+# 저장소를 비공개로 돌렸을 때의 우회 길(kb-v1.9.0) — 웹 서버가 읽기 전용 토큰으로 대신 읽어 준다(api/update.js).
+# 깃허브가 401/403/404 를 주고 이 PC 에 토큰이 없을 때만 쓴다. 지금(공개 저장소)은 쓰지 않는다.
+UPDATE_PROXY_URL = "https://jyplanner.vercel.app/api/update?app=kb"
 UPDATE_CHECK_HOURS = 3          # 켜 둔 채로 지내도 이 간격으로 다시 확인한다
 
 # ---------------------------------------------------------------------------

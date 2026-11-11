@@ -580,6 +580,47 @@ if node and js.exists():
 else:
     print("   (node 없음 — 웹 규칙 대조 건너뜀)")
 
+print("[19] 내 정보 — {내 팩스} 자리 · 계정 파일의 me 를 지우지 않는다(kb-v1.9.0)")
+ME = {"fax": "0504-111-2222", "name": "홍길동", "phone": "", "email": ""}
+ok("자리 채우기(일정관리기와 같다)", kb.fill_me("팩스 {내 팩스|0504-214-5287} 담당 {내 이름} {내 이메일}", ME)
+   == "팩스 0504-111-2222 담당 홍길동 〔내 이메일 미입력〕" and kb.fill_me("팩스 {내 팩스|0504}", {}) == "팩스 0504")
+kb.save_shared([memo("자리 자료", "팩스 {내 팩스|0504-214-5287}")])
+kb.save_me({})
+ok("안 적었으면 회사 기본값으로 보인다", next(x for x in kb.load_all() if x["title"] == "자리 자료")["body"] == "팩스 0504-214-5287")
+kb.save_me(ME)
+ok("적으면 내 것으로 보인다(목록·복사)", next(x for x in kb.load_all() if x["title"] == "자리 자료")["body"] == "팩스 0504-111-2222")
+ok("편집 창이 읽는 원본은 자리 그대로", next(x for x in kb.local_view() if x["title"] == "자리 자료")["body"]
+   == "팩스 {내 팩스|0504-214-5287}")
+# 일정관리기·웹에서 적은 내 정보가 이미 계정 파일에 있다 → 여기서 자료를 고쳐 올려도 지우지 않는다
+fid = next(i for i, f in g.appdata.items() if f["name"] == sync.EDITS_FILE)
+g.appdata[fid]["content"] = json.dumps({"v": 1, "edits": {}})   # 앞 검사가 일부러 깨 둔 파일을 새것으로
+o = edits_file()
+o["me"] = {"fax": "0504-999-0000", "name": "", "phone": "", "email": "", "at": "2099-01-01T00:00:00Z"}
+g.appdata[fid]["content"] = json.dumps(o, ensure_ascii=False)
+set_body("자리 자료", "팩스 {내 팩스|0504-214-5287}\n이 PC 에서 덧붙임")
+changed = sync.sync_edits(FakeAuth())
+ef = edits_file()
+ok("자료를 올려도 계정 파일의 내 정보(me)를 지우지 않는다(예전엔 지웠다)",
+   ef.get("me", {}).get("fax") == "0504-999-0000" and "이 PC 에서 덧붙임" in ef["edits"]["자리 자료"]["item"]["body"], ef.get("me"))
+ok("계정 것이 나중이면 받는다 — 화면도", "내 정보" in changed and kb.load_me()["fax"] == "0504-999-0000"
+   and "0504-999-0000" in next(x for x in kb.load_all() if x["title"] == "자리 자료")["body"], changed)
+kb.save_me(dict(ME, fax="0504-333-4444"), at="2100-01-01T00:00:00Z")   # 계정 것(2099)보다 나중에 고쳤다
+sync.sync_edits(FakeAuth())
+ok("이 PC 에서 나중에 고치면 올린다", edits_file()["me"]["fax"] == "0504-333-4444")
+o = edits_file()
+del o["me"]                      # 예전 판(웹·일정관리기 v1.31 까지)이 빼먹고 썼다
+g.appdata[fid]["content"] = json.dumps(o, ensure_ascii=False)
+w = g.appdata_writes
+sync.sync_edits(FakeAuth())
+ok("계정 파일에서 빠졌으면 이 PC 것을 다시 올린다", edits_file().get("me", {}).get("fax") == "0504-333-4444" and g.appdata_writes == w + 1)
+w = g.appdata_writes
+sync.sync_edits(FakeAuth())
+ok("같으면 다시 쓰지 않는다", g.appdata_writes == w)
+src = (_pl.Path(__file__).resolve().parents[1] / "kbsearch" / "kb.py").read_text(encoding="utf-8")
+psrc = (_pl.Path(__file__).resolve().parents[2] / "python" / "planner" / "kb.py").read_text(encoding="utf-8")
+grab = lambda t: t[t.index("def fill_me"):t.index("return _ME_RE.sub(rep, s)")]  # noqa: E731
+ok("채우기 규칙이 일정관리기와 글자까지 같다", grab(src) == grab(psrc) and "_ME_RE = re.compile(" in src)
+
 print()
 print("실패:", FAIL if FAIL else "없음")
 _sys.exit(1 if FAIL else 0)

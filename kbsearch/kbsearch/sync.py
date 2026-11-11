@@ -347,6 +347,26 @@ def merge_edits(recs: list, dead: dict, remote: dict, now: str, shared: list) ->
     return {"recs": out_recs, "dead": out_dead, "edits": edits, "changed": changed, "push": push}
 
 
+def merge_me(local: dict, remote, now: str) -> tuple:
+    """내 정보 — (쓸 것, 올려야 하나, 이 PC 를 바꿔야 하나). 나중에 고친 쪽(at). 일정관리기 kb_edits.merge_me 와 같다.
+
+    예전 판(kb-v1.8 까지 · 일정관리기 v1.31 까지 · 옛 웹)은 파일을 쓸 때 "me" 를 빼먹는다 —
+    드라이브에 없고 이 PC 에 있으면 다시 올린다.
+    """
+    L = kb.clean_me(local)
+    R = kb.clean_me(remote) if isinstance(remote, dict) else None
+    vals = lambda d: {k: d.get(k, "") for k, _l in kb.ME_FIELDS}  # noqa: E731
+    if R is None or not (kb.has_me(R) or R.get("at")):
+        if kb.has_me(L):
+            return dict(L, at=L.get("at") or now), True, False
+        return L, False, False
+    if vals(L) == vals(R):
+        return L, False, False
+    if L.get("at") and L["at"] > (R.get("at") or ""):
+        return L, True, False
+    return R, False, True
+
+
 def sync_edits(auth) -> list:
     """고친 심사서류 3종을 드라이브와 맞춘다. 받아서 바뀐 제목 목록. 못 읽으면 SyncError(쓰지 않는다)."""
     try:
@@ -361,14 +381,24 @@ def sync_edits(auth) -> list:
     remote = o.get("edits") if isinstance(o, dict) and isinstance(o.get("edits"), dict) else {}
     stamp = now_stamp()
     m = merge_edits(kb.load_local(), kb.load_local_dead(), remote, stamp, kb.load_shared())
-    if m["push"]:
+    me, me_push, me_pull = merge_me(kb.load_me(), o.get("me") if isinstance(o, dict) else None, stamp)
+    if m["push"] or me_push:
+        # ⚠️ 파일의 다른 칸(내 정보 "me" 등)을 지우지 않는다 — 예전엔 {v, updatedAt, edits} 만 새로 써서
+        #    일정관리기·웹에서 적은 내 정보가 사라졌다(kb-v1.9.0).
+        doc = dict(o) if isinstance(o, dict) else {}
+        doc.update({"v": 1, "updatedAt": stamp, "edits": m["edits"]})
+        if kb.has_me(me) or me.get("at"):
+            doc["me"] = me
         try:
-            google_auth.appdata_write(auth, EDITS_FILE, json.dumps(
-                {"v": 1, "updatedAt": stamp, "edits": m["edits"]}, ensure_ascii=False, indent=1), fid)
+            google_auth.appdata_write(auth, EDITS_FILE, json.dumps(doc, ensure_ascii=False, indent=1), fid)
         except google_auth.GoogleError as e:
             raise SyncError(f"고친 자료를 올리지 못했습니다: {e}")
     kb.replace_local(m["recs"], m["dead"])
-    return m["changed"]
+    changed = list(m["changed"])
+    if me_pull:
+        kb.save_me(me, at=me.get("at") or stamp)
+        changed.append("내 정보")
+    return changed
 
 
 # ---------------------------------------------------------------------------

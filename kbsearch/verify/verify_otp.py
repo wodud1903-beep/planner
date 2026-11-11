@@ -19,6 +19,7 @@ import urllib.parse  # noqa: E402
 from datetime import date  # noqa: E402
 
 os.environ["APPDATA"] = tempfile.mkdtemp()
+tempfile.tempdir = tempfile.mkdtemp()     # 인증번호 표식(jy_otp_claims)이 앞선 실행·다른 검사와 섞이지 않게(kb-v1.9.0)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF, Qt  # noqa: E402
@@ -261,6 +262,22 @@ import inspect as _insp  # noqa: E402
 _osrc = _insp.getsource(otp)
 ok("net.http 를 부를 때 찾는다(검사가 가짜로 바꾸면 진짜 인터넷으로 나가지 않는다)", "return net.http()" in _osrc
    and not any(ln.startswith("from .net import http") for ln in _osrc.splitlines()))
+
+print("[7] kb-v1.9.0 — 일정관리기와 함께 켜 둬도 한 번만 · 짧은 문자")
+import importlib.util as _ilu  # noqa: E402
+_spec = _ilu.spec_from_file_location("planner_otp_src", str(_pl.Path(__file__).resolve().parents[2]
+                                                         / "python" / "planner" / "otp.py"))
+_psrc = _pl.Path(_spec.origin).read_text(encoding="utf-8")
+_grab = lambda t: t[t.index("CLAIM_SEC = "):t.index("return True                                  # 표식을 못 남겨도")]  # noqa: E731
+ok("표식 자리·이름 짓기가 일정관리기와 글자까지 같다(그래야 서로 알아본다)", _grab(_osrc) == _grab(_psrc))
+_it = {"code": "123456", "date": D, "body": "인증번호 [123456]"}
+ok("먼저 본 쪽이 띄운다", otp.claim(_it) is True)
+ok("다른 프로그램이 방금 띄운 번호는 띄우지 않는다", otp.claim(_it) is False)
+ok("메인 창은 claim 을 거쳐 띄운다", "if not otp.claim(it):" in (_pl.Path(otp.__file__).parent / "main_window.py")
+   .read_text(encoding="utf-8"))
+_short = otp.rows_of([HEAD, [D, "수신문자", "인증 1234"]])
+ok("짧은 문자도 본문을 제대로 고른다(날짜 칸을 본문으로 삼지 않는다)", _short[0]["body"] == "인증 1234"
+   and otp.extract_code(_short[0]["body"]) == "1234", _short)
 
 print()
 print("실패:", FAIL if FAIL else "없음")

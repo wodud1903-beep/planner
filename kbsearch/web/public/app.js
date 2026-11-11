@@ -23,6 +23,16 @@ const colorOf = (cat) => "c-" + (COLORS[cat] || "gray");
 const initial = (cat) => (cat || "자").trim().charAt(0) || "자";
 
 let items = [], idx = [], q = "", cat = "", cur = -1, timer = 0;
+
+// 내 정보(팩스·이름·연락처·이메일) — 회사 자료의 {내 팩스} 자리에 넣어 보여 준다(kb-v1.9.0). 계정에서 받는다.
+const ME_STORE = "kbsearch:me:v1";
+function loadMe() {
+  try { const o = JSON.parse(localStorage.getItem(ME_STORE) || "null"); return o && typeof o === "object" ? o : {}; }
+  catch (e) { return {}; }
+}
+function saveMe(me) { try { localStorage.setItem(ME_STORE, JSON.stringify(me)); } catch (e) { /* 꽉 참 */ } }
+/** 보여 줄·복사할·보낼 본문 — 내 정보 자리를 채운 것(고칠 때는 it.body 그대로). */
+const shownBody = (it) => kb.fillMe((it && it.body) || "", loadMe());
 let shared = [];                   // 받은 회사 원본(고친 것을 덮기 전)
 
 // ------------------------------------------------------------------ 브라우저에 받아 둔 자료
@@ -123,6 +133,7 @@ function saveMine(email, list, stamp = "") {
   try { localStorage.setItem(MINE_KEY, JSON.stringify({ email, items: list, stamp, at: Date.now() })); } catch (e) { /* 꽉 참 */ }
 }
 function dropMine() {
+  try { localStorage.removeItem(ME_STORE); } catch (e) { /* 무시 */ }   // 그 계정의 내 정보도(kb-v1.9.0)
   try { localStorage.removeItem(MINE_KEY); } catch (e) { /* 무시 */ }
 }
 const mineView = () => loadMine().map((it, i) => ({ ...it, _mine: true, _key: [MINE_CAT, i] }));
@@ -330,7 +341,7 @@ function show(i, push) {
     ${it._stale ? '<p class="note">고친 뒤에 회사가 이 자료의 원본을 바꿨습니다. 새 원본을 보려면 [회사 자료로 되돌리기] 를 누르세요.</p>' : ""}
     ${it._orphan ? '<p class="note">회사 자료에서 없어졌거나 제목이 바뀐 자료입니다 — 이 기기에서 고친 것만 남아 있습니다.</p>' : ""}
     ${it._mine ? '<p class="note mine">내 메모는 PC 업무자료검색·일정관리기에서 고칩니다. 웹에서는 보기만 합니다.</p>' : ""}
-    <div id="bodybox">${kb.bodyToHtml(it.body || "")}</div>
+    <div id="bodybox">${kb.bodyToHtml(shownBody(it))}</div>
     <div class="actions" id="acts">
       <button type="button" class="btn primary" id="copy" ${(it.body || "").trim() ? "" : "disabled"}>${COPY_ICON}<span>본문 복사</span></button>
       ${canShare() ? `<button type="button" class="btn ghost" id="share" ${(it.body || "").trim() || sendable(it).length ? "" : "disabled"}>${SEND_ICON}<span>카톡으로 보내기</span></button>` : ""}
@@ -351,7 +362,7 @@ function show(i, push) {
   const copy = $("#copy");
   copy.onclick = async () => {
     let done = false;
-    try { await navigator.clipboard.writeText(it.body || ""); done = true; } catch (e) { done = false; }
+    try { await navigator.clipboard.writeText(shownBody(it)); done = true; } catch (e) { done = false; }
     copy.classList.toggle("done", done);
     copy.innerHTML = done ? `${CHECK_ICON}<span>복사했습니다</span>` : "<span>복사하지 못했습니다</span>";
     setTimeout(() => { copy.classList.remove("done"); copy.innerHTML = `${COPY_ICON}<span>본문 복사</span>`; }, 1400);
@@ -505,7 +516,7 @@ function flash(btn, text) {
 /** [카톡으로 보내기] — 첨부가 없으면 바로 글을, 있으면 무엇을 보낼지 고르는 창을 연다. */
 function openShare(it, btn) {
   const files = sendable(it);
-  const body = String(it.body || "").trim();
+  const body = shownBody(it).trim();
   if (!files.length) {
     navigator.share({ text: body }).catch((e) => {
       if (!e || e.name !== "AbortError") flash(btn, "보내지 못했습니다");
@@ -556,7 +567,7 @@ async function sendFromDialog(data) {
       ? "폰이 막았습니다 — 한 번 더 눌러 주세요." : "보내지 못했습니다 — " + ((e && e.message) || e);
   }
 }
-$("#share-text").onclick = () => shareItem && sendFromDialog({ text: String(shareItem.body || "").trim() });
+$("#share-text").onclick = () => shareItem && sendFromDialog({ text: shownBody(shareItem).trim() });
 $("#share-imgs").onclick = () => shareReady && shareReady.imgs.length && sendFromDialog({ files: shareReady.imgs });
 $("#share-pdfs").onclick = () => shareReady && shareReady.pdfs.length && sendFromDialog({ files: shareReady.pdfs });
 $("#share-links").onclick = () => shareReady && shareReady.left.length && sendFromDialog({ text: linksText(shareReady.left) });
@@ -714,11 +725,15 @@ async function syncEdits(t) {
   const got = await sync.readRemote(t);
   if (snap() !== before) return { retry: true, changed: [] };
   const m = sync.mergeEdits(loadLocal(), loadDead(), got.edits);
-  if (m.pushNeeded) await sync.writeRemote(t, got.fid, m.edits);
+  if (m.pushNeeded) await sync.writeRemote(t, got.fid, m.edits, got.doc);
   if (snap() !== before) return { retry: true, changed: [] };     // 올리는 사이에 고쳤다 — 덮지 않는다
   saveLocal(m.recs);
   saveDead(m.dead);
-  return { changed: m.changedTitles };
+  const changed = [...m.changedTitles];
+  // 내 정보(kb-v1.9.0) — 보기만 한다(PC 업무자료검색·일정관리기에서 적는다). 바뀌면 화면을 다시 그린다
+  const me = got.doc && got.doc.me && typeof got.doc.me === "object" ? got.doc.me : null;
+  if (me && JSON.stringify(me) !== JSON.stringify(loadMe())) { saveMe(me); changed.push("내 정보"); }
+  return { changed };
 }
 
 /** 내 메모를 받아 이 브라우저에 둔다(보기만). 묶음이 그대로면 내려받지 않는다. */

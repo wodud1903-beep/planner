@@ -119,20 +119,24 @@ async function findMeta(t, name) {
 const findFile = async (t, name) => (await findMeta(t, name))?.id || null;
 const readFile = async (t, fid) => (await g(t, `${DRIVE}/${encodeURIComponent(fid)}?alt=media`)).text();
 
-/** 드라이브 파일 → {fid, edits}. 없으면 {fid:null, edits:{}}. **못 읽으면 throw — 그때는 쓰지 않는다.** */
+/** 드라이브 파일 → {fid, edits, doc(파일 통째)}. 없으면 {fid:null, edits:{}, doc:{}}. **못 읽으면 throw — 그때는 쓰지 않는다.** */
 export async function readRemote(t) {
   const fid = await findFile(t, EDITS_FILE);
-  if (!fid) return { fid: null, edits: {} };
+  if (!fid) return { fid: null, edits: {}, doc: {} };
   const text = await readFile(t, fid);
   let o;
   try { o = text.trim() ? JSON.parse(text) : {}; } catch (e) {
     throw new Error("드라이브의 고친 자료 파일이 깨져 있어 동기화를 멈췄습니다.");
   }
-  return { fid, edits: o && typeof o.edits === "object" && o.edits ? o.edits : {} };
+  return { fid, edits: o && typeof o.edits === "object" && o.edits ? o.edits : {},
+           doc: o && typeof o === "object" && !Array.isArray(o) ? o : {} };
 }
 
-export async function writeRemote(t, fid, edits) {
-  const body = JSON.stringify({ v: 1, updatedAt: stamp(), edits }, null, 1);
+/** 고친 자료를 올린다. doc = 읽은 파일 통째 — 다른 칸(내 정보 "me" 등)을 지우지 않게 그대로 싣는다(kb-v1.9.0).
+ *  예전엔 {v, updatedAt, edits} 만 새로 써서 일정관리기·PC 에서 적은 내 정보가 사라졌다. */
+export async function writeRemote(t, fid, edits, doc = {}) {
+  const base = doc && typeof doc === "object" && !Array.isArray(doc) ? doc : {};
+  const body = JSON.stringify({ ...base, v: 1, updatedAt: stamp(), edits }, null, 1);
   if (fid) {
     await g(t, `${UPLOAD}/${encodeURIComponent(fid)}?uploadType=media`, {
       method: "PATCH", headers: { "Content-Type": "application/json; charset=UTF-8" }, body });

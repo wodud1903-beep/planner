@@ -61,6 +61,21 @@ function linkify(line) {
 }
 
 // '■ 머리글' 은 굵은 소제목 + 앞에 구분선. 머리글이 없는 글에는 선을 안 긋는다.
+// 내 정보 자리(kb-v1.9.0) — 회사 자료의 {내 팩스|기본값} 을 내 정보로. 일정관리기·PC 업무자료검색과 같은 규칙.
+// 내 정보는 내 계정 파일(kb_edits.json 의 "me")에서 받는다 — PC 업무자료검색 [내 정보] · 일정관리기에서 적는다.
+const ME_KEY = { "팩스": "fax", "이름": "name", "연락처": "phone", "이메일": "email" };
+const ME_RE = /\{내 (팩스|이름|연락처|이메일)(?:\|([^{}\n]*))?\}/g;
+export function fillMe(text, me) {
+  const s = String(text == null ? "" : text);
+  if (!s.includes("{내 ")) return s;
+  return s.replace(ME_RE, (_m, label, def) => {
+    const v = String((me && me[ME_KEY[label]]) || "").trim();
+    if (v) return v;
+    const d = String(def || "").trim();
+    return d || `〔내 ${label} 미입력〕`;
+  });
+}
+
 export function bodyToHtml(text) {
   const out = ['<div class="kbbody">'];
   let firstHead = true;

@@ -125,6 +125,34 @@ def boom(*a, **k):
 
 ok("인터넷 없음 → 확인 못 함", "인터넷" in with_get(boom, lambda: raises(updater.check)))
 
+print("[4-2] 저장소가 비공개가 돼도 — 웹 서버 우회 길(kb-v1.9.0)")
+PX = {"code": 200, "body": {"tag": "kb-v9.9.0", "name": "새 판", "notes": "· 고침", "size": 3_000_000,
+                            "asset_url": config.UPDATE_PROXY_URL + "&dl=1&tag=kb-v9.9.0"}}
+seen2 = []
+
+
+def fake2(url, headers=None, params=None, timeout=None, **kw):
+    seen2.append((url, dict(headers or {})))
+    if "api.github.com" in url:
+        return R(404, {"message": "Not Found"})
+    return R(PX["code"], PX["body"])
+
+
+info = with_get(fake2, updater.check)
+ok("깃허브가 404(비공개)면 우회 길로 — 받을 주소도 우회 길", info and info["version"] == "9.9.0"
+   and info["download_url"].endswith("dl=1&tag=kb-v9.9.0") and info["api_url"] == "" and info["size"] == 3_000_000, info)
+ok("우회 길에는 계정·토큰을 보내지 않는다", all("Authorization" not in h for u, h in seen2 if "api.github.com" not in u))
+ok("?app=kb 로 묻는다(일정관리기 판을 받지 않게)", any("app=kb" in u for u, _h in seen2))
+PX["body"] = dict(PX["body"], tag="v9.9.9")
+ok("일정관리기 판(v…)이 오면 쓰지 않는다", "404" in with_get(fake2, lambda: raises(updater.check)))
+PX["body"] = dict(PX["body"], tag="kb-v" + config.APP_VERSION)
+ok("같은 판이면 None", with_get(fake2, updater.check) is None)
+PX["code"] = 503
+ok("서버에 토큰을 아직 안 넣었으면(503) 원래 오류를 그대로", "404" in with_get(fake2, lambda: raises(updater.check)))
+seen2.clear()
+ok("공개 저장소일 때는 우회 길을 쓰지 않는다", with_get(lambda u, **k: (seen2.append((u, {})), R(200, [rel("kb-v0.0.1")]))[1],
+                                                updater.check) is None and all("api.github.com" in u for u, _h in seen2))
+
 print("[5] 받기 — 크기·지문 확인")
 data = b"MZ" + os.urandom(1_200_000)
 good = {"download_url": "https://dl/x", "size": len(data),

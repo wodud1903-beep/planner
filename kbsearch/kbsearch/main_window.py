@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 from . import config, hotkey, kb, kb_files, otp, otp_popup, sheets_kb, switch, sync, theme, updater
 from .google_auth import GoogleAuth, LoginCancelled
 from .icon import make_icon
-from .kb_view import KbEditDialog, KbView, QuickSearch
+from .kb_view import KbEditDialog, KbView, MeInfoDialog, QuickSearch
 from .settings import Settings
 from .settings_dialog import SettingsDialog
 from . import update_ui
@@ -163,6 +163,10 @@ class MainWindow(QMainWindow):
         self.btn_edit = QPushButton("자료 편집")
         self.btn_edit.clicked.connect(self.edit)
         tb.addWidget(self.btn_edit)
+        self.btn_me = QPushButton("내 정보")
+        self.btn_me.setToolTip("팩스·이름·연락처를 한 번 적어 두면 회사 자료의 '내 팩스' 같은 자리에 저절로 들어갑니다.")
+        self.btn_me.clicked.connect(self.edit_me)
+        tb.addWidget(self.btn_me)
         self.btn_sync = QPushButton("동기화")
         self.btn_sync.setToolTip("구글에 로그인해 회사 공통 자료를 받고, 내 메모를 내 구글 계정과 맞춥니다.\n"
                                  "일정관리기와 같은 스프레드시트·같은 메모를 씁니다.")
@@ -525,6 +529,8 @@ class MainWindow(QMainWindow):
         self._otp_denied_told = False        # 다시 읽힌다 — 또 막히면 다시 알린다
         copy = bool(getattr(self.settings, "otp_copy", True))
         for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
+            if not otp.claim(it):
+                continue                     # 이 PC 의 일정관리기가 방금 띄웠다 — 두 번 띄우지 않는다(kb-v1.9.0)
             if copy:
                 QApplication.clipboard().setText(it["code"])
             otp_popup.show(it, copied=copy)
@@ -608,6 +614,28 @@ class MainWindow(QMainWindow):
         if local_changed and self.gauth.is_connected():
             self._edits_announce = True      # 올린 결과를 알린다(kb-v1.8.1 — 예전엔 됐는지 알 수 없었다)
             QTimer.singleShot(500, self.sync_edits_quiet)     # 웹·일정관리기에도 곧 반영
+
+    # ------------------------------------------------------------ 내 정보(kb-v1.9.0)
+    def edit_me(self) -> None:
+        """회사 자료의 {내 팩스} 같은 자리에 들어갈 내 정보를 적는다 — 내 계정으로 일정관리기·웹과 같다."""
+        account = self.gauth.email if self.gauth.is_connected() else ""
+        cur = kb.load_me()
+        d = MeInfoDialog(cur, account, self)
+        if not d.exec():
+            return
+        vals = d.values()
+        if all(vals.get(k, "") == cur.get(k, "") for k, _l in kb.ME_FIELDS):
+            return                               # 바뀐 것이 없다 — 계정에 쓰지 않는다
+        kb.save_me(vals)
+        self.view.reload()
+        if self._quick is not None:
+            self._quick.view.reload()
+        if self.gauth.is_connected() and config.SYNC_ON:
+            self._set_msg("내 정보를 저장했습니다 — 내 계정으로 맞추는 중…", "ok")
+            self._edits_announce = True
+            QTimer.singleShot(300, self.sync_edits_quiet)
+        else:
+            self._set_msg("내 정보를 이 PC 에 저장했습니다 — 로그인하면 내 계정에도 맞춥니다", "ok")
 
     # ------------------------------------------------------------ 고친 심사서류 3종 — 조용히 맞추기
     def sync_edits_quiet(self) -> None:
