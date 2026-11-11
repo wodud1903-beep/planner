@@ -117,6 +117,77 @@ def push(auth, settings) -> bool:
     return need
 
 
+def fetch(auth):
+    """계정 설정 파일을 읽는다 → dict(없으면 {}). 못 읽으면 None(그때는 아무것도 바꾸지 않는다)."""
+    try:
+        fid = google_client.drive_find(auth, FILE)
+        text = google_client.drive_read(auth, fid) if fid else ""
+    except Exception:
+        return None
+    try:
+        o = json.loads(text) if (text or "").strip() else {}
+    except Exception:
+        return {}
+    return o if isinstance(o, dict) else {}
+
+
+def _local_folder(ref: str) -> str:
+    """'영업/고객정보' → 이 PC 의 '내 드라이브' 안 같은 폴더(있을 때만). 없으면 ""."""
+    import os
+    parts = [p for p in str(ref or "").replace("\\", "/").split("/") if p]
+    if not parts or "://" in ref:
+        return ""
+    for root in drive_path.my_drive_roots():
+        p = os.path.join(root, *parts)
+        if os.path.isdir(p):
+            return p
+    return ""
+
+
+def adopt(settings, remote) -> list:
+    """계정 설정 파일(웹·다른 PC 에서 바꾼 것)을 이 PC 설정에 받는다 → 바뀐 항목 ['sheet', 'folder'].
+
+    v1.32.1 — 지점장: "1차로 PC 에 저장, 2차로 구글 아이디에 저장해서 로그인 후 자동으로 불러오게".
+      · 계정 것이 나중에 바꾼 것(at)이거나, 이 PC 에 아직 정하지 않았을 때만 받는다(이 PC 에서 나중에
+        바꾼 것은 덮지 않는다 — 그건 push 가 올린다).
+      · 서류 폴더는 '내 드라이브' 기준 경로라, 이 PC 의 내 드라이브에 그 폴더가 있으면 그 경로를,
+        없으면 '인터넷으로 같은 폴더 읽기' 가 쓸 폴더 이름을 적는다.
+    """
+    if not isinstance(remote, dict):
+        return []
+    out = []
+    local = local_items(settings)
+    R = remote.get("sheet") if isinstance(remote.get("sheet"), dict) else None
+    if R and str(R.get("id") or "").strip():
+        L = local.get("sheet")
+        newer = str(R.get("at") or "") > str(getattr(settings, "sheet_at", "") or "")
+        if L is None or (not _same("sheet", R, L) and newer):
+            settings.sheet_id = str(R.get("id")).strip()
+            settings.sheet_name = str(R.get("tab") or "").strip() or config.DEF_SHEET_NAME
+            settings.sheet_at = str(R.get("at") or "") or utc_stamp()
+            settings.sheet_on = True
+            out.append("sheet")
+    R = remote.get("folder") if isinstance(remote.get("folder"), dict) else None
+    ref = str((R or {}).get("ref") or "").strip()
+    if ref:
+        L = local.get("folder")
+        manual = str(getattr(settings, "files_dir", "") or "").strip()
+        unset = not manual and str(getattr(settings, "files_drive_folder", "") or "").strip() in ("", drive_path.CUSTOMER_DIR)
+        newer = str(R.get("at") or "") > str(getattr(settings, "folder_at", "") or "")
+        if (unset and ref != drive_path.CUSTOMER_DIR) or (L is not None and not _same("folder", R, L) and newer):
+            settings.files_dir = _local_folder(ref)
+            if "://" in ref:                          # 폴더 링크 — 폴더 id 로(인터넷으로 읽기가 id 도 받는다)
+                import re
+                m = re.search(r"folders/([\w-]+)", ref) or re.search(r"[?&]id=([\w-]+)", ref)
+                name = m.group(1) if m else ""
+            else:
+                name = ref.rstrip("/").split("/")[-1]
+            settings.files_drive_folder = name or drive_path.CUSTOMER_DIR
+            settings.folder_at = str(R.get("at") or "") or utc_stamp()
+            out.append("folder")
+    return out
+
+
 def push_saved(auth) -> bool:
     """저장된 설정 파일(plan_cfg.json)로 맞춘다 — 동기화 때 부른다(다른 PC 에서 바꾼 것도 실린다)."""
     from .models import AppSettings

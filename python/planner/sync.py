@@ -54,7 +54,45 @@ _MERGE = {
     tombs.FILE: ("tomb", None),
     "auto_done.json": ("keyed", None),
     "renewals.json": ("keyed", None),
+    "plan_cfg.json": ("cfg", None),
 }
+
+# 설정(plan_cfg.json) — 파일은 최신 쪽을 쓰되, **정해 둔 칸을 빈 값이 덮지 못하게** 묶음별로 고른다(v1.32.1).
+#   지점장: "직원 아이디로 로그인하면 시트·탭·서류 폴더가 PC 를 켤 때마다 초기화된다."
+#   새 PC·지운 PC 에서 로그인하기 전에 만들어진 기본 설정 파일이 '더 최신' 으로 보여, 구글 계정에
+#   있던 설정을 받지 않고 오히려 기본값으로 덮어 올렸다. 이제 묶음마다
+#     · 양쪽에 바꾼 때(at)가 있으면 나중 것,
+#     · 아니면 최신 쪽이 비어 있고 다른 쪽에 값이 있을 때 값이 있는 쪽.
+#   (일부러 지우면 설정 창이 바꾼 때를 적으므로 '지운 것' 이 이긴다.)
+_CFG_GROUPS = (
+    ("sheetAt", ("sheetOn", "sheetId", "sheetName", "sheetAt"), lambda o: bool(str(o.get("sheetId") or "").strip())),
+    ("folderAt", ("filesDir", "driveApiOn", "filesDriveFolder", "folderAt"),
+     lambda o: bool(str(o.get("filesDir") or "").strip())
+     or str(o.get("filesDriveFolder") or "").strip() not in ("", "고객정보")),
+    ("", ("branchCal",), lambda o: bool(str(o.get("branchCal") or "").strip())),
+)
+
+
+def merge_cfg(new: dict, old: dict) -> dict:
+    """설정 두 판 → 합친 것(new = 파일이 더 최신인 쪽). 계산만 한다."""
+    if not isinstance(new, dict) or not isinstance(old, dict):
+        return new if isinstance(new, dict) else old
+    out = dict(new)
+    for at, keys, is_set in _CFG_GROUPS:
+        na, oa = (str(new.get(at) or ""), str(old.get(at) or "")) if at else ("", "")
+        if na and oa:
+            take_old = oa > na
+        else:
+            take_old = not is_set(new) and is_set(old)
+        if take_old:
+            for k in keys:
+                if k in old:
+                    out[k] = old[k]
+    # 월 마감을 적은 달은 늦은 쪽(이미 적은 달을 다시 적지 않게)
+    ml = max(str(new.get("monthlyLast") or ""), str(old.get("monthlyLast") or ""))
+    if ml:
+        out["monthlyLast"] = ml
+    return out
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -152,11 +190,14 @@ def migrate_legacy() -> None:
     if legacy.resolve() == acc.resolve():
         return
     copied = False
+    import shutil
     for n in _FILES:
         src = legacy / n
         if src.exists():
             try:
-                (acc / n).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                # ⚠️ 수정시각까지 그대로(copy2) — 예전엔 '지금' 이 되어, 로그인 전에 만들어진 기본 설정이
+                #    구글 계정에 있던 설정보다 '최신' 으로 보였다(v1.32.1 — 직원 설정 초기화)
+                shutil.copy2(src, acc / n)
                 copied = True
             except Exception:
                 pass
@@ -256,8 +297,12 @@ def merge_text(name: str, new_txt: str, old_txt: str) -> str:
             got = tombs.merge(new, old)
         elif kind == "keyed":
             got = _merge_keyed(new, old)
+        elif kind == "cfg":
+            got = merge_cfg(new, old)
         else:
             got = _merge_set(new, old)
+        if got == new:
+            return new_txt          # 바뀐 것이 없으면 글자도 그대로(괜히 다시 쓰지 않게)
         return json.dumps(got, ensure_ascii=False, indent=2)
     except Exception:
         return new_txt
