@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>업무자료검색</title>
+<meta name="description" content="회사 공통 업무자료(심사서류·캐피탈·연락처)를 로그인 없이 검색합니다.">
+<meta name="theme-color" content="#F3F4F9">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<!-- 홈 화면 앱(설치) — 아이콘 한 번에 열리고, 인터넷이 끊겨도 받아 둔 자료를 본다(sw.js) -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="자료검색">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<script>
+  // 첫 화면을 빨리 — 자료 받기를 HTML 을 읽자마자 시작한다(스크립트 파일을 기다리지 않는다).
+  window.__boot = {
+    kb: fetch("/api/kb").then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, j: j }; });
+    }).catch(function () { return { status: 0, j: {} }; }),
+    st: fetch("/api/status").then(function (r) { return r.json(); }).catch(function () { return null; })
+  };
+</script>
+<link rel="modulepreload" href="app.js">
+<link rel="modulepreload" href="kb.js">
+<link rel="modulepreload" href="hangul.js">
+<link rel="modulepreload" href="sync.js">
+<link rel="stylesheet" href="style.css">
+<!-- 글꼴(Pretendard)은 화면을 막지 않고 뒤에서 받는다. 받기 전에는 기기 글꼴로 보인다. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+      </span>
+      <div>
+        <h1>업무자료검색</h1>
+        <p>회사 공통 자료 · 로그인 없이</p>
+      </div>
+    </div>
+    <div class="topbtns">
+    <button class="btn ghost small syncbtn" id="btn-sync" type="button" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M17.8 3.6v3.6h-3.6"/><path d="M6.2 20.4v-3.6h3.6"/></svg>
+      <span id="sync-label">구글 동기화</span><i class="sdot" aria-hidden="true"></i>
+    </button>
+    <button class="btn ghost small" id="btn-admin" type="button" aria-label="관리 — 서버 켜기/끄기">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>
+      <span>관리</span>
+    </button>
+    </div>
+  </header>
+
+  <!-- 폰에서 처음 열면 — 홈 화면에 앱으로 설치하라는 띠(닫으면 다시 안 뜬다) -->
+  <div class="installbar" id="installbar" role="region" aria-label="앱 설치 안내" hidden>
+    <img src="icons/icon-192.png" alt="" width="36" height="36">
+    <p><b>홈 화면에 앱으로 설치</b><span>아이콘 한 번에 열리고, 인터넷이 끊겨도 받아 둔 자료를 봅니다.</span></p>
+    <button type="button" class="btn primary small" id="install-go">설치</button>
+    <button type="button" class="ibclose" id="install-close" aria-label="닫기">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+
+  <main class="wrap" id="main">
+    <section class="split" id="split">
+      <div class="card left">
+        <div class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+          <input id="q" type="search" placeholder="캐피탈·서류·연락처 검색 (초성도 됩니다)"
+                 autocomplete="off" enterkeyhint="search" aria-label="검색">
+          <kbd class="hotkey" aria-hidden="true">/</kbd>
+        </div>
+        <div class="chips" id="cats" role="toolbar" aria-label="분류"></div>
+        <ul class="list" id="list" aria-live="polite"></ul>
+        <p class="foot" id="foot"><span class="dot"></span><span id="foot-text">자료를 받는 중…</span></p>
+      </div>
+      <div class="card right" id="detail">
+        <div class="hello">
+          <span class="hello-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+          </span>
+          <h2>찾을 자료를 골라 주세요</h2>
+          <p>왼쪽 목록에서 고르면 본문과 첨부가 여기에 보입니다.<br>
+             초성으로도 찾을 수 있어요 — 예: <b>ㄱㅇ ㅅㅅㅅㄹ</b></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="off" id="off" hidden>
+      <div class="card offcard">
+        <span class="off-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3.5v7.5"/><path d="M6.6 6.9a7.5 7.5 0 1 0 10.8 0"/></svg>
+        </span>
+        <h2>지금은 서비스를 쉬고 있습니다</h2>
+        <p id="off-msg"></p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="admin">
+  <form method="dialog" id="admin-form">
+    <div class="dlg-head">
+      <span class="dlg-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3.5v7.5"/><path d="M6.6 6.9a7.5 7.5 0 1 0 10.8 0"/></svg>
+      </span>
+      <div>
+        <h2>서버 켜기 · 끄기</h2>
+        <p class="sub">끄면 이 웹페이지와 직원 PC 의 업무자료검색이 함께 멈춥니다(PC 는 몇 분 안에).</p>
+      </div>
+    </div>
+    <div id="admin-login" class="dlg-body">
+      <label for="pw">관리자 비밀번호</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <p class="err" id="admin-err" role="alert"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn ghost" id="admin-cancel">닫기</button>
+        <button type="submit" class="btn primary" id="admin-go">확인</button>
+      </div>
+    </div>
+    <div id="admin-panel" class="dlg-body" hidden>
+      <div class="state" id="admin-state"></div>
+      <label for="offmsg">끌 때 직원에게 보일 안내</label>
+      <textarea id="offmsg" rows="3" maxlength="300"></textarea>
+      <p class="err" id="admin-err2" role="alert"></p>
+      <div class="dlg-actions">
+        <button type="button" class="btn ghost" id="admin-close">닫기</button>
+        <button type="button" class="btn danger" id="btn-off">서버 끄기</button>
+        <button type="button" class="btn primary" id="btn-on">서버 켜기</button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="syncdlg" aria-labelledby="sync-title">
+  <div class="dlg-head">
+    <span class="dlg-icon sync" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 0 1-13 5.1"/><path d="M4.5 12a7.5 7.5 0 0 1 13-5.1"/><path d="M17.8 3.6v3.6h-3.6"/><path d="M6.2 20.4v-3.6h3.6"/></svg>
+    </span>
+    <div>
+      <h2 id="sync-title">구글 동기화</h2>
+      <p class="sub">회사 자료에서 <b>나만 고친 내용</b>(팩스번호 등)을 같은 구글 계정의
+        PC 업무자료검색·일정관리기와 맞춥니다. 어느 쪽에서 고쳐도 양쪽에 반영됩니다. 회사 자료와 다른 사람 화면은 그대로입니다.<br>
+        PC 업무자료검색·일정관리기의 <b>내 메모</b>도 여기서 볼 수 있습니다(보기만).</p>
+    </div>
+  </div>
+  <div class="dlg-body">
+    <div class="state" id="sync-state"></div>
+    <p class="err" id="sync-err" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="sync-close">닫기</button>
+      <button type="button" class="btn ghost" id="sync-out" hidden>로그아웃</button>
+      <button type="button" class="btn ghost" id="sync-switch">다른 계정</button>
+      <button type="button" class="btn primary" id="sync-go" hidden>지금 동기화</button>
+      <button type="button" class="btn primary" id="sync-login">구글 로그인</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 카톡으로 보내기 — 폰의 '보내기' 화면을 연다(글과 첨부는 따로 보내는 것이 잘 된다) -->
+<dialog id="sharedlg" aria-labelledby="share-title">
+  <div class="dlg-head">
+    <span class="dlg-icon share" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M21 3 10.5 13.5"/><path d="M21 3l-6.5 18-4-7.5L3 9.5 21 3Z"/></svg>
+    </span>
+    <div>
+      <h2 id="share-title">카톡으로 보내기</h2>
+      <p class="sub">보내기 화면이 뜨면 <b>카카오톡</b>을 고르세요. 글 · 그림 · PDF 는 따로따로 보내야 카톡이 잘 받습니다.</p>
+    </div>
+  </div>
+  <div class="dlg-body shareopts">
+    <button type="button" class="shareopt" id="share-text">
+      <b>본문 보내기</b><span id="share-text-sub">서류 목록·팩스번호 등 글</span>
+    </button>
+    <button type="button" class="shareopt" id="share-imgs" hidden>
+      <b id="share-imgs-title">그림 보내기</b><span id="share-imgs-sub"></span>
+    </button>
+    <button type="button" class="shareopt" id="share-pdfs" hidden>
+      <b id="share-pdfs-title">PDF 보내기</b><span id="share-pdfs-sub"></span>
+    </button>
+    <button type="button" class="shareopt" id="share-links" hidden>
+      <b>첨부 링크 보내기</b><span id="share-links-sub"></span>
+    </button>
+    <p class="err" id="share-err" role="status"></p>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="share-close">닫기</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 첨부 크게 보기 — 같은 자료의 다른 첨부로 바로 넘긴다(◀ ▶ · 키보드 ← → · 폰은 옆으로 밀기) -->
+<dialog id="viewer" class="viewer" aria-label="첨부 크게 보기">
+  <div class="vbar">
+    <span class="vname" id="v-name"></span>
+    <span class="vcount" id="v-count"></span>
+    <span class="grow"></span>
+    <a class="btn ghost small" id="v-open" target="_blank" rel="noopener">원본 열기</a>
+    <a class="btn ghost small" id="v-down" target="_blank" rel="noopener">내려받기</a>
+    <button type="button" class="vclose" id="v-close" aria-label="닫기">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div class="vstage" id="v-stage" tabindex="-1"></div>
+  <button type="button" class="vnav prev" id="v-prev" aria-label="이전 첨부 (←)">
+    <svg viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></svg>
+  </button>
+  <button type="button" class="vnav next" id="v-next" aria-label="다음 첨부 (→)">
+    <svg viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg>
+  </button>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
