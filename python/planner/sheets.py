@@ -77,6 +77,13 @@ LAST_COL = 19                           # T
 COL_UID = 20
 UID_HEADER = "고객ID(앱 전용 · 지우지 마세요)"
 
+# V 서류 첨부 — 앱이 쓰는 숨김 열(v1.33). 견적서·등록증·계약확인서 등 여러 개.
+#   {"uid": 고객ID, "files": [{id, name, mime, size}]} — 자료검색 첨부(G열)와 같은 모양.
+#   파일 본체는 **내 구글 드라이브 '고객서류' 폴더**(링크 공개 안 함 — 이 계정만 본다).
+#   uid 가 이 줄의 고객ID 와 다르면 쓰지 않는다 — 줄이 밀려 남의 서류가 붙지 않게.
+COL_FILES = 21
+FILES_HEADER = "서류 첨부(앱 전용 · 지우지 마세요)"
+
 # 고객 추가는 한 번에 하나씩 (행 번호가 겹쳐 앞 고객이 덮어써지는 것을 막는다)
 _APPEND_LOCK = threading.Lock()
 
@@ -199,7 +206,12 @@ class CustomerRow:
     center: str = ""         # P 고객센터 번호
     accident: str = ""       # Q 사고접수 연락처
     uid: str = ""            # U 고객ID (앱 전용 숨김 열 — 메모/이력을 붙들어 두는 키)
+    files_cell: str = ""     # V 서류 첨부 글(앱 전용 숨김 열, v1.33) — files() 로 읽는다
     values: dict = field(default_factory=dict)   # 직접기재 필드키 → 값
+
+    def files(self) -> list:
+        """이 고객의 서류 첨부 [{id, name, mime, size}] — 고객ID 가 맞는 것만."""
+        return files_from(self.files_cell, self.uid)
 
     def get(self, key: str) -> str:
         return self.values.get(key, "")
@@ -458,29 +470,24 @@ def _sheet_props(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
     raise GoogleError(f"'{sheet_name}' 시트를 찾지 못했습니다.")
 
 
-def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-                      header_row: int) -> None:
-    """U열을 쓸 수 있게 준비한다 (열 확보 → 머리글 → 숨김).
+def _ensure_app_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+                       header_row: int, col: int, header: str) -> None:
+    """앱 전용 숨김 열을 쓸 수 있게 준비한다 (열 확보 → 머리글 → 숨김).
 
-    시트가 T열까지만 있으면 U 는 아예 존재하지 않아 읽기·쓰기 모두 400 이 난다.
+    시트가 T열까지만 있으면 U·V 는 아예 존재하지 않아 읽기·쓰기 모두 400 이 난다.
     그럴 땐 먼저 열을 늘린다. 사람이 볼 값이 아니라 숨기지만, 열을 펼쳐 봤을 때
     무엇인지 알 수 있도록 머리글은 남긴다.
     """
     props = _sheet_props(auth, sheet_id, sheet_name)
     gid = props["gid"]
-    reqs = []
-    if props["cols"] <= COL_UID:
-        # 격자에 U열이 없다 → 필요한 만큼 열을 추가한다
-        reqs.append({"appendDimension": {
-            "sheetId": gid, "dimension": "COLUMNS",
-            "length": COL_UID + 1 - props["cols"],
-        }})
-    if reqs:
+    if props["cols"] <= col:
+        # 격자에 그 열이 없다 → 필요한 만큼 열을 추가한다
         rb = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
-                           headers=_headers(auth), timeout=30, json={"requests": reqs})
+                          headers=_headers(auth), timeout=30, json={"requests": [{"appendDimension": {
+                              "sheetId": gid, "dimension": "COLUMNS", "length": col + 1 - props["cols"]}}]})
         _check(rb)
 
-    a1 = f"{col_letter(COL_UID)}{header_row}"
+    a1 = f"{col_letter(col)}{header_row}"
     url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, a1))
     r = _http().get(url, headers=_headers(auth), timeout=20)
     cur = ""
@@ -490,8 +497,8 @@ def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     if cur.strip():
         return                                   # 이미 준비됨
     rp = _http().put(url, headers=_headers(auth), timeout=20,
-                      params={"valueInputOption": "RAW"},
-                      json={"values": [[UID_HEADER]]})
+                     params={"valueInputOption": "RAW"},
+                     json={"values": [[header]]})
     _check(rp)
     # 열 숨기기
     rb = _http().post(
@@ -499,11 +506,106 @@ def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
         headers=_headers(auth), timeout=30,
         json={"requests": [{"updateDimensionProperties": {
             "range": {"sheetId": gid, "dimension": "COLUMNS",
-                      "startIndex": COL_UID, "endIndex": COL_UID + 1},
+                      "startIndex": col, "endIndex": col + 1},
             "properties": {"hiddenByUser": True},
             "fields": "hiddenByUser",
         }}]})
     _check(rb)
+
+
+def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+                      header_row: int) -> None:
+    """U열(고객ID)을 쓸 수 있게 준비한다."""
+    _ensure_app_column(auth, sheet_id, sheet_name, header_row, COL_UID, UID_HEADER)
+
+
+# ---------------------------------------------------------------------------
+# 서류 첨부(V열, v1.33)
+# ---------------------------------------------------------------------------
+def clean_files(files) -> list:
+    """첨부 목록을 저장 형식으로 — [{id, name, mime, size}]. 아직 안 올린 것(id 없음)은 뺀다."""
+    out = []
+    for f in files if isinstance(files, list) else []:
+        if not isinstance(f, dict):
+            continue
+        fid, name = str(f.get("id") or "").strip(), str(f.get("name") or "").strip()
+        if not fid or not name:
+            continue
+        try:
+            size = max(0, int(f.get("size") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        out.append({"id": fid, "name": name, "mime": str(f.get("mime") or "").strip(), "size": size})
+    return out
+
+
+def files_cell(uid: str, files) -> str:
+    """V열에 적을 글. 첨부가 없으면 "" (칸을 비운다)."""
+    fl = clean_files(files)
+    if not fl:
+        return ""
+    return json.dumps({"uid": str(uid or ""), "files": fl}, ensure_ascii=False, separators=(",", ":"))
+
+
+def files_from(cell: str, uid: str = "") -> list:
+    """V열 글 → 첨부 목록. 고객ID 가 서로 있는데 다르면 [] (줄이 밀려 남의 것이 붙지 않게)."""
+    t = str(cell or "").strip()
+    if not t:
+        return []
+    try:
+        o = json.loads(t)
+    except Exception:
+        return []
+    if not isinstance(o, dict):
+        return []
+    owner = str(o.get("uid") or "").strip()
+    if owner and str(uid or "").strip() and owner != str(uid).strip():
+        return []
+    return clean_files(o.get("files"))
+
+
+def read_files(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
+    """V열(서류 첨부)을 읽는다 → {행번호: 글}. V열이 아직 없는 시트면 {} (조용히)."""
+    c = col_letter(COL_FILES)
+    url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, f"{c}1:{c}"))
+    r = _http().get(url, headers=_headers(auth), timeout=20)
+    if r.status_code != 200:
+        return {}
+    out = {}
+    for i, row in enumerate((r.json() or {}).get("values", [])):
+        v = (row[0] if row else "") or ""
+        if str(v).strip().startswith("{"):
+            out[i + 1] = str(v).strip()
+    return out
+
+
+def write_files(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int,
+                uid: str, files, header_row: int = 0) -> None:
+    """V열에 서류 목록을 적는다. 고객ID 를 주면 그 줄의 U열이 같은지 먼저 확인한다."""
+    if header_row:
+        _ensure_app_column(auth, sheet_id, sheet_name, header_row, COL_FILES, FILES_HEADER)
+    if uid:
+        url = config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_UID)}{row}"))
+        r = _http().get(url, headers=_headers(auth), timeout=20)
+        if r.status_code == 200:
+            vals = (r.json() or {}).get("values", [])
+            cur = str(vals[0][0]).strip() if (vals and vals[0]) else ""
+            if cur and cur != uid:
+                raise GoogleError("서류를 적으려던 줄에 다른 고객이 있습니다(시트가 바뀌었습니다).\n"
+                                  "[불러오기] 한 뒤 다시 해 주세요.")
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_FILES)}{row}"))
+    r = _http().put(url, headers=_headers(auth), timeout=20,
+                    params={"valueInputOption": "RAW"},
+                    json={"values": [[files_cell(uid, files)]]})
+    _check(r)
+
+
+def doc_file_id(cell: str) -> str:
+    """S열(=IMAGE("…uc?export=view&id=…")) → 드라이브 파일 id. 없으면 ""."""
+    m = re.search(r"[?&]id=([\w-]+)", doc_url(cell) or "")
+    return m.group(1) if m else ""
 
 
 def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
@@ -1097,6 +1199,14 @@ def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int,
     # 그대로 따라붙으면 안 된다.
     try:
         write_uid(auth, sheet_id, sheet_name, row, "")
+    except Exception:
+        pass
+    # 서류 첨부(V열)도 비운다 — 같은 까닭(v1.33). V열이 없는 시트면 그냥 넘어간다.
+    try:
+        url = config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_FILES)}{row}"))
+        _http().put(url, headers=_headers(auth), timeout=20,
+                    params={"valueInputOption": "RAW"}, json={"values": [[""]]})
     except Exception:
         pass
     return row

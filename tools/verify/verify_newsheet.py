@@ -201,10 +201,11 @@ ok("두 번째부터는 위 고객 줄의 서식·드롭다운을 베낀다", ne
 
 print("[5] 화면 — 0명이어도 [고객 추가] · 금융사 드롭다운")
 src = (_ROOT / "python" / "planner" / "main_window.py").read_text(encoding="utf-8")
-add = src[src.index("def on_customer_add"):src.index("def _confirm_image_share")]
+add = src[src.index("def on_customer_add"):src.index("def on_customer_edit")]
 ok("시트를 읽었으면 고객이 0명이어도 등록 창을 연다",
    "if not self._sheet_loaded and not self.sheet_rows and not self._sheet_pending:" in add)
-ok("순번·서식 판단에 머리글 줄을 넘긴다", "header_row=hdr_row" in add and add.count("header_row=hdr_row") == 2)
+ok("순번·서식 판단에 머리글 줄을 넘긴다", "sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot, header_row=hdr_row)" in add
+   and "seq=seq, uid=uid, header_row=hdr_row)" in add)
 ok("불러올 때 드롭다운도 읽어 후보에 더한다", "sheets.read_dropdowns(" in src
    and src.count("sheets.merge_choices(sheets.choices(") >= 3)
 from PySide6.QtWidgets import QApplication  # noqa: E402

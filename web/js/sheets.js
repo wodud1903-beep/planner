@@ -177,6 +177,17 @@ export async function readDocFormula(sheetId, tab, row) {
   }
 }
 
+/** V열(첨부 서류 목록, PC v1.33) 한 칸 — V열이 아직 없는 시트(격자 밖 400)면 빈 문자열. */
+export async function readFilesCell(sheetId, tab, row) {
+  try {
+    const v = await values(sheetId, tab, `V${row}:V${row}`);
+    return String(((v[0] || [])[0]) || "").trim();
+  } catch (e) {
+    if (e instanceof NeedSignIn || e instanceof WrongAccount || e instanceof NeedScope) throw e;
+    return "";
+  }
+}
+
 /** R열 한 칸만 — 고객을 열 때 부른다. 실패하면 빈 문자열(멘트만 못 볼 뿐이다). */
 export async function readMent(sheetId, tab, row) {
   try {

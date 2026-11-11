@@ -125,6 +125,14 @@ class World:
                     {"properties": {"sheetId": g, "title": t, "gridProperties": {"rowCount": 1000, "columnCount": 26}}}
                     for g, t in self._tabs(sid)]})
             self.writes.append(("sheet", sid + rest, json_body if json_body is not None else data))
+            # 값 쓰기는 시트에도 담는다(v1.33 — 다시 읽었을 때 그대로 보이게)
+            if method == "PUT" and rest.startswith("/values/"):
+                self._put(book, rest[len("/values/"):].split("?")[0], (json_body or {}).get("values") or [])
+                return Resp(200, {})
+            if rest.startswith("/values:batchUpdate"):
+                for d in (json_body or {}).get("data", []):
+                    self._put(book, d.get("range", ""), d.get("values") or [])
+                return Resp(200, {})
             mm = re.match(r"/sheets/(\d+):copyTo", rest)
             if mm:
                 src = next((t for g, t in self._tabs(sid) if g == int(mm.group(1))), None)
@@ -208,6 +216,30 @@ class World:
         return Resp(404, {"error": {"message": "unknown in fake"}})
 
     @staticmethod
+    def _put(book, rng, values):
+        """'탭'!A5 · A5:C5 범위에 값을 적는다(시트처럼 줄·칸을 늘려 가며)."""
+        rng = rng.strip()
+        tab, a1 = (rng.rsplit("!", 1) if "!" in rng else (None, rng))
+        tab = tab.strip("'") if tab else next(iter(book), None)
+        m = re.match(r"([A-Z]+)(\d+)", a1)
+        if not m or tab is None:
+            return
+        c0 = 0
+        for ch in m.group(1):
+            c0 = c0 * 26 + ord(ch) - 64
+        c0 -= 1
+        r0 = int(m.group(2)) - 1
+        rows = book.setdefault(tab, [])
+        for i, vr in enumerate(values):
+            while len(rows) <= r0 + i:
+                rows.append([])
+            row = rows[r0 + i]
+            for j, v in enumerate(vr):
+                while len(row) <= c0 + j:
+                    row.append("")
+                row[c0 + j] = v
+
+    @staticmethod
     def _range(book, rng):
         rng = rng.strip()
         tab = None
@@ -220,6 +252,9 @@ class World:
         rows = book.get(tab)
         if rows is None:
             return None
+        one = re.match(r"([A-Z]+)(\d+)$", a1)
+        if one:                                       # 한 칸('U5') — 진짜 시트처럼 그 칸만
+            a1 = f"{one.group(1)}{one.group(2)}:{one.group(1)}{one.group(2)}"
         m = re.match(r"([A-Z]+)(\d*):([A-Z]+)(\d*)$", a1)
         if not m:
             return rows

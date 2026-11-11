@@ -479,6 +479,10 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
       docDl.push(u);
       return r.fulfill({ body: QPNG, contentType: "image/png" });
     }
+    if (u.includes("REG1") && u.includes("alt=media")) {   // PC v1.33 첨부 서류(내 계정 — 링크 공개 없음)
+      docDl.push(u);
+      return r.fulfill({ body: QPNG, contentType: "image/jpeg" });
+    }
     return r.fulfill({ json: { files: [] } });
   });
   await ctx3.route("**/accounts.google.com/**", (r) => r.abort());
@@ -494,6 +498,12 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
       ] } });
     }
     if (/!R\d+:R\d+/.test(u)) return r.fulfill({ json: { values: [[MENT]] } });
+    // V열 — PC 가 적은 첨부 서류 목록(앱 전용 숨김 칸)
+    if (/!V\d+:V\d+/.test(u)) {
+      return r.fulfill({ json: { values: [[JSON.stringify({ uid: "", files: [
+        { id: "REG1", name: "자동차등록증.jpg", mime: "image/jpeg", size: 10 },
+        { id: "CONF1", name: "계약확인서.pdf", mime: "application/pdf", size: 20 }] })]] } });
+    }
     // S열은 수식으로 물어봐야 =IMAGE(...) 가 온다
     if (/!S\d+:S\d+/.test(u)) {
       return r.fulfill({ json: { values: [[u.includes("FORMULA")
@@ -552,13 +562,26 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
 
   // ⚠️ 견적서는 S열의 =IMAGE() **수식**이다. 표시값으로 읽으면 빈 문자열이라
   //    '견적서 없음' 과 구분되지 않는다 — 폰에서 안 보이던 이유가 이것이었다.
-  await p3.waitForSelector("#cdoc .vimg", { timeout: 10000 });
+  // PC v1.33 — 고객마다 서류 여러 개(V열 목록). 옛 견적서 그림(S열)은 첫 서류로 함께 보인다.
+  await p3.waitForSelector("#cdocs .attcard", { timeout: 10000 });
   ok("견적서를 수식으로 읽는다",
      seen.some((u) => /!S\d+:S\d+/.test(u) && /FORMULA/.test(u)),
      seen.filter((u) => /!S\d+:S/.test(u)).map((u) => u.slice(-40)).join(" "));
-  ok("견적서 이미지가 나온다",
-     (await p3.locator("#cdoc .vimg").getAttribute("src")).startsWith("blob:"));
-  ok("견적서를 드라이브 API 로 받아 온다", docDl.length === 1, docDl.length + "건");
+  ok("첨부 서류 목록(V열)을 그 고객 한 칸만 읽는다", seen.filter((u) => /!V\d+:V\d+/.test(u)).length === 1);
+  const docNames = await p3.locator("#cdocs .attname").allTextContents();
+  ok("옛 견적서 그림 + PC 에서 올린 서류가 모두 보인다",
+     JSON.stringify(docNames) === JSON.stringify(["견적서(시트 그림).png", "자동차등록증.jpg", "계약확인서.pdf"]),
+     docNames.join(" | "));
+  await p3.waitForFunction(() => [...document.querySelectorAll("#cdocs img.attimg")]
+    .every((i) => (i.getAttribute("src") || "").startsWith("blob:")), null, { timeout: 10000 });
+  ok("그림 서류는 작은 그림으로 — 드라이브 API 로 받아 온다(링크 공개 아님)",
+     docDl.length === 2 && (await p3.locator('#cdocs .attcard[data-k="2"] .attpdf').count()) === 1, docDl.length + "건");
+  await p3.locator('#cdocs .attcard[data-k="1"] button[data-act="open"]').last().click();
+  await p3.waitForSelector("#cdocview .vimg", { timeout: 10000 });
+  ok("[크게] — 같은 고객의 다른 서류로 넘길 수 있다(2 / 3)",
+     (await p3.locator("#cdocview #vpos").textContent()).trim() === "2 / 3");
+  ok("이미 받은 것은 다시 받지 않는다", docDl.length === 2, docDl.length + "건");
+  await p3.click("#cdocview #vclose");
   ok("멘트 본문이 그려진다", (await p3.locator("pre.ment").textContent()).includes("정상 접수"));
   const tels = await p3.locator("#cdetail a.tel").evaluateAll((a) => a.map((x) => x.href));
   ok("연락처가 눌러서 걸리는 tel: 링크다",

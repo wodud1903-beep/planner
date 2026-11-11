@@ -161,15 +161,15 @@ def _store(att: dict, data: bytes) -> Path:
 # ---------------------------------------------------------------------------
 # 드라이브
 # ---------------------------------------------------------------------------
-def _folder(auth) -> str:
+def _folder(auth, name: str = FOLDER_NAME) -> str:
     from . import sheets               # sheets 가 google_client 를 끌어온다 — 쓸 때만
-    fid = sheets._find_or_create_folder(auth, FOLDER_NAME)
+    fid = sheets._find_or_create_folder(auth, name)
     if not fid:
-        raise KbFileError(f"드라이브에 '{FOLDER_NAME}' 폴더를 만들지 못했습니다.")
+        raise KbFileError(f"드라이브에 '{name}' 폴더를 만들지 못했습니다.")
     return fid
 
 
-def upload(auth, data: bytes, name: str, public: bool) -> dict:
+def upload(auth, data: bytes, name: str, public: bool, folder_name: str = FOLDER_NAME) -> dict:
     """한 파일을 올리고 첨부 정보({id, name, mime, size})를 돌려준다.
 
     public=True(회사 공통 자료)면 '링크가 있는 누구나 보기' 로 연다.
@@ -183,7 +183,7 @@ def upload(auth, data: bytes, name: str, public: bool) -> dict:
     if len(data) > MAX_BYTES:
         raise KbFileError(f"'{name}' — {size_text(len(data))}. "
                           f"한 파일 {size_text(MAX_BYTES)} 까지 넣을 수 있습니다.")
-    folder = _folder(auth)
+    folder = _folder(auth, folder_name)
     # 이어올리기(resumable) — 큰 PDF 도 한 번에 올라간다
     h = dict(auth._headers())
     h.update({"Content-Type": "application/json; charset=UTF-8",
