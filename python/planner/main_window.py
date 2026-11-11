@@ -32,7 +32,8 @@ from . import (
     account_settings, alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
     customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_cache, sheets, sync,
+    google_client, hotkey, kb, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_backup,
+    sheet_cache, sheets, sync,
     theme, updater, weekly,
 )
 from .update_progress import UpdateProgress
@@ -155,6 +156,8 @@ class MainWindow(QMainWindow):
     sig_acct_pushed = Signal(str)      # 시트·서류 폴더를 계정 설정에 올림 (오류, ""=성공) — v1.30
     sig_kb_pushed = Signal(str, object, bool)   # 내 계정에서 고친 자료 맞춤 (오류, 받은 제목들, 알릴지) — v1.30
     sig_otp = Signal(object, str)      # 휴대폰 인증번호 — 새로 온 것 [{code, sender, body}], 오류 (v1.31)
+    sig_sheet_edit = Signal(object, int)   # 이 계정이 시트를 고칠 수 있나 (True|False|None, epoch) — v1.32
+    sig_sheet_backup = Signal(object, str)  # 시트 백업 끝 ({id, at, src, name}|None, 오류) — v1.32
     sig_update = Signal(object, str, bool)  # (릴리스정보|None, 오류, 수동여부)
     sig_upd_progress = Signal(object, object)   # 업데이트 받는 중 (받은 바이트, 전체) — 진행 창(v1.27)
     sig_upd_stage = Signal(str)                 # 업데이트 단계 ("apply" = 다 받고 바꾸는 중)
@@ -325,6 +328,8 @@ class MainWindow(QMainWindow):
         self.sig_acct_pushed.connect(self._on_acct_pushed)
         self.sig_kb_pushed.connect(self._on_kb_pushed)
         self.sig_otp.connect(self._on_otp)
+        self.sig_sheet_edit.connect(self._on_sheet_edit)
+        self.sig_sheet_backup.connect(self._on_sheet_backup)
         self.sig_update.connect(self._on_update_checked)
         self.sig_upd_progress.connect(self._on_upd_progress)
         self.sig_upd_stage.connect(self._on_upd_stage)
@@ -366,6 +371,8 @@ class MainWindow(QMainWindow):
         self._otp_timer = QTimer(self)
         self._otp_timer.timeout.connect(self._poll_otp)
         self._otp_timer.start(otp.POLL_MS)
+        # 새 PC 에서 처음 켰으면(구글 로그인 전) '처음 설정' 안내를 한 번 띄운다(v1.32)
+        QTimer.singleShot(1500, self._maybe_first_run)
 
         # 쓰기 직후 '할일만' 재조회 (디바운스) — 여러 건이 몰려도 한 번만
         self._task_refetch_timer = QTimer(self)
@@ -1516,11 +1523,15 @@ class MainWindow(QMainWindow):
         # [서류]·[이력] 은 버튼 줄에서 뺐다(내용 칸에 적으신다고 하셔서).
         # 다만 지워 버리지는 않고 **우클릭 메뉴에 남겨** 둔다 — 이력에는 그동안
         # 적어 두신 상담 메모가 들어 있어, 길이 아예 없으면 그 기록에 닿을 수 없다.
+        self._cust_write_btns = []
         for text, slot in [("고객 추가", self.on_customer_add),
                            ("삭제", self.on_customer_del)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
             row.addWidget(b)
+            self._cust_write_btns.append(b)
+        # 이 계정이 시트를 고칠 수 있나(v1.32): None 모름 · True · False('보기' 로만 공유받음)
+        self._sheet_can_edit = None
         self.btn_cust_open = QPushButton("시트 열기")
         self.btn_cust_open.clicked.connect(self._open_sheet)
         row.addWidget(self.btn_cust_open)
@@ -1675,7 +1686,99 @@ class MainWindow(QMainWindow):
 
     def _on_sheet_done(self, epoch: int):
         if epoch == self._sheet_epoch:
-            self._maybe_auto_monthly()
+            if not self._check_sheet_edit():    # 묻는 중이면 답을 받고 나서(_on_sheet_edit) 월 마감을 적는다
+                self._maybe_auto_monthly()
+            self._maybe_backup_sheet()
+
+    # ---- 보기 전용 시트(v1.32) — '보기' 로만 공유받은 직원은 추가·수정 단추를 눌러 봐야 403 을 봤다 ----
+    def _check_sheet_edit(self):
+        """드라이브 읽기 권한이 있으면 이 계정이 시트를 고칠 수 있는지 미리 묻는다(없으면 써 볼 때 안다)."""
+        if self._sheet_can_edit is not None or not self.gauth.is_connected():
+            return False
+        if config.SCOPE_DRIVE_READ not in (self.gauth.scopes or []):
+            return False
+        sid, epoch = self.settings.sheet_id.strip(), self._sheet_epoch
+
+        def worker():
+            self.sig_sheet_edit.emit(google_client.drive_can_edit(self.gauth, sid), epoch)
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _on_sheet_edit(self, can, epoch: int):
+        if epoch != self._sheet_epoch:
+            return
+        if can is not None:
+            self._set_sheet_can_edit(bool(can))
+        self._maybe_auto_monthly()      # 보기 전용이면 안에서 그만둔다
+
+    def _set_sheet_can_edit(self, can):
+        self._sheet_can_edit = can
+        ro = can is False
+        self._sheet_readonly = ro
+        for b in getattr(self, "_cust_write_btns", []):
+            b.setEnabled(not ro)
+            b.setToolTip("이 구글 계정은 이 시트를 '보기' 만 할 수 있습니다 — 시트 주인에게 '편집자' 로 "
+                         "공유해 달라고 하세요." if ro else "")
+        if hasattr(self, "tbl_cust"):
+            self.refresh_customers()
+        if can is True:
+            self._maybe_backup_sheet()
+
+    def _sheet_writable(self) -> bool:
+        """시트에 쓰기 전에 — 보기 전용이면 까닭을 알리고 False."""
+        if not getattr(self, "_sheet_readonly", False):
+            return True
+        QMessageBox.information(
+            self, config.APP_NAME,
+            "이 구글 계정은 이 고객관리 시트를 '보기' 만 할 수 있어 고칠 수 없습니다.\n\n"
+            "시트 주인에게 '편집자' 로 공유해 달라고 하거나,\n"
+            "[설정] 의 시트 주소가 내 시트가 맞는지 확인하세요.")
+        return False
+
+    def _note_sheet_write(self, err: str):
+        """시트 쓰기 결과로 배운다 — 됐으면 고칠 수 있는 시트, 권한 오류면 보기 전용."""
+        if not err:
+            if self._sheet_can_edit is not True:
+                self._set_sheet_can_edit(True)
+        elif "(403)" in err and "권한이 없습니다" in err:
+            self._set_sheet_can_edit(False)
+
+    # ---- 고객관리 시트 자동 백업(v1.32, sheet_backup.py) ----
+    def _maybe_backup_sheet(self):
+        s = self.settings
+        if (self._sheet_can_edit is not True or getattr(self, "_backup_busy", False)
+                or not self._account_verified or not sheet_backup.due(s)):
+            return
+        self._backup_busy = True
+        sid, tab = s.sheet_id.strip(), s.sheet_name.strip()
+
+        def worker():
+            try:
+                self.sig_sheet_backup.emit(sheet_backup.run(self.gauth, sid, tab), "")
+            except Exception as e:
+                self.sig_sheet_backup.emit(None, (str(e).splitlines() or ["오류"])[0][:200])
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_sheet_backup(self, rec, err: str):
+        self._backup_busy = False
+        if err or not rec:
+            crashlog.note(f"고객관리 시트 백업 실패: {err}")
+            self._backup_failed_at = time.time()
+            return
+        lst = [b for b in (self.settings.sheet_backups or []) if b.get("id") != rec["id"]] + [rec]
+        auth = self.gauth
+
+        def worker(lst=lst):
+            sheet_backup.prune(auth, lst)        # 옛 사본은 휴지통으로(뒤에서)
+        kept = sorted(lst, key=lambda b: str(b.get("at", "")))
+        by = {}
+        for b in kept:
+            by.setdefault(b.get("src", ""), []).append(b)
+        self.settings.sheet_backups = [b for v in by.values() for b in v[-sheet_backup.KEEP:]]
+        self._save_settings()
+        threading.Thread(target=worker, daemon=True).start()
+        self.sig_toast.emit("고객관리 시트 백업", f"내 구글 드라이브에 '{rec.get('name', '')}' 을(를) 만들었습니다 "
+                                              f"(주 1회 · 최근 {sheet_backup.KEEP}개 보관).")
 
     # ---- 월 마감 리포트(v1.26, monthly.py) ----
     def open_monthly(self):
@@ -1715,6 +1818,8 @@ class MainWindow(QMainWindow):
             return                      # 계정을 확인하기 전에는 남의 시트에 쓰지 않는다
         if not self._pulled_once:
             return                      # 다른 PC 기록(설정의 '적은 달')을 받은 뒤에 — _on_synced 가 다시 부른다
+        if getattr(self, "_sheet_readonly", False):
+            return                      # 보기 전용으로 공유받은 시트 — 써 봐야 403 이다(v1.32)
         t = date.today()
         y, m = monthly.prev_month(t.year, t.month)
         ym = f"{y}-{m:02d}"
@@ -1775,7 +1880,7 @@ class MainWindow(QMainWindow):
         그 고객이 아직 그 줄에 있는지(고객ID·이름) 확인한다. 못 쓰면 되돌린다.
         """
         cr = next((c for c in self.sheet_rows if c.row == rownum), None)
-        if cr is None or cr in self._sheet_pending or not self._sheet_ready():
+        if cr is None or cr in self._sheet_pending or not self._sheet_ready() or not self._sheet_writable():
             return
         old = dict(cr.values)
         if (old.get("status") or "").strip() == status:
@@ -2194,6 +2299,11 @@ class MainWindow(QMainWindow):
         """다른 시트/탭으로 바뀌었을 때 — 캐시한 행 정보를 모두 버린다."""
         self._sheet_epoch += 1          # 읽는 중이던 앞 시트의 결과는 버린다
         self.btn_cust_load.setEnabled(True)   # (버린 결과는 단추를 되살리지 않는다)
+        self._sheet_can_edit = None     # 다른 시트 — 고칠 수 있는지는 다시 알아본다
+        self._sheet_readonly = False
+        for b in getattr(self, "_cust_write_btns", []):
+            b.setEnabled(True)
+            b.setToolTip("")
         self.sheet_rows = []
         self._sheet_pending = []
         self._sheet_last_row = 0
@@ -2562,7 +2672,7 @@ class MainWindow(QMainWindow):
         return None
 
     def on_customer_add(self):
-        if not self._sheet_ready():
+        if not self._sheet_ready() or not self._sheet_writable():
             return
         # 시트를 한 번이라도 읽었으면 고객이 0명이어도(새로 만든 시트) 등록할 수 있다(v1.28.4)
         # — 예전엔 고객 줄이 없으면 '불러오기' 만 하라고 해서, 시트에 손으로 한 명을 넣어야 했다
@@ -2652,6 +2762,8 @@ class MainWindow(QMainWindow):
         res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
                                  cr.values, self.sheet_choices, cr.ment, self)
         if res is None:
+            return
+        if not self._sheet_writable():       # 보기 전용 — 열어 보기만 되고 저장은 안 된다
             return
         vals, img, doc_cleared = res
         if img and not self._confirm_image_share():
@@ -2943,7 +3055,7 @@ class MainWindow(QMainWindow):
             self._save_notes()
 
     def on_customer_del(self):
-        if not self._sheet_ready():
+        if not self._sheet_ready() or not self._sheet_writable():
             return
         cr = self._sel_customer()
         if cr is None:
@@ -2980,12 +3092,14 @@ class MainWindow(QMainWindow):
 
     def _on_sheet_delete_fail(self, cr, err: str):
         """삭제 실패 → 지웠던 행을 되살린다."""
+        self._note_sheet_write(err)
         if cr not in self.sheet_rows:
             self.sheet_rows.append(cr)
         self.refresh_customers()
         QMessageBox.warning(self, config.APP_NAME, "삭제 실패:\n" + err)
 
     def _on_sheet_written(self, pend, newrow, err: str):
+        self._note_sheet_write(err)
         if err:
             if pend is not None and pend in self._sheet_pending:
                 self._sheet_pending.remove(pend)
@@ -3139,6 +3253,35 @@ class MainWindow(QMainWindow):
         self._auto_load_started = False
         self._start_account_sync(relogin=True)
 
+    def _own_events(self) -> list:
+        """내 일정만(지점 공유 캘린더 것은 뺀다) — 팔로업·중복 정리는 내 일정에만 한다."""
+        return [ev for ev in self.cal_events if not getattr(ev, "branch", False)]
+
+    def open_status(self, first_run: bool = False):
+        """연결 상태 점검 · 처음 설정 안내 · 오류 기록 보내기(v1.32, status_dialog.py)."""
+        from .status_dialog import StatusDialog
+        old = getattr(self, "_status_dlg", None)
+        if old is not None:
+            try:
+                old.close()
+            except RuntimeError:
+                pass
+        self._status_dlg = StatusDialog(self, first_run=first_run)
+        self._status_dlg.show()              # 모달이 아니다 — 보면서 고칠 수 있게
+        self._status_dlg.raise_()
+        return self._status_dlg
+
+    def _maybe_first_run(self):
+        """새 PC 에서 처음 켰다(구글 로그인 전) — 무엇부터 하면 되는지 한 번 보여 준다."""
+        flag = config.base_dir() / "first_run.done"
+        if self.gauth.is_connected() or flag.exists():
+            return
+        try:
+            flag.write_text("1", encoding="utf-8")
+        except OSError:
+            return
+        self.open_status(first_run=True)
+
     def _warn_missing_scopes(self) -> bool:
         """방금 로그인했는데 동의 화면에서 뺀 항목이 있으면 바로 알린다(v1.31.3). 알렸으면 True.
 
@@ -3172,7 +3315,9 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.gauth, self.settings, self,
                              account=getattr(self, 'account_email', ''),
                              on_backup=self.open_backup,
-                             on_sync=lambda: self.sync_now_async(manual=True))
+                             on_sync=lambda: self.sync_now_async(manual=True),
+                             on_status=lambda: QTimer.singleShot(0, self.open_status))
+        prev_branch = getattr(self.settings, "branch_cal", "")
         accepted = dlg.exec() == SettingsDialog.Accepted
         if accepted:
             # 시트·서류 폴더를 바꿨으면 바꾼 때를 적고 **그 자리에서** 내 계정에 올린다(v1.30) —
@@ -3210,6 +3355,8 @@ class MainWindow(QMainWindow):
                 self._reset_sheet_cache()
                 if self.gauth.is_connected():
                     self.load_sheet_async(manual=False)
+            if getattr(self.settings, "branch_cal", "") != prev_branch and self.gauth.is_connected():
+                QTimer.singleShot(0, self.fetch_all_async)   # 지점 캘린더를 바꿨다 — 일정을 새로 받는다
         self.update_google_status()
         # 로그인/로그아웃이 있었으면 데이터 갱신
         if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
@@ -3347,9 +3494,35 @@ class MainWindow(QMainWindow):
         self._otp_denied_told = False        # 다시 읽힌다(공유받았다) — 또 막히면 다시 알린다
         copy = bool(getattr(self.settings, "otp_copy", True))
         for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
+            if not otp.claim(it):
+                continue                     # 이 PC 의 업무자료검색이 방금 띄웠다 — 두 번 띄우지 않는다(v1.32)
             if copy:
                 QApplication.clipboard().setText(it["code"])
             otp_popup.show(it, copied=copy)
+        self._maybe_clean_otp()
+
+    def _maybe_clean_otp(self):
+        """관리자 PC 가 가끔 인증문자 시트의 2일 지난 줄을 지운다(v1.32 — 지점장: '2일만 지나도 자동 삭제')."""
+        s = self.settings
+        if not getattr(s, "otp_clean", True) or not config.is_rates_admin(getattr(self, "account_email", "")):
+            return
+        now = time.time()
+        if now - getattr(self, "_otp_cleaned_at", 0.0) < otp.CLEAN_EVERY_SEC or getattr(self, "_otp_cleaning", False):
+            return
+        self._otp_cleaning = True
+        self._otp_cleaned_at = now
+        sid, tab = str(s.otp_sheet or "").strip(), str(s.otp_tab or "").strip()
+
+        def worker():
+            try:
+                n = otp.clean_old(self.gauth, sid, tab)
+                if n:
+                    crashlog.note(f"인증문자 시트의 지난 줄 {n}개를 지웠습니다")
+            except Exception:
+                pass                         # 못 지워도 받는 데는 지장이 없다 — 6시간 뒤 다시
+            finally:
+                self._otp_cleaning = False
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_acct_pushed(self, err: str):
         if not err:
@@ -3370,6 +3543,8 @@ class MainWindow(QMainWindow):
             return
         self.btn_fetch.setEnabled(False)
         self.last_fetch = datetime.now()
+        # 지점 공유 캘린더(v1.32) — 캘린더 창도 같은 것을 읽게 여기서 알려 둔다
+        google_client.set_branch_calendar(getattr(self.settings, "branch_cal", ""))
 
         # 팔로업이 켜져 있으면 과거 출고 일정까지 스캔하도록 과거 구간도 받는다
         back_days = 0
@@ -3620,7 +3795,7 @@ class MainWindow(QMainWindow):
 
         if not self.gauth.is_connected():
             return
-        jobs = followup.old_title_events(self.cal_events, kw, mo)
+        jobs = followup.old_title_events(self._own_events(), kw, mo)
         if not jobs:
             if n:
                 self.sig_toast.emit(config.APP_NAME, f"팔로업 제목 {n}건을 정리했습니다.")
@@ -3655,9 +3830,9 @@ class MainWindow(QMainWindow):
             return
         self._rename_old_followups()
         self._drop_duplicate_followups()
-        on_cal = followup.calendar_names(self.cal_events)
+        on_cal = followup.calendar_names(self._own_events())
         added = followup.check_followups(
-            self.settings, self.cal_events, self.todos, self.followup_tracker)
+            self.settings, self._own_events(), self.todos, self.followup_tracker)
         if added:
             self._save_todos()
             self.followup_tracker.save()
@@ -3693,7 +3868,7 @@ class MainWindow(QMainWindow):
         # 지우지 못한 것(남의 읽기 전용 캘린더 등)은 이번 실행 동안 다시 하지 않는다 — 조회 때마다
         # 헛되이 지우기를 부르고 화면에서만 빼 두지 않게(v1.27)
         fail = self.__dict__.setdefault("_dup_del_fail", set())
-        extra = [ev for ev in followup.duplicate_events(self.cal_events) if ev.event_id not in fail]
+        extra = [ev for ev in followup.duplicate_events(self._own_events()) if ev.event_id not in fail]
         if not extra:
             return
         gone = {id(ev) for ev in extra}

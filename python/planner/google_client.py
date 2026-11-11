@@ -44,6 +44,7 @@ class CalEvent:
     cal_id: str = ""
     event_id: str = ""
     description: str = ""
+    branch: bool = False        # 지점 공유 캘린더의 일정(v1.32) — 내 일정이 아니다(팔로업·중복 정리에서 뺀다)
 
     def time_text(self) -> str:
         return self.start.strftime("%H:%M") if self.has_time else "종일"
@@ -354,6 +355,21 @@ def _parse_rfc3339(s: str) -> tuple[Optional[datetime], bool]:
             return None, False
 
 
+# 지점 공유 캘린더(v1.32) — [설정] 에서 정한 지점 공용 캘린더. 내 캘린더 목록에 없어도 함께 읽는다.
+_BRANCH = {"id": "", "err": ""}
+BRANCH_TAG = "[지점] "
+
+
+def set_branch_calendar(cal_id: str) -> None:
+    _BRANCH["id"] = (cal_id or "").strip()
+    _BRANCH["err"] = ""
+
+
+def branch_calendar_error() -> str:
+    """지점 캘린더를 못 읽은 까닭(없으면 "") — 연결 상태 점검이 보여 준다."""
+    return _BRANCH["err"]
+
+
 def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
                           forward_days: int = 7) -> list[CalEvent]:
     """(오늘-back_days) ~ (오늘+forward_days) 구간의 캘린더 이벤트.
@@ -382,6 +398,10 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
                if c.get("id") and (c.get("selected") or c.get("primary"))]
     if not cal_ids:  # 선택 정보가 없으면 전부 조회
         cal_ids = [c["id"] for c in r.json().get("items", []) if c.get("id")]
+    branch = _BRANCH["id"]
+    if branch and branch not in cal_ids:
+        cal_ids.append(branch)           # 내 목록에 안 넣었어도 공유만 돼 있으면 읽힌다
+    _BRANCH["err"] = ""
 
     failed: list[str] = []
 
@@ -397,9 +417,16 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
                 "fields": "items(start,end,summary,description,iCalUID,id)",
             }, timeout=20)
         except Exception:
+            if cal_id == branch:
+                _BRANCH["err"] = "인터넷 연결"
+                return []
             failed.append(cal_id)      # 조용히 삼키면 일정이 통째로 사라진다
             return []
         if er.status_code != 200:
+            if cal_id == branch:         # 지점 캘린더를 못 읽어도 내 일정은 그대로 보여 준다
+                _BRANCH["err"] = ("이 계정에 공유되지 않았습니다" if er.status_code in (403, 404)
+                                  else f"HTTP {er.status_code}")
+                return []
             failed.append(cal_id)
             return []
         out = []
@@ -412,11 +439,12 @@ def fetch_calendar_events(auth: GoogleAuth, back_days: int = 0,
             out.append(CalEvent(
                 start=dt,
                 has_time=has_time,
-                summary=it.get("summary", "(제목 없음)"),
+                summary=(BRANCH_TAG if cal_id == branch else "") + it.get("summary", "(제목 없음)"),
                 uid=it.get("iCalUID", it.get("id", "")),
                 cal_id=cal_id,
                 event_id=it.get("id", ""),
                 description=it.get("description", "") or "",
+                branch=(cal_id == branch),
             ))
         return out
 
@@ -758,6 +786,22 @@ def delete_event(auth: GoogleAuth, calendar_id: str, event_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Drive appDataFolder (다중 PC 동기화용 앱 전용 저장공간)
 # ---------------------------------------------------------------------------
+def drive_can_edit(auth: GoogleAuth, file_id: str):
+    """이 계정이 그 파일(시트)을 고칠 수 있나 — True / False / None(알 수 없음, v1.32).
+
+    드라이브 읽기 권한이 있을 때만 알 수 있다(없으면 그 파일이 안 보여 404 → None).
+    """
+    try:
+        r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(), timeout=15,
+                        params={"fields": "capabilities(canEdit)", "supportsAllDrives": "true"})
+        if r.status_code != 200:
+            return None
+        v = ((r.json() or {}).get("capabilities") or {}).get("canEdit")
+        return bool(v) if isinstance(v, bool) else None
+    except Exception:
+        return None
+
+
 def _drive_fail(what: str, r) -> GoogleError:
     """드라이브 요청 실패 → 무엇을 하면 되는지까지 적은 오류(v1.31.3).
 

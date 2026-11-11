@@ -61,8 +61,12 @@ export function parseWhen(s) {
   return isNaN(d) ? null : { at: d, hasTime: true };
 }
 
-/** 앞으로 forwardDays 동안의 일정. 보이는 캘린더만 본다(숨긴 구독·공휴일 제외). */
-export async function events({ backDays = 0, forwardDays = 30 } = {}) {
+export const BRANCH_TAG = "[지점] ";
+
+/** 앞으로 forwardDays 동안의 일정. 보이는 캘린더만 본다(숨긴 구독·공휴일 제외).
+ *  branch(v1.32) = 지점 공유 캘린더 ID — 내 목록에 안 넣었어도 함께 읽고 앞에 [지점] 을 붙인다.
+ *  못 읽어도(공유받지 못한 계정) 내 일정은 그대로 보이고, 경고도 띄우지 않는다(PC 와 같다). */
+export async function events({ backDays = 0, forwardDays = 30, branch = "" } = {}) {
   const now = new Date();
   const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const min = new Date(base); min.setDate(min.getDate() - backDays);
@@ -72,6 +76,8 @@ export async function events({ backDays = 0, forwardDays = 30 } = {}) {
     + `?fields=${encodeURIComponent("items(id,summary,selected,primary)")}`);
   let cals = (list.items || []).filter((c) => c.id && (c.selected || c.primary));
   if (!cals.length) cals = (list.items || []).filter((c) => c.id);
+  const br = String(branch || "").trim();
+  if (br && !cals.some((c) => c.id === br)) cals = [...cals, { id: br, summary: "지점" }];
 
   const qs = `timeMin=${encodeURIComponent(rfc3339(min))}`
            + `&timeMax=${encodeURIComponent(rfc3339(max))}`
@@ -89,14 +95,15 @@ export async function events({ backDays = 0, forwardDays = 30 } = {}) {
         if (!w) return null;
         return {
           at: w.at, hasTime: w.hasTime,
-          summary: it.summary || "(제목 없음)",
+          summary: (c.id === br ? BRANCH_TAG : "") + (it.summary || "(제목 없음)"),
           description: it.description || "",
           calId: c.id, calName: c.summary || "", id: it.id || "",
+          ...(c.id === br ? { branch: true } : {}),
         };
       }).filter(Boolean);
     } catch (e) {
       if (e instanceof NeedSignIn || e instanceof NeedScope) throw e;
-      failed.push(c.summary || c.id);
+      if (c.id !== br) failed.push(c.summary || c.id);
       return [];
     }
   }));

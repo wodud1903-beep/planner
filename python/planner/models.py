@@ -309,6 +309,12 @@ class AppSettings:
     otp_sheet: str = config.OTP_DEF_SHEET_ID
     otp_tab: str = config.OTP_DEF_TAB
     otp_copy: bool = True
+    otp_clean: bool = True               # (관리자 PC) 2일 지난 문자는 시트에서 저절로 지운다(v1.32)
+    # 고객관리 시트 자동 백업(v1.32) — 주 1회 사본을 내 드라이브에. sheet_backups = [{id, at}] (최근 4개)
+    sheet_backup: bool = True
+    sheet_backups: list = field(default_factory=list)
+    # 지점 공유 캘린더(v1.32) — 그 캘린더의 일정을 내 일정과 함께 본다(앞에 [지점])
+    branch_cal: str = config.DEF_BRANCH_CAL
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
     # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
@@ -367,6 +373,10 @@ class AppSettings:
             "otpSheet": self.otp_sheet,
             "otpTab": self.otp_tab,
             "otpCopy": bool(self.otp_copy),
+            "otpClean": bool(self.otp_clean),
+            "sheetBackup": bool(self.sheet_backup),
+            "sheetBackups": list(self.sheet_backups or []),
+            "branchCal": self.branch_cal,
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
@@ -448,6 +458,10 @@ class AppSettings:
         s.otp_on = bool(o.get("otpEnabled", True))          # 옛 "otpOn"(v1.31.0 의 기본 꺼짐)은 보지 않는다
         s.otp_sheet, s.otp_tab = otp_where(o.get("otpSheet"), o.get("otpTab"))
         s.otp_copy = bool(o.get("otpCopy", True))
+        s.otp_clean = bool(o.get("otpClean", True))
+        s.sheet_backup = bool(o.get("sheetBackup", True))
+        s.sheet_backups = [x for x in (o.get("sheetBackups") or []) if isinstance(x, dict) and x.get("id")]
+        s.branch_cal = str(o.get("branchCal", config.DEF_BRANCH_CAL) or "").strip()
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")

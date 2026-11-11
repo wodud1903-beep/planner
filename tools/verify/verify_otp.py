@@ -15,6 +15,7 @@ import urllib.parse
 from datetime import date
 
 os.environ["APPDATA"] = tempfile.mkdtemp()
+tempfile.tempdir = tempfile.mkdtemp()     # 인증번호 표식(jy_otp_claims)이 앞선 실행·다른 검사와 섞이지 않게(v1.32)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
@@ -61,6 +62,12 @@ rows = otp.rows_of([HEAD, [D, "수신문자", KB], [D, "수신문자", LOGIN], [
 ok("머리글·빈 줄은 빼고 가장 긴 칸을 본문으로", [r["body"] for r in rows] == [KB.strip(), LOGIN.strip()]
    and rows[0]["date"] == D)
 ok("머리글이 없는 시트도", len(otp.rows_of([[D, "수신문자", KB]])) == 1)
+# v1.32: 본문이 날짜 칸보다 짧은 문자("인증 1234")는 날짜가 본문으로 뽑혀 번호를 놓쳤다
+_short = otp.rows_of([HEAD, ["2026. 11. 10", "수신문자", "인증 1234"], ["2026. 11. 10", "수신문자", "4821"]])
+ok("짧은 문자도 본문을 제대로 고른다(날짜 칸을 본문으로 삼지 않는다)",
+   [r["body"] for r in _short] == ["인증 1234", "4821"] and otp.extract_code(_short[0]["body"]) == "1234",
+   [r["body"] for r in _short])
+ok("칸이 날짜 하나뿐인 줄은 그 칸이 본문", otp.rows_of([["인증번호 123456"]])[0]["body"] == "인증번호 123456")
 
 
 def R(*bodies):
@@ -278,6 +285,9 @@ class Fake:
         self._otp_tick = 0
         self.sig_otp = Sig()
         self.lbl_status = QLabel("")
+
+    def _maybe_clean_otp(self):
+        pass
 
 
 st = AppSettings()

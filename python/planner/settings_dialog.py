@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame, QGroupBox,
     QHBoxLayout, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTextEdit, QTimeEdit,
+    QLineEdit, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget, QTextEdit, QTimeEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -63,7 +63,7 @@ class SettingsDialog(QDialog):
     _sig_login = Signal(bool, str)
 
     def __init__(self, gauth, settings: AppSettings, parent=None, account: str = "",
-                 on_backup=None, on_sync=None):
+                 on_backup=None, on_sync=None, on_status=None):
         super().__init__(parent)
         self.setWindowTitle("세부 설정")
         # 안내문이 여러 줄이라 좁으면 줄이 자꾸 접힌다 → 예전(560/620)보다 30% 넓게
@@ -73,22 +73,33 @@ class SettingsDialog(QDialog):
         # 백업/복원·동기화는 파일을 되돌린 뒤 화면까지 다시 그려야 해서 메인 창이 맡는다
         self._on_backup = on_backup
         self._on_sync = on_sync
+        self._on_status = on_status
         self.account = (account or "").strip().lower()
         self.tasks_changed = False  # 로그인/로그아웃 발생 여부
 
-        # 항목이 늘어 작은 화면에서 잘리지 않도록 스크롤 안에 담는다
+        # 항목이 늘어 한 줄로 길게 내려가던 것을 탭으로 나눈다(v1.32 — 찾기 쉽게). 탭마다 스크롤.
         outer = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        _inner = QWidget()
-        # 이름 없는 QWidget 은 스타일시트 배경을 칠하지 않는다 → 이름 + 속성을 줘서
-        # 테마 배경이 확실히 적용되게 한다(캘린더 창의 #calwin 과 동일한 패턴).
-        _inner.setObjectName("dlgbody")
-        _inner.setAttribute(Qt.WA_StyledBackground, True)
-        root = QVBoxLayout(_inner)
-        scroll.setWidget(_inner)
-        outer.addWidget(scroll, 1)
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+        self._pages = {}
+
+        def P(title: str) -> QVBoxLayout:
+            if title not in self._pages:
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.NoFrame)
+                inner = QWidget()
+                # 이름 없는 QWidget 은 스타일시트 배경을 칠하지 않는다 → 이름 + 속성을 준다
+                inner.setObjectName("dlgbody")
+                inner.setAttribute(Qt.WA_StyledBackground, True)
+                lay = QVBoxLayout(inner)
+                scroll.setWidget(inner)
+                self.tabs.addTab(scroll, title)
+                self._pages[title] = lay
+            return self._pages[title]
+
+        for _t in ("계정·동기화", "고객관리", "알림·일정", "인증번호", "화면·기타"):
+            P(_t)
         # 메인 프로그램과 같은 높이로 열어 스크롤을 최소화한다
         from PySide6.QtGui import QGuiApplication
         _avail = QGuiApplication.primaryScreen().availableGeometry()
@@ -107,7 +118,7 @@ class SettingsDialog(QDialog):
         self.btn_login.clicked.connect(self._on_login_click)
         gl.addWidget(self.lbl_gstatus, 1)
         gl.addWidget(self.btn_login)
-        root.addWidget(gb_g)
+        P("계정·동기화").addWidget(gb_g)
 
         # ---- 계약 후 팔로업 ----
         gb_f = QGroupBox("계약 후 팔로업 (내 할일 자동 등록)")
@@ -130,7 +141,7 @@ class SettingsDialog(QDialog):
         self.txt_ment = QTextEdit()
         self.txt_ment.setMinimumHeight(120)
         fl.addRow("메모 템플릿\n(%s = 고객명)", self.txt_ment)
-        root.addWidget(gb_f)
+        P("알림·일정").addWidget(gb_f)
 
         # ---- 휴대폰 알림 (구글 캘린더 리마인더) ----
         gb_r = QGroupBox("휴대폰 알림 (구글 캘린더 알림 자동 설정)")
@@ -142,7 +153,7 @@ class SettingsDialog(QDialog):
         self.sp_reminder.setSuffix(" 분 전")
         rl.addRow("알림 시점", self.sp_reminder)
         rl.addRow(QLabel("PC 를 꺼 두어도 휴대폰 구글 캘린더 앱이 알림을 띄웁니다."))
-        root.addWidget(gb_r)
+        P("알림·일정").addWidget(gb_r)
 
         # ---- 구글 시트 고객관리 ----
         gb_s = QGroupBox("구글 시트 고객관리 연동")
@@ -191,7 +202,7 @@ class SettingsDialog(QDialog):
             "함수 칸(순번·합계·고객센터번호·사고접수연락처·고객안내멘트)은\n"
             "프로그램이 건드리지 않고 시트 수식 그대로 둡니다.\n"
             "⚠ 처음 사용할 때 [Google 로그아웃] 후 다시 로그인해야 합니다(권한 추가)."))
-        root.addWidget(gb_s)
+        P("고객관리").addWidget(gb_s)
 
         # ---- 고객정보(서류) ----
         gb_files = QGroupBox("고객정보 — 고객별 서류 보기")
@@ -235,7 +246,7 @@ class SettingsDialog(QDialog):
         self.lbl_install.setWordWrap(True)
         ffl.addRow("", self.lbl_install)
         self._refresh_install_hint()
-        root.addWidget(gb_files)
+        P("고객관리").addWidget(gb_files)
 
         # ---- 휴대폰 인증번호 받기(v1.31, otp.py) ----
         gb_o = QGroupBox("휴대폰 인증번호 받기 — 폰으로 온 인증번호를 PC 에 바로 띄우기")
@@ -250,12 +261,15 @@ class SettingsDialog(QDialog):
         ofl.addRow("탭 이름", self.ed_otp_tab)
         self.chk_otp_copy = QCheckBox("오면 바로 클립보드에 복사 (로그인 칸에서 Ctrl+V)")
         ofl.addRow("", self.chk_otp_copy)
+        self.chk_otp_clean = QCheckBox("2일 지난 문자는 인증문자 시트에서 저절로 지우기 (관리자 PC 가 지웁니다)")
+        self.chk_otp_clean.setEnabled(config.is_rates_admin(self.account))
+        ofl.addRow("", self.chk_otp_clean)
         lbl_o = QLabel("기본은 지점 공용 인증문자 시트입니다 — 다른 시트를 쓸 때만 주소를 바꾸세요(비우면 기본으로).\n"
                        "MacroDroid 가 받은 문자를 시트 맨 위 줄에 넣어 주면 됩니다(맨 위가 최신 · 첫 칸 날짜 · 본문).\n"
                        "켤 때 이미 있던 문자는 띄우지 않고, 뜬 번호는 10초 뒤 닫힙니다(마우스를 올리면 그대로).")
         lbl_o.setStyleSheet(f"color:{theme.c('subtext')};")
         ofl.addRow(lbl_o)
-        root.addWidget(gb_o)
+        P("인증번호").addWidget(gb_o)
 
         # ---- 오늘의 뉴스 ----
         gb_n = QGroupBox("오늘의 뉴스 (대시보드 [오늘의 뉴스] 단추)")
@@ -267,7 +281,7 @@ class SettingsDialog(QDialog):
                        "켤 때 미리 받아 두고, 누르면 새로 받아 바꿔 끼웁니다.")
         lbl_n.setStyleSheet(f"color:{theme.c('subtext')};")
         nfl.addRow(lbl_n)
-        root.addWidget(gb_n)
+        P("화면·기타").addWidget(gb_n)
 
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
@@ -282,7 +296,7 @@ class SettingsDialog(QDialog):
         vl.addLayout(trow)
         vl.addWidget(QLabel("고르면 [확인] 을 눌렀을 때 바로 바뀝니다."))
         vl.addStretch()
-        root.addWidget(gb_v)
+        P("화면·기타").addWidget(gb_v)
 
         # ---- 창 닫기 동작 ----
         gb_c = QGroupBox("창 닫기(X) 버튼")
@@ -293,7 +307,7 @@ class SettingsDialog(QDialog):
         self.cmb_close.addItem("완전 종료", False)
         cl.addWidget(self.cmb_close)
         cl.addWidget(QLabel("완전히 끄려면 트레이 아이콘 우클릭 → [종료] 를 쓰세요."))
-        root.addWidget(gb_c)
+        P("화면·기타").addWidget(gb_c)
 
         # ---- 전역 단축키 ----
         gb_h = QGroupBox("전역 단축키 (창 빠르게 열기)")
@@ -338,7 +352,7 @@ class SettingsDialog(QDialog):
         hl.addWidget(QLabel(
             "상담 통화 중에도 이 키를 누르면 전자약정·심사서류 검색창이 바로 뜹니다.\n"
             "다른 프로그램이 같은 조합을 이미 쓰고 있으면 등록되지 않습니다 — 그때는 키를 바꿔 보세요."))
-        root.addWidget(gb_h)
+        P("화면·기타").addWidget(gb_h)
 
         # ---- 백업 / 복원 ----
         gb_b = QGroupBox("백업 / 복원 · 다른 PC 동기화")
@@ -357,11 +371,50 @@ class SettingsDialog(QDialog):
             "할일·알람·설정·고객메모·멘트문구를 하루 한 번 자동으로 백업합니다.\n"
             "잘못 지웠거나 덮어썼을 때 시점을 골라 되돌릴 수 있습니다.\n"
             "동기화는 켤 때와 10분마다 자동으로 돕니다. 급하면 [지금 동기화] 를 누르세요."))
-        root.addWidget(gb_b)
+        P("계정·동기화").addWidget(gb_b)
 
-        root.addStretch()
+        # ---- 연결 상태 점검(v1.32) ----
+        gb_st = QGroupBox("연결 상태 점검 · 오류 기록 보내기")
+        stl = QVBoxLayout(gb_st)
+        strow = QHBoxLayout()
+        btn_status = QPushButton("연결 상태 점검 열기…")
+        btn_status.clicked.connect(self._open_status)
+        strow.addWidget(btn_status)
+        strow.addStretch()
+        stl.addLayout(strow)
+        lbl_st = QLabel("로그인·권한·시트·동기화·인증번호·업데이트가 되는지 한 화면에서 봅니다.\n"
+                        "안 되는 것이 있으면 [점검 결과·오류 기록 복사] 로 글을 복사해 보내 주세요.")
+        lbl_st.setStyleSheet(f"color:{theme.c('subtext')};")
+        stl.addWidget(lbl_st)
+        P("계정·동기화").addWidget(gb_st)
 
-        # ---- 버튼 (스크롤 밖에 고정) ----
+        # ---- 고객관리 시트 자동 백업(v1.32) ----
+        gb_bk = QGroupBox("고객관리 시트 자동 백업")
+        bkl = QVBoxLayout(gb_bk)
+        self.chk_sheet_backup = QCheckBox("주 1회 고객관리 시트의 사본을 내 구글 드라이브에 저절로 만들기 (최근 4개만 보관)")
+        bkl.addWidget(self.chk_sheet_backup)
+        lbl_bk = QLabel("사본 이름은 '[백업] 고객관리 날짜' 입니다. 시트를 잘못 지우거나 덮어썼을 때 꺼내 쓰세요.\n"
+                        "이 계정이 고칠 수 있는 시트만 백업합니다('보기' 만 공유받은 시트는 하지 않습니다).")
+        lbl_bk.setStyleSheet(f"color:{theme.c('subtext')};")
+        bkl.addWidget(lbl_bk)
+        P("고객관리").addWidget(gb_bk)
+
+        # ---- 지점 공유 캘린더(v1.32) ----
+        gb_bc = QGroupBox("지점 공유 캘린더 (출고·교육 등 지점 일정을 내 일정과 함께 보기)")
+        bcl = QFormLayout(gb_bc)
+        self.ed_branch_cal = QLineEdit()
+        self.ed_branch_cal.setPlaceholderText("지점 공용 구글 캘린더의 ID(…@group.calendar.google.com) 또는 공유 주소")
+        bcl.addRow("캘린더", self.ed_branch_cal)
+        lbl_bc = QLabel("구글 캘린더 → 그 캘린더의 [설정 및 공유] → '캘린더 통합' 의 캘린더 ID 를 붙여넣으세요.\n"
+                        "그 캘린더가 내 계정에 공유돼 있어야 보입니다. 일정 앞에 [지점] 이 붙습니다.")
+        lbl_bc.setStyleSheet(f"color:{theme.c('subtext')};")
+        bcl.addRow(lbl_bc)
+        P("알림·일정").addWidget(gb_bc)
+
+        for _lay in self._pages.values():
+            _lay.addStretch()
+
+        # ---- 버튼 (탭 밖에 고정) ----
         brow = QHBoxLayout()
         brow.addStretch()
         btn_ok = QPushButton("확인")
@@ -402,6 +455,9 @@ class SettingsDialog(QDialog):
         self.ed_otp_sheet.setText(getattr(s, "otp_sheet", "") or "")
         self.ed_otp_tab.setText(getattr(s, "otp_tab", "") or "")
         self.chk_otp_copy.setChecked(bool(getattr(s, "otp_copy", True)))
+        self.chk_otp_clean.setChecked(bool(getattr(s, "otp_clean", True)))
+        self.chk_sheet_backup.setChecked(bool(getattr(s, "sheet_backup", True)))
+        self.ed_branch_cal.setText(getattr(s, "branch_cal", "") or "")
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
         self.cmb_theme.setCurrentIndex(i if i >= 0 else 0)
@@ -433,6 +489,13 @@ class SettingsDialog(QDialog):
         # 메인 창 없이 띄운 경우(테스트 등) — 되돌린 뒤 화면 갱신은 없다
         from .backup_dialog import BackupDialog
         BackupDialog(self).exec()
+
+    def _open_status(self):
+        if callable(self._on_status):
+            self.reject()                    # 설정 창을 닫고 연다(점검 창에서 다시 설정을 열 수 있다)
+            self._on_status()
+        else:
+            QMessageBox.information(self, config.APP_NAME, "메인 창에서만 열 수 있습니다.")
 
     def _open_rates(self):
         from .rate_dialog import RateDialog
@@ -472,6 +535,10 @@ class SettingsDialog(QDialog):
         s.otp_sheet, s.otp_tab = otp_where(sheets.parse_sheet_id(self.ed_otp_sheet.text()),
                                            self.ed_otp_tab.text())
         s.otp_copy = self.chk_otp_copy.isChecked()
+        if self.chk_otp_clean.isEnabled():
+            s.otp_clean = self.chk_otp_clean.isChecked()
+        s.sheet_backup = self.chk_sheet_backup.isChecked()
+        s.branch_cal = parse_calendar_id(self.ed_branch_cal.text())
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
         s.dark_mode = theme.THEMES.get(s.theme, (None, None, False))[2]
@@ -594,3 +661,29 @@ class SettingsDialog(QDialog):
                 + "\n· ".join(config.SCOPE_LABELS[m] for m in miss)
                 + "\n\n[Google 로그아웃] 후 다시 로그인하면서,\n"
                   "동의 화면의 '모두 선택' 에 체크하고 [계속] 을 눌러 주세요.")
+
+
+def parse_calendar_id(text: str) -> str:
+    """캘린더 ID — 공유 주소(…?cid=… · …/calendar/embed?src=…)를 붙여넣어도 ID 만 뽑는다(v1.32)."""
+    import base64
+    import re
+    import urllib.parse
+    t = (text or "").strip()
+    if not t:
+        return ""
+    m = re.search(r"[?&]src=([^&#]+)", t)
+    if m:
+        return urllib.parse.unquote(m.group(1)).strip()
+    m = re.search(r"[?&]cid=([^&#]+)", t)
+    if m:
+        raw = urllib.parse.unquote(m.group(1)).strip()
+        if "@" in raw:
+            return raw
+        try:
+            dec = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8")
+            if "@" in dec:
+                return dec.strip()
+        except Exception:
+            pass
+        return raw
+    return t

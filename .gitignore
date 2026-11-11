@@ -6,3 +6,4 @@ node_modules/
 .verify_build/
 _site/
 python/planner/_secret.py
+__pycache__/

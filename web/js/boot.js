@@ -16,6 +16,7 @@ import * as calc from "./ui/calc.js";
 import * as weeklyui from "./ui/weekly.js";
 import * as about from "./ui/about.js";
 import * as boardui from "./ui/board.js";
+import * as otpui from "./ui/otp.js";
 import * as push from "./push.js";
 
 const BUILD_CHECK_MS = 5 * 60 * 1000;
@@ -39,7 +40,7 @@ auth.onChange(() => {
 // (저장한 것은 기기에 딸린 것이라 계정이 바뀌어도 그냥 남는다 — 그게 새어 나갔다)
 auth.onEmail(async (mail) => {
   if (await store.useAccount(mail)) {
-    for (const m of [kbui, cust, docs, agenda, calc]) {
+    for (const m of [kbui, cust, docs, agenda, calc, otpui]) {
       try { await m.load({ refresh: false }); } catch (e) { /* 지운 뒤라 비어 있다 */ }
     }
     router.handle();                 // 지금 화면을 다시 그린다
@@ -96,6 +97,7 @@ router.on(/^\/kb\/(\d+)$/, (m) => kbui.screen(m));
 router.on(/^\/kb$/, () => kbui.screen(null));
 router.on(/^\/about$/, () => about.screen());
 router.on(/^\/agenda$/, () => agenda.screen());
+router.on(/^\/otp$/, () => otpui.screen());
 router.on(/^\/calc$/, () => calc.screen());
 router.on(/^\/customers\/settings$/, () => cust.settingsScreen());
 router.on(/^\/customers\/week$/, () => weeklyui.screen());
@@ -226,6 +228,7 @@ async function pullSettings(force = false, { light = false } = {}) {
     if (!force && have && have.id && folder) return ch;   // 이 기기에 이미 다 있다
     if (auth.state() !== auth.STATE.AUTHED) return ch;
     const got = await appdata.loadSettings({ light });
+    if (!light) await adoptPcExtras();
     if (!got) return ch;
     const tab = got.sheetTab || "미출고차량";
     if (got.sheetId && (!have || have.id !== got.sheetId || (have.tab || "미출고차량") !== tab)) {
@@ -241,6 +244,16 @@ async function pullSettings(force = false, { light = false } = {}) {
     // 이 기기에 저장된 값이 있으면 그것으로 계속 쓴다.
   }
   return ch;
+}
+
+/** PC 설정의 인증문자 시트 · 지점 공유 캘린더를 이 기기에 적어 둔다(v1.32). 지점 캘린더가 바뀌면 일정을 다시 받는다. */
+async function adoptPcExtras() {
+  const ex = appdata.lastPcExtras();
+  if (!ex) return;
+  const had = (await store.get("meta", "pcCfg")) || {};
+  if (JSON.stringify(had) === JSON.stringify(ex)) return;
+  await store.put("meta", "pcCfg", ex);
+  if ((had.branchCal || "") !== (ex.branchCal || "")) Promise.resolve(agenda.load()).catch(() => {});
 }
 
 // ---------------------------------------------------------------- 자동 갱신

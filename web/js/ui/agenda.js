@@ -14,6 +14,7 @@ import { setBody, markTab, paintState, toast } from "./chrome.js";
 import { icon } from "./icons.js";
 import * as router from "../router.js";
 import * as auth from "../auth.js";
+import { DEF_BRANCH_CAL } from "../config.js";
 
 const DAY = ["일", "월", "화", "수", "목", "금", "토"];
 const FORWARD = 30;
@@ -43,7 +44,10 @@ export async function load({ refresh = true } = {}) {
   else if (!refresh) { _ev = []; _tk = []; _at = 0; _done = new Set(); paint(); }
   if (!refresh) return;
   try {
-    const [e, t] = await Promise.all([gcal.events({ forwardDays: FORWARD }), gcal.tasks()]);
+    // 지점 공유 캘린더 — PC 설정에 적은 것(boot.js 가 받아 둔다), 없으면 회사 기본값
+    const pc = (await store.get("meta", "pcCfg")) || {};
+    const branch = typeof pc.branchCal === "string" ? pc.branchCal : DEF_BRANCH_CAL;
+    const [e, t] = await Promise.all([gcal.events({ forwardDays: FORWARD, branch }), gcal.tasks()]);
     _ev = e.events;
     _tk = t.tasks;
     _err = "";
@@ -84,6 +88,7 @@ export async function screen() {
           <h2 id="aghello">${greeting(now)}</h2>
           <p class="s">${now.getMonth() + 1}월 ${now.getDate()}일 ${DAY[now.getDay()]}요일</p>
         </div>
+        <a class="chip" id="agotp" href="#/otp" title="휴대폰으로 온 인증번호 보기">인증번호</a>
         <button class="primary" id="agadd">${raw(icon("plus", 18))}할일 추가</button>
       </div>
       <div id="agwarn"></div>

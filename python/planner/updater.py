@@ -66,6 +66,11 @@ def check():
     """최신 릴리스 확인. 새 버전이 있으면 dict, 없으면 None, 오류면 예외."""
     url = f"https://api.github.com/repos/{config.UPDATE_REPO}/releases/latest"
     r = requests.get(url, headers=_headers("application/vnd.github+json"), timeout=20)
+    if r.status_code in (401, 403, 404) and not _token():
+        # 저장소가 비공개로 바뀌었다(또는 깃허브가 익명 조회를 막았다) — 우회 길로 묻는다(v1.32)
+        via = check_proxy()
+        if via is not NotImplemented:
+            return via
     if r.status_code == 404:
         raise RuntimeError("릴리스를 찾을 수 없습니다(비공개 저장소면 토큰이 필요).")
     if r.status_code != 200:
@@ -95,6 +100,27 @@ def check():
             "notes": rel.get("body", ""), "name": rel.get("name", tag)}
 
 
+def check_proxy():
+    """우회 길(웹 서버)로 최신 판을 묻는다. 새 판이면 dict, 없으면 None, 못 쓰면 NotImplemented."""
+    base = getattr(config, "UPDATE_PROXY_URL", "")
+    if not base:
+        return NotImplemented
+    try:
+        r = requests.get(base, timeout=20)
+        if r.status_code != 200:
+            return NotImplemented            # 503 = 서버에 토큰을 아직 안 넣었다
+        j = r.json()
+    except Exception:
+        return NotImplemented
+    tag = str(j.get("tag", ""))
+    if not tag or not j.get("asset_url"):
+        return NotImplemented
+    if _parse_ver(tag) <= _parse_ver(config.APP_VERSION):
+        return None
+    return {"version": tag, "asset_url": str(j["asset_url"]),
+            "notes": j.get("notes", ""), "name": j.get("name", tag)}
+
+
 def _rm(path: str) -> None:
     try:
         os.remove(path)
@@ -112,8 +138,10 @@ def download(asset_url: str, progress=None) -> str:
     progress(받은 바이트, 전체 바이트) — 받는 동안 진행 창(update_progress)에 알린다(v1.27).
     전체를 모르면 0. 이 함수는 일꾼 스레드에서 돈다 — progress 는 신호로 넘겨야 한다.
     """
-    r = requests.get(asset_url, headers=_headers("application/octet-stream"),
-                     timeout=180, stream=True)
+    # 깃허브 API 주소에만 토큰을 싣는다 — 우회 길이 주는 서명된 주소에 토큰을 같이 보내면 거절당한다
+    hdr = (_headers("application/octet-stream") if "api.github.com" in asset_url
+           else {"Accept": "application/octet-stream"})
+    r = requests.get(asset_url, headers=hdr, timeout=180, stream=True)
     if r.status_code != 200:
         raise RuntimeError(f"다운로드 실패 (HTTP {r.status_code})")
     expect = int(r.headers.get("Content-Length") or 0)
