@@ -57,6 +57,9 @@ class World:
         self.created = []        # 새로 만든 스프레드시트 id
         self.trashed = []
         self.gids = {}           # {시트 id: [[gid, 탭 이름], …]}
+        self.merges = {}         # {시트 id: {탭: [{startRowIndex, endRowIndex, startColumnIndex, endColumnIndex}]}} (v1.34)
+        self.quota_429 = 0       # 이만큼 다음 시트 요청에 429(1분 한도)를 준다(v1.34)
+        self.grid_cols = {}      # {시트 id: 열 수} — 그보다 오른쪽 범위는 진짜처럼 400(격자 밖)
         self._n = 0
 
     def _tabs(self, sid):
@@ -111,6 +114,15 @@ class World:
             book = self.sheets.get(sid)
             if book is None:
                 return Resp(404, {"error": {"message": "Requested entity was not found.", "status": "NOT_FOUND"}})
+            if self.quota_429 > 0:
+                self.quota_429 -= 1
+                return Resp(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message":
+                                            "Quota exceeded for quota metric 'Read requests' and limit 'Read requests "
+                                            "per minute per user' of service 'sheets.googleapis.com'"}})
+            if method == "GET" and sid in self.grid_cols and ("/values/" in rest or "/values:batchGet" in rest):
+                want = [v for k, v in plist if k == "ranges"] or [rest[len("/values/"):].split("?")[0]]
+                if any(self._beyond(r, self.grid_cols[sid]) for r in want):
+                    return Resp(400, {"error": {"message": "Range exceeds grid limits.", "status": "INVALID_ARGUMENT"}})
             if method == "GET" and rest.startswith("/values:batchGet"):
                 rngs = [v for k, v in plist if k == "ranges"]
                 return Resp(200, {"valueRanges": [{"range": r, "values": self._range(book, r)} for r in rngs]})
@@ -122,7 +134,8 @@ class World:
                 return Resp(200, {"range": rng, "values": vals})
             if method == "GET":
                 return Resp(200, {"properties": {"title": "시트"}, "sheets": [
-                    {"properties": {"sheetId": g, "title": t, "gridProperties": {"rowCount": 1000, "columnCount": 26}}}
+                    dict({"properties": {"sheetId": g, "title": t, "gridProperties": {"rowCount": 1000, "columnCount": 26}}},
+                         **({"merges": self.merges[sid][t]} if t in self.merges.get(sid, {}) else {}))
                     for g, t in self._tabs(sid)]})
             self.writes.append(("sheet", sid + rest, json_body if json_body is not None else data))
             # 값 쓰기는 시트에도 담는다(v1.33 — 다시 읽었을 때 그대로 보이게)
@@ -238,6 +251,18 @@ class World:
                 while len(row) <= c0 + j:
                     row.append("")
                 row[c0 + j] = v
+
+    @staticmethod
+    def _beyond(rng, ncols):
+        """범위의 오른쪽 끝 열이 격자(ncols 열) 밖인가."""
+        a1 = rng.rsplit("!", 1)[-1]
+        letters = re.findall(r"[A-Z]+", a1)
+        if not letters:
+            return False
+        n = 0
+        for ch in letters[-1]:
+            n = n * 26 + ord(ch) - 64
+        return n > ncols
 
     @staticmethod
     def _range(book, rng):

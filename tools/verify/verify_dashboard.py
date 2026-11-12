@@ -219,8 +219,8 @@ w.settings.tab_order = ["자료검색", "일정 / 할일", "고객관리", "고�
 w._save_settings()
 w2 = MainWindow()
 pump()
-ok("저장된 순서 그대로(대시보드가 두 번째)",
-   [w2.tabs.tabText(i) for i in range(3)] == ["자료검색", "대시보드", "고객관리"],
+ok("저장된 순서 그대로(대시보드가 두 번째 · 새 메뉴 '수입차 프로모션' 은 만든 자리 자료검색 다음에 끼운다)",
+   [w2.tabs.tabText(i) for i in range(4)] == ["자료검색", "수입차 프로모션", "대시보드", "고객관리"],
    [w2.tabs.tabText(i) for i in range(w2.tabs.count())])
 w2.deleteLater()
 

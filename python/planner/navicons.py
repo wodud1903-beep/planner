@@ -24,6 +24,7 @@ TAB_ICONS = {
     "자료검색": "search",
     "수당계산기": "calc",
     "PC 알람": "bell",
+    "수입차 프로모션": "car",
 }
 
 
@@ -171,6 +172,32 @@ def _expand(p: QPainter):
         p.drawPath(path)
 
 
+def _car(p: QPainter):
+    # 옆에서 본 승용차 — 몸통 한 길 + 바퀴 둘 + 창 밑선
+    path = QPainterPath(QPointF(5.5, 16.5))
+    path.lineTo(4.2, 16.5)
+    path.quadTo(3, 16.5, 3, 15.3)
+    path.lineTo(3, 13)
+    path.quadTo(3, 11.3, 4.7, 11)
+    path.lineTo(7.2, 10.5)
+    path.lineTo(9.2, 7.4)
+    path.quadTo(9.8, 6.5, 10.9, 6.5)
+    path.lineTo(15.1, 6.5)
+    path.quadTo(16.1, 6.5, 16.7, 7.3)
+    path.lineTo(18.9, 10.5)
+    path.lineTo(19.6, 10.7)
+    path.quadTo(21, 11.1, 21, 12.7)
+    path.lineTo(21, 15.3)
+    path.quadTo(21, 16.5, 19.8, 16.5)
+    path.lineTo(18.5, 16.5)
+    p.drawPath(path)
+    p.drawLine(QPointF(9.5, 16.5), QPointF(14.5, 16.5))
+    p.drawEllipse(QPointF(7.5, 16.5), 2, 2)
+    p.drawEllipse(QPointF(16.5, 16.5), 2, 2)
+    p.drawLine(QPointF(7.2, 10.5), QPointF(18.9, 10.5))
+    p.drawLine(QPointF(12.6, 6.5), QPointF(12.6, 10.5))
+
+
 def _grid(p: QPainter):
     for x, y in ((4, 4), (13, 4), (4, 13), (13, 13)):
         p.drawRoundedRect(QRectF(x, y, 7, 7), 2, 2)
@@ -184,7 +211,7 @@ _DRAW = {
     "tasks": _tasks, "calendar": _calendar, "people": _people, "folder": _folder,
     "chat": _chat, "search": _search, "calc": _calc, "bell": _bell, "gear": _gear,
     "plus": _plus, "history": _history, "collapse": _collapse, "expand": _expand,
-    "grid": _grid, "dot": _dot,
+    "grid": _grid, "dot": _dot, "car": _car,
 }
 
 NAMES = tuple(_DRAW)

@@ -25,12 +25,81 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 
-from . import config
+from . import config, net
 from .google_client import GoogleAuth, GoogleError
-from .net import http as _http
+
+
+# ---------------------------------------------------------------------------
+# 구글 시트 읽기 한도(429) — v1.34
+# ---------------------------------------------------------------------------
+# 구글 시트는 계정마다 **1분에 읽기 60번**(쓰기도 60번)까지다. 이 PC 의 일정관리기(인증번호 4초마다 ·
+# 고객 목록 · 저장 뒤 다시 읽기 · 프로모션 …)와 같은 계정의 다른 PC·폰 웹이 함께 쓴다. 넘으면 그 분이
+# 지날 때까지 429 가 온다 — 예전엔 "시트 요청 실패 (HTTP 429) Quota exceeded …" 영어 창이 떴다.
+# 이제: ① 429 면 조금 쉬었다 저절로 다시 묻는다(_Patient) ② 그래도 안 되면 '한도' 라고 알리고(QuotaError)
+#      ③ 이 PC 의 다른 읽기(인증번호 등)는 1분 동안 쉬게 한다(quota_left).
+QUOTA_COOL_SEC = 60
+QUOTA_WAITS = (4, 10, 20)        # 429 뒤 쉬는 초 — 모두 34초. 분 단위 한도라 대개 두세 번째에 풀린다
+_QUOTA_UNTIL = 0.0
+_sleep = time.sleep              # 검사가 바꿔 끼운다
+
+
+class QuotaError(GoogleError):
+    """구글 시트 읽기·쓰기 한도(1분)를 넘었다 — 잠시 뒤 다시 하면 된다."""
+
+
+QUOTA_MSG = ("구글 시트 사용 한도(계정마다 1분에 60번)를 잠깐 넘었습니다.\n"
+             "1분쯤 뒤 저절로 다시 읽습니다 — 같은 계정의 다른 PC·폰에서 많이 쓰면 생길 수 있습니다.")
+
+
+def note_quota(sec: float = QUOTA_COOL_SEC) -> None:
+    """한도에 걸렸다 — 이 PC 의 시트 읽기를 잠깐 쉬게 한다."""
+    global _QUOTA_UNTIL
+    _QUOTA_UNTIL = max(_QUOTA_UNTIL, time.time() + sec)
+
+
+def quota_left() -> float:
+    """한도 때문에 더 쉬어야 하는 초(0 = 괜찮다)."""
+    return max(0.0, _QUOTA_UNTIL - time.time())
+
+
+class _Patient:
+    """요청이 429(한도)면 조금 쉬었다 다시 묻는 연결. 다른 응답은 그대로 돌려준다.
+
+    429 는 구글이 **받지 않은** 요청이라 쓰기도 다시 보내도 두 번 적히지 않는다.
+    모든 시트 요청은 작업 스레드에서 나가므로 쉬는 동안 화면은 멈추지 않는다.
+    """
+
+    _METHODS = ("get", "post", "put", "patch", "delete", "request")
+
+    def __init__(self, session):
+        self._s = session
+
+    def __getattr__(self, name):
+        fn = getattr(self._s, name)
+        if name not in self._METHODS:
+            return fn
+
+        def call(*a, **k):
+            r = None
+            for wait in QUOTA_WAITS + (None,):
+                r = fn(*a, **k)
+                if getattr(r, "status_code", 0) != 429:
+                    return r
+                note_quota()
+                if wait is None:
+                    break
+                _sleep(wait)
+            return r
+        return call
+
+
+def _http():
+    # ⚠️ net.http 를 **부를 때** 찾는다(검사가 net.http 를 바꿔 끼워도 따라가게 — otp._http 와 같은 이유)
+    return _Patient(net.http())
 
 # 열 인덱스(0=A) → (필드키, 화면표시 이름)
 FIELDS: list[tuple[int, str, str]] = [
@@ -277,6 +346,10 @@ def _check(r) -> None:
 
     if r.status_code == 401:
         raise GoogleError("구글 로그인이 만료되었습니다. [설정]에서 다시 로그인하세요.")
+
+    if r.status_code == 429 or "quota exceeded" in low or "rate_limit_exceeded" in low:
+        note_quota()
+        raise QuotaError(QUOTA_MSG)
 
     if r.status_code == 403:
         # 구글 원문도 그대로 보여 준다. 가장 흔한 경우(이 계정에 그 시트의 권한이 없다 — 일반 직원이
@@ -627,6 +700,39 @@ def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
         if str(v).strip():
             out[i + 1] = str(v).strip()
     return out
+
+
+def read_extras(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> tuple:
+    """S열 수식(견적서 그림) · U열 고객ID · V열 서류 첨부를 **한 번에** 읽는다 → (docs, uids, files).
+
+    v1.34: 예전엔 셋을 따로 읽어 고객 목록 한 번에 읽기 요청이 7~8번이었다(시트 한도 1분 60번을 빨리 먹었다).
+    셋 다 '수식 그대로'(FORMULA)로 읽어도 되는 칸이라 한 요청에 묶는다. 시트가 U·V 열까지 없으면
+    격자 밖이라 통째로 400 이 난다 — 그때만 예전처럼 하나씩(없는 열은 빈 값).
+    """
+    u, v = col_letter(COL_UID), col_letter(COL_FILES)
+    r = _http().get(config.SHEETS_BATCH_GET_URL.format(sheet_id=sheet_id), headers=_headers(auth), timeout=30,
+                    params=[("ranges", f"'{sheet_name}'!S1:S"), ("ranges", f"'{sheet_name}'!{u}1:{u}"),
+                            ("ranges", f"'{sheet_name}'!{v}1:{v}"), ("valueRenderOption", "FORMULA")])
+    if r.status_code == 400:
+        try:
+            docs = read_docs(auth, sheet_id, sheet_name)
+        except QuotaError:
+            raise
+        except Exception:
+            docs = {}
+        return docs, read_uids(auth, sheet_id, sheet_name), read_files(auth, sheet_id, sheet_name)
+    _check(r)
+    vrs = (r.json() or {}).get("valueRanges", []) or []
+
+    def col(i, keep):
+        out = {}
+        rows = (vrs[i].get("values", []) if i < len(vrs) else []) or []
+        for n, row in enumerate(rows):
+            x = str((row[0] if row else "") or "").strip()
+            if x and keep(x):
+                out[n + 1] = x
+        return out
+    return (col(0, lambda x: True), col(1, lambda x: True), col(2, lambda x: x.startswith("{")))
 
 
 def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,

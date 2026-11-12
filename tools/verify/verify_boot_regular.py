@@ -161,8 +161,11 @@ ok("눌러도 까닭을 알리고 쓰지 않는다", BOXES and "'보기' 만" in
 ok("보기 전용 시트는 백업하지 않는다(남의 시트를 직원 드라이브에 복사하지 않는다)", W.created == [])
 
 print("[5] 연결 상태 점검 — 한 화면에 ✔/✖")
+W.deny_sheets.add(config.PROMO_DEF_SHEET_ID)          # 직원 계정 — 프로모션 시트를 아직 공유받지 못했다(v1.34)
 d = w.open_status()
-ok("점검이 끝난다", wait(lambda: not d._running and len(d.results) == 8), len(d.results))
+ok("점검이 끝난다", wait(lambda: not d._running and len(d.results) == 9), len(d.results))
+ok("공유받지 못한 프로모션 시트는 ✖ + '뷰어' 공유 안내", d.results["promo"][0] == "bad"
+   and "뷰어" in d.results["promo"][1], d.results["promo"])
 ok("로그인 · 권한 · 동기화 · 회사 자료 · 인증번호는 ✔", all(d.results[k][0] == "ok" for k in ("login", "scopes", "sync", "kb", "otp")),
    {k: v[0] for k, v in d.results.items()})
 ok("보기 전용 시트는 ⚠ 로 알린다", d.results["sheet"][0] == "warn" and "보기" in d.results["sheet"][1], d.results["sheet"])

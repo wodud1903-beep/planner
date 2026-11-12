@@ -216,10 +216,10 @@ ok("창 세로를 못 박지 않는다",
    [l.strip() for l in _i.getsource(MainWindow).splitlines()
     if "self.setFixedHeight(" in l])
 
-ok("탭 7개", w.tabs.count() == 7, [w.tabs.tabText(i) for i in range(w.tabs.count())])
-ok("탭 차례 그대로",
-   [w.tabs.tabText(i) for i in range(7)] ==
-   ["대시보드", "고객관리", "고객정보", "멘트복사", "자료검색",
+ok("탭 8개", w.tabs.count() == 8, [w.tabs.tabText(i) for i in range(w.tabs.count())])
+ok("탭 차례 그대로(수입차 프로모션은 자료검색 다음 — v1.34)",
+   [w.tabs.tabText(i) for i in range(8)] ==
+   ["대시보드", "고객관리", "고객정보", "멘트복사", "자료검색", "수입차 프로모션",
     "수당계산기", "PC 알람"],
    [w.tabs.tabText(i) for i in range(w.tabs.count())])
 ok("고객정보는 고객관리 바로 옆",

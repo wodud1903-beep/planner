@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, drive_path, searchcombo, sheets, theme, weekly
-from .models import AppSettings, otp_where
+from .models import AppSettings, otp_where, promo_where
 
 
 TERMS_FILE = "terms_presets.json"
@@ -287,6 +287,21 @@ class SettingsDialog(QDialog):
         nfl.addRow(lbl_n)
         P("화면·기타").addWidget(gb_n)
 
+        # ---- 수입차 프로모션(v1.34, promo.py) ----
+        gb_p = QGroupBox("수입차 프로모션 (왼쪽 메뉴 '수입차 프로모션' 이 읽는 조건표)")
+        pfl = QFormLayout(gb_p)
+        self.ed_promo_sheet = QLineEdit()
+        self.ed_promo_sheet.setPlaceholderText("비워 두면 회사 프로모션 시트")
+        pfl.addRow("프로모션 시트", self.ed_promo_sheet)
+        self.ed_promo_tab = QLineEdit()
+        self.ed_promo_tab.setPlaceholderText("비워 두면 '수입차 프로모션' 탭")
+        pfl.addRow("탭 이름", self.ed_promo_tab)
+        lbl_p = QLabel("4행을 열 제목으로, B:G · I:N · P:U 처럼 빈 열로 나뉜 블록을 브랜드별 표로 읽습니다(읽기만).\n"
+                       "이 시트를 '뷰어' 로 공유받은 계정이면 볼 수 있습니다.")
+        lbl_p.setStyleSheet(f"color:{theme.c('subtext')};")
+        pfl.addRow(lbl_p)
+        P("화면·기타").addWidget(gb_p)
+
         # ---- 화면 ----
         gb_v = QGroupBox("화면")
         vl = QHBoxLayout(gb_v)
@@ -462,6 +477,8 @@ class SettingsDialog(QDialog):
         self.chk_otp_clean.setChecked(bool(getattr(s, "otp_clean", True)))
         self.chk_sheet_backup.setChecked(bool(getattr(s, "sheet_backup", True)))
         self.ed_branch_cal.setText(getattr(s, "branch_cal", "") or "")
+        self.ed_promo_sheet.setText(getattr(s, "promo_sheet", "") or "")
+        self.ed_promo_tab.setText(getattr(s, "promo_tab", "") or "")
         cur = (s.theme or ("dark" if s.dark_mode else "light")).lower()
         i = self.cmb_theme.findData(cur)
         self.cmb_theme.setCurrentIndex(i if i >= 0 else 0)
@@ -543,6 +560,8 @@ class SettingsDialog(QDialog):
             s.otp_clean = self.chk_otp_clean.isChecked()
         s.sheet_backup = self.chk_sheet_backup.isChecked()
         s.branch_cal = parse_calendar_id(self.ed_branch_cal.text())
+        s.promo_sheet, s.promo_tab = promo_where(sheets.parse_sheet_id(self.ed_promo_sheet.text()),
+                                                 self.ed_promo_tab.text())
         s.theme = self.cmb_theme.currentData() or "light"
         # 예전 항목도 함께 맞춰 둔다(다른 곳에서 dark_mode 를 보는 코드 대비)
         s.dark_mode = theme.THEMES.get(s.theme, (None, None, False))[2]

@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.33.0"
+APP_VERSION = "1.34.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -139,6 +139,10 @@ DEF_SHEET_NAME = "미출고차량"
 #    지점장께 알렸고, 그대로 두기로 하셨다(2026-11-09). 공유를 '제한됨'으로 바꾸면 직원 계정만 열린다.
 OTP_DEF_SHEET_ID = "1krhRICtrYbDKtkLa7RC6RZ8IxrEUGm2ZhfbUtYl5_hw"
 OTP_DEF_TAB = "시트1"
+# 수입차 프로모션(v1.34) — 회사 프로모션 시트의 조건표 탭. 읽기만 한다. 볼 권한은 시트 공유(뷰어)로 정한다 —
+# 주소만으로는 아무도 못 연다(비공개 시트). 설정 창에서 바꿀 수 있고, 비우면 이리로 돌아온다.
+PROMO_DEF_SHEET_ID = "1W8maHjHzkyEf2QgAPi5agvHp08OLYRvMa-A9TPRl6-M"
+PROMO_DEF_TAB = "수입차 프로모션"
 # 지점 공유 캘린더(v1.32) — 지점 공용 구글 캘린더의 ID. 비어 있으면 각자 [설정] 에서 넣는다.
 # (지점장이 캘린더 ID 를 정해 주면 여기에 넣어 모든 PC 의 기본값으로 한다)
 DEF_BRANCH_CAL = ""
