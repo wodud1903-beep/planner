@@ -110,8 +110,7 @@ ok("다른 PC 기록을 받기 전엔 할일도 일정도 만들지 않는다", 
 w._pulled_once = True
 w._run_followups()
 pump(0.6)
-names = sorted(followup.followup_name(t.title) for t in w.todos)
-ok("받은 뒤에는 할일을 만든다", names == ["김명준", "차경민"], names)
+ok("v1.34.1 — 팔로업은 [내 할일] 에 적지 않는다(캘린더에만)", w.todos == [], w.todos)
 ok("캘린더에 이미 있는 김명준은 또 올리지 않는다 — 차경민만", INS == [("[출고 1개월] 차경민", target)], INS)
 ok("겹쳐 있던 김명준 일정은 하나만 남기고 지운다", DEL == ["f2"], DEL)
 ok("화면에서도 빠졌다", [e.uid for e in w.cal_events].count("f1") == 1
@@ -120,7 +119,20 @@ INS.clear()
 DEL.clear()
 w._run_followups()
 pump(0.4)
-ok("다시 조회해도 더 만들지 않는다", INS == [] and DEL == [] and len(w.todos) == 2, (INS, DEL))
+ok("다시 조회해도 더 만들지 않는다", INS == [] and DEL == [] and w.todos == [], (INS, DEL))
+w.settings.follow_to_calendar = False
+w.cal_events = [ev("s3", "박영희 출고", ship)]
+w._run_followups()
+pump(0.4)
+ok("옛 설정 '캘린더에도' 가 꺼져 있어도 캘린더에 올린다", INS == [("[출고 1개월] 박영희", target)] and w.todos == [], INS)
+INS.clear()
+print("[3-2] 대시보드 [출고 1개월 안내멘트] — 누르면 안내멘트 복사")
+ok("단추가 있다", w.btn_follow_ment.text() == "출고 1개월 안내멘트")
+w.settings.follow_ment = "%s 고객님, 안녕하세요.\n출고 후 한 달이 지났습니다."
+w.btn_follow_ment.click()
+ok("고객명 자리는 비우고 복사", QApplication.clipboard().text() == "고객님, 안녕하세요.\n출고 후 한 달이 지났습니다.",
+   QApplication.clipboard().text())
+ok("설정의 개월 수를 따른다", followup.button_text(type("S", (), {"follow_months": 3})()) == "출고 3개월 안내멘트")
 print("[4] 지울 수 없는 캘린더(남의 읽기 전용)의 겹침 — 조회 때마다 다시 지우려 하지 않는다(v1.27)")
 RO = []
 def _ro_delete(auth, cal, eid):

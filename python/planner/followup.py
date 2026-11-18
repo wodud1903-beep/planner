@@ -165,7 +165,7 @@ def add_months(d: date, months: int) -> date:
 
 
 def check_followups(settings, cal_events, todos: list[TodoItem],
-                    tracker: FollowupTracker) -> list[TodoItem]:
+                    tracker: FollowupTracker, skip_names=None) -> list[TodoItem]:
     """조건에 맞는 캘린더 일정을 todos 에 등록. 추가된 TodoItem 목록 반환.
 
     **앞으로 2주치를 미리 올려 둔다.** 예전엔 팔로업 날짜가 되어야 할일이
@@ -191,6 +191,7 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
     # 이미 할일에 올라와 있는 팔로업의 고객명 (완료한 것도 센다 — 이미 연락한
     # 고객에게 또 걸 이유가 없다)
     taken = {n for n in (followup_name(t.title) for t in (todos or [])) if n}
+    taken |= set(skip_names or ())         # 캘린더에 이미 팔로업이 선 고객(v1.34.1)
 
     # 가까운 일정부터 자리를 잡게 한다. 같은 고객의 일정이 둘이면 빠른 쪽이
     # 남아야, 늦은 쪽을 보고 '이미 지났다' 고 착각하지 않는다.
@@ -246,6 +247,17 @@ def check_followups(settings, cal_events, todos: list[TodoItem],
 #    할일 목록(todos.json)은 파일째 최신인 쪽을 쓰므로 할일은 하나로 보여도 캘린더는 쌓였다.
 #    이제 ① 동기화를 받은 뒤에만 검사하고 ② 캘린더에 이미 있는 고객이면 또 올리지 않고
 #    ③ 이미 겹친 것(같은 제목 · 같은 날)은 하나만 남기고 지운다.
+def copy_ment(settings) -> str:
+    """대시보드 [출고 1개월 안내멘트] 단추가 복사할 글(v1.34.1) — 고객명 자리(%s)는 비워 '고객님, …' 으로."""
+    ment = (getattr(settings, "follow_ment", "") or "").replace("%s", "")
+    return "\n".join(line.strip() for line in ment.strip().splitlines()).strip()
+
+
+def button_text(settings) -> str:
+    n = int(getattr(settings, "follow_months", 1) or 1)
+    return f"출고 {n}개월 안내멘트"
+
+
 def calendar_names(cal_events) -> set:
     """캘린더에 이미 올라간 팔로업 일정의 고객명."""
     return {n for n in (followup_name(getattr(ev, "summary", "")) for ev in (cal_events or [])) if n}

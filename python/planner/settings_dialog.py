@@ -125,7 +125,7 @@ class SettingsDialog(QDialog):
         P("계정·동기화").addWidget(gb_g)
 
         # ---- 계약 후 팔로업 ----
-        gb_f = QGroupBox("계약 후 팔로업 (내 할일 자동 등록)")
+        gb_f = QGroupBox("계약 후 팔로업 (구글 캘린더에 자동 등록)")
         fl = QFormLayout(gb_f)
         self.chk_follow = QCheckBox("사용")
         fl.addRow(self.chk_follow)
@@ -142,9 +142,13 @@ class SettingsDialog(QDialog):
         fl.addRow(self.chk_falarm)
         self.chk_follow_cal = QCheckBox("팔로업을 구글 캘린더에도 등록")
         fl.addRow(self.chk_follow_cal)
+        # v1.34.1: 팔로업은 [내 할일] 에 적지 않고 구글 캘린더에만 올린다(지점장) — 알람 시각·알람·
+        # '캘린더에도' 는 이제 쓰지 않으므로 숨긴다(설정 파일 값은 그대로 둔다)
+        for w in (self.dt_ftime, self.chk_falarm, self.chk_follow_cal):
+            fl.setRowVisible(w, False)
         self.txt_ment = QTextEdit()
         self.txt_ment.setMinimumHeight(120)
-        fl.addRow("메모 템플릿\n(%s = 고객명)", self.txt_ment)
+        fl.addRow("안내멘트\n(대시보드 단추로 복사)\n(%s = 고객명)", self.txt_ment)
         P("알림·일정").addWidget(gb_f)
 
         # ---- 휴대폰 알림 (구글 캘린더 리마인더) ----

@@ -744,6 +744,8 @@ class MainWindow(QMainWindow):
             # 계정이 바뀌면 저장본(계정 폴더)·볼 권한도 다르다 — 처음 상태로, 시트도 그 계정 설정대로
             self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
             self.tab_promo.reset()
+        if hasattr(self, "btn_follow_ment"):
+            self.btn_follow_ment.setText(followup.button_text(self.settings))
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -1346,6 +1348,11 @@ class MainWindow(QMainWindow):
                                   "시트 '월마감' 탭에도 적습니다(매달 지난달 것은 저절로)")
         self.btn_month.clicked.connect(self.open_monthly)
         row.addWidget(self.btn_month)
+        # 출고 1개월 안내멘트(v1.34.1) — 예전엔 [내 할일] 메모에 들어가던 글. 누르면 바로 복사(카톡에 Ctrl+V)
+        self.btn_follow_ment = QPushButton(followup.button_text(self.settings))
+        self.btn_follow_ment.setToolTip("출고 후 안부 안내멘트를 복사합니다 — 글은 [설정] → [알림·일정] 에서 고칩니다")
+        self.btn_follow_ment.clicked.connect(self.copy_follow_ment)
+        row.addWidget(self.btn_follow_ment)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
@@ -3455,6 +3462,8 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.fetch_all_async)   # 지점 캘린더를 바꿨다 — 일정을 새로 받는다
             if hasattr(self, "tab_promo"):
                 self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
+            if hasattr(self, "btn_follow_ment"):
+                self.btn_follow_ment.setText(followup.button_text(self.settings))
         self.update_google_status()
         # 로그인/로그아웃이 있었으면 데이터 갱신
         if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
@@ -4012,20 +4021,21 @@ class MainWindow(QMainWindow):
             return
         self._rename_old_followups()
         self._drop_duplicate_followups()
+        # v1.34.1(지점장): "내 할일에 출고 1개월은 적지 말고, 기존처럼 캘린더에만" — 할일 목록은 건드리지 않고
+        # 구글 캘린더에만 종일 일정으로 올린다. 안내 멘트는 대시보드 [출고 1개월 안내멘트] 단추가 복사한다.
+        # 캘린더에 쓸 수 없으면(로그인 전) 아예 검사하지 않는다 — '처리함' 으로만 적히고 빠지지 않게.
+        if not self.gauth.is_connected():
+            return
         on_cal = followup.calendar_names(self._own_events())
         added = followup.check_followups(
-            self.settings, self._own_events(), self.todos, self.followup_tracker)
+            self.settings, self._own_events(), list(self.todos), self.followup_tracker,
+            skip_names=on_cal)
         if added:
-            self._save_todos()
             self.followup_tracker.save()
             self._touch_sync()
-            self.refresh_todo()
-            self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 [내 할일]에 추가했습니다.")
-            # 설정 시 구글 캘린더에도 종일 일정으로 등록
-            # 캘린더에 이미 그 고객의 팔로업이 있으면(다른 PC 가 올림) 또 올리지 않는다
-            items = [(it.title, it.run_date) for it in added
-                     if followup.followup_name(it.title) not in on_cal]
-            if items and self.settings.follow_to_calendar and self.gauth.is_connected():
+            self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 구글 캘린더에 올렸습니다.")
+            items = [(it.title, it.run_date) for it in added]
+            if items:
                 rmin = self._reminder_minutes()
 
                 def worker():
@@ -4036,6 +4046,15 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                 threading.Thread(target=worker, daemon=True).start()
+
+    def copy_follow_ment(self):
+        """[출고 1개월 안내멘트] — 설정의 안내멘트를 클립보드로."""
+        txt = followup.copy_ment(self.settings)
+        if not txt:
+            self.sig_toast.emit(config.APP_NAME, "안내멘트가 비어 있습니다 — [설정] → [알림·일정] 에서 적어 주세요.")
+            return
+        QApplication.clipboard().setText(txt)
+        self.sig_toast.emit(config.APP_NAME, "출고 안내멘트를 복사했습니다 — 카톡 창에서 Ctrl+V")
 
     def _drop_duplicate_followups(self):
         """겹쳐 올라간 [출고 1개월] 일정·할일을 하나만 남기고 지운다(같은 제목 · 같은 날)."""
