@@ -506,6 +506,55 @@ ok("메뉴도 같은 순서", w2.sidebar.nav.names() == n2)
 w2._quitting = True
 w2.close()
 
+# ------------------------------------------------------------------ [8]
+print("[8] 읽기 전용 — 이 프로그램은 프로모션 시트에 절대 쓰지 않는다(v1.34.2)")
+import re as _re  # noqa: E402
+PURL = config.SHEETS_VALUES_URL.format(sheet_id=SID, rng=sheets._rng(TAB, "E5"))
+
+
+def blocked(fn):
+    try:
+        fn()
+    except net.ReadOnlySheet:
+        return True
+    return False
+
+
+ok("켤 때부터 회사 프로모션 시트는 읽기 전용", net.is_protected(SID))
+ok("GET(읽기)은 된다", not blocked(lambda: net.check_write("GET", PURL)))
+for m in ("PUT", "POST", "PATCH", "DELETE", "put"):
+    ok(f"{m} 은 막는다", blocked(lambda m=m: net.check_write(m, PURL)))
+ok("다른 시트(고객관리 등) 쓰기는 그대로", not blocked(lambda: net.check_write("PUT", PURL.replace(SID, "MYCUSTOMERSHEET"))))
+ok("드라이브로 이름 바꾸기·휴지통도 막는다", blocked(lambda: net.check_write(
+    "PATCH", f"https://www.googleapis.com/drive/v3/files/{SID}")))
+SENT = []
+
+
+class _Spy:
+    def __getattr__(self, name):
+        return lambda *a, **k: SENT.append((name, a)) or fg.Resp(200, {})
+
+
+ok("진짜 연결(net._Guarded)은 보내기 전에 멈춘다", blocked(lambda: net._Guarded().request("POST", PURL)))
+ok("시트 쓰기 길(sheets._Patient)도 보내기 전에 멈춘다 — 구글로 아무것도 안 나간다",
+   blocked(lambda: sheets._Patient(_Spy()).put(PURL, json={"values": [["0"]]})) and SENT == [], SENT)
+_saved_http = sheets._http
+sheets._http = lambda: sheets._Patient(fg.Session(W))          # 진짜처럼 _Patient 를 거치게
+ok("고객 시트 쓰기 함수에 프로모션 시트를 넣어도 막힌다", blocked(lambda: sheets._write_cells(
+    AUTH, SID, TAB, 5, {"price": "1"})) and not [1 for k, t, _p in W.writes if SID in str(t)])
+sheets._http = _saved_http
+ok("프로모션 읽기 연결은 GET 만 — put/post 는 부를 수조차 없다",
+   blocked(lambda: promo._http().put(PURL)) and blocked(lambda: promo._http().post(PURL)))
+src = (_ROOT / "python/planner/promo.py").read_text(encoding="utf-8")
+ok("프로모션 코드에 쓰기 호출이 없다", not _re.search(r"\.(put|post|patch|delete)\(", src))
+n_w = len([1 for k, t, _p in W.writes if SID in str(t)])
+promo.read(AUTH, SID, TAB)
+ok("읽어도 시트에 쓴 것이 없다", len([1 for k, t, _p in W.writes if SID in str(t)]) == n_w == 0, n_w)
+t9 = PromoTab()
+t9.set_where("1AbcdefghijklmnopqrstuvwxyZ_other", "조건표")
+ok("설정에서 바꾼 프로모션 시트도 읽기 전용", net.is_protected("1AbcdefghijklmnopqrstuvwxyZ_other"))
+t9.deleteLater()
+
 pump(0.3)
 ok("끝까지 예외가 없다", not ERRS, ERRS[:2])
 ok("모르는 주소로 나가지 않는다", not fg.UNKNOWN, fg.UNKNOWN[:5])

@@ -34,6 +34,10 @@ META_SEC = 6 * 3600        # 셀 병합·탭 번호는 이만큼에 한 번만 �
 _META: dict = {}           # {(시트, 탭): (병합, 탭 번호, 받은 때)}
 
 
+# 회사 프로모션 시트는 켤 때부터 읽기 전용(v1.34.2) — 화면을 열기 전이라도 어떤 기능도 여기에 쓰지 못한다
+net.protect(config.PROMO_DEF_SHEET_ID)
+
+
 class PromoError(GoogleError):
     """프로모션 시트를 못 읽음 — 사람이 읽는 말."""
 
@@ -339,16 +343,34 @@ def _fail(r, sheet_id: str, tab: str):
     raise PromoError(f"프로모션 시트를 읽지 못했습니다 (HTTP {r.status_code}).")
 
 
+class _GetOnly:
+    """GET 만 되는 연결(v1.34.2) — 이 모듈은 시트를 읽기만 한다. 다른 것을 부르면 그 자리에서 멈춘다."""
+
+    def __init__(self, s):
+        self._s = s
+
+    def get(self, *a, **k):
+        return self._s.get(*a, **k)
+
+    def __getattr__(self, name):
+        raise net.ReadOnlySheet("수입차 프로모션은 읽기만 합니다 — " + name + " 은(는) 쓸 수 없습니다.")
+
+
+def _http():
+    return _GetOnly(net.http())
+
+
 def read(auth, sheet_id: str, tab: str) -> dict:
     """시트에서 받은 그대로 {values, merges, at}. 못 읽으면 PromoError(또는 GoogleError)."""
     sheet_id = (sheet_id or "").strip()
+    net.protect(sheet_id)              # 이 시트는 이 프로그램 어디에서도 쓰지 못하게(net.check_write)
     if not sheet_id:
         raise PromoError("프로모션 시트 주소가 비어 있습니다 — [설정] → [화면·기타] 에서 넣어 주세요.")
     if auth is None or not auth.is_connected():
         raise PromoError("구글 로그인 후 볼 수 있습니다 — [설정] 에서 Google 로그인을 해 주세요.")
     hdr = sheets._headers(auth)
     url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_range(tab))
-    r = net.http().get(url, headers=hdr, timeout=30, params={
+    r = _http().get(url, headers=hdr, timeout=30, params={
         "valueRenderOption": "FORMATTED_VALUE", "dateTimeRenderOption": "FORMATTED_STRING"})
     if r.status_code != 200:
         _fail(r, sheet_id, tab)
@@ -362,7 +384,7 @@ def read(auth, sheet_id: str, tab: str) -> dict:
                 "at": datetime.now().strftime("%Y-%m-%d %H:%M")}
     merges, gid, got = [], None, False
     try:
-        m = net.http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id), headers=hdr, timeout=20,
+        m = _http().get(config.SHEETS_BASE_URL.format(sheet_id=sheet_id), headers=hdr, timeout=20,
                            params={"fields": "sheets(properties(title,sheetId),merges)"})
         if m.status_code == 200:
             for sh in (m.json() or {}).get("sheets", []) or []:

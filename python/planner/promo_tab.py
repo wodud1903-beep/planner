@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from . import config, promo, sheets, theme
+from . import config, net, promo, sheets, theme
 from .livesearch import LiveLineEdit
 from .models import promo_where
 
@@ -119,6 +119,7 @@ class PromoTab(QWidget):
     def set_where(self, sheet_id: str, tab: str) -> None:
         """설정의 시트·탭. 바뀌면 들고 있던 표를 버리고(보고 있으면) 새로 읽는다."""
         sid, t = promo_where(sheet_id, tab)     # 비우면 회사 프로모션 시트(탭도)
+        net.protect(sid)                         # 설정에서 바꾼 프로모션 시트도 읽기 전용(v1.34.2)
         if (sid, t) == (self.sheet_id, self.tab):
             return
         self.sheet_id, self.tab = sid, t

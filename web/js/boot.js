@@ -17,6 +17,7 @@ import * as weeklyui from "./ui/weekly.js";
 import * as about from "./ui/about.js";
 import * as boardui from "./ui/board.js";
 import * as otpui from "./ui/otp.js";
+import * as promoui from "./ui/promo.js";
 import * as push from "./push.js";
 
 const BUILD_CHECK_MS = 5 * 60 * 1000;
@@ -40,7 +41,7 @@ auth.onChange(() => {
 // (저장한 것은 기기에 딸린 것이라 계정이 바뀌어도 그냥 남는다 — 그게 새어 나갔다)
 auth.onEmail(async (mail) => {
   if (await store.useAccount(mail)) {
-    for (const m of [kbui, cust, docs, agenda, calc, otpui]) {
+    for (const m of [kbui, cust, docs, agenda, calc, otpui, promoui]) {
       try { await m.load({ refresh: false }); } catch (e) { /* 지운 뒤라 비어 있다 */ }
     }
     router.handle();                 // 지금 화면을 다시 그린다
@@ -99,6 +100,7 @@ router.on(/^\/about$/, () => about.screen());
 router.on(/^\/agenda$/, () => agenda.screen());
 router.on(/^\/otp$/, () => otpui.screen());
 router.on(/^\/calc$/, () => calc.screen());
+router.on(/^\/promo$/, () => promoui.screen());
 router.on(/^\/customers\/settings$/, () => cust.settingsScreen());
 router.on(/^\/customers\/week$/, () => weeklyui.screen());
 router.on(/^\/customers\/board$/, () => boardui.screen());
@@ -254,6 +256,10 @@ async function adoptPcExtras() {
   if (JSON.stringify(had) === JSON.stringify(ex)) return;
   await store.put("meta", "pcCfg", ex);
   if ((had.branchCal || "") !== (ex.branchCal || "")) Promise.resolve(agenda.load()).catch(() => {});
+  // PC 에서 프로모션 시트를 바꿨다 — 보고 있으면 그 시트로 다시 읽는다(안 보고 있으면 열 때 읽는다)
+  if ((had.promoSheet || "") !== (ex.promoSheet || "") || (had.promoTab || "") !== (ex.promoTab || "")) {
+    Promise.resolve(promoui.load({ refresh: promoui.isHere() })).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------- 자동 갱신

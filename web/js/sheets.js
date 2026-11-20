@@ -2,6 +2,7 @@
 import { SHEETS_API } from "./config.js";
 import { token, setOffline, down, reached, STATE } from "./auth.js";
 import { digitsOnly } from "./fmt.js";
+import * as promo from "./promo.js";
 
 export class NeedSignIn extends Error {}
 export class WrongAccount extends Error {}
@@ -40,6 +41,8 @@ const rng = (tab, a1) => encodeURIComponent(tab ? `'${tab}'!${a1}` : a1);
 
 // 한 번 조용히 다시 받아 한 번만 재시도한다. 두 번은 안 한다.
 async function call(url, body = null) {
+  // 수입차 프로모션 시트는 읽기 전용(v1.34.2) — 그 시트로 가는 쓰기는 보내지 않는다(지점장: "절대 수정되면 안 돼")
+  promo.readOnlyGuard(body ? "POST" : "GET", url);
   let tok = await token();
   if (!tok) throw new NeedSignIn();
   const go = () => fetch(url, {
@@ -96,6 +99,25 @@ export async function batch(sheetId, tab, ranges) {
             + `&valueRenderOption=FORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`;
   const j = await call(url);
   return (j.valueRanges || []).map((v) => v.values || []);
+}
+
+// ---------------------------------------------------------------- 수입차 프로모션(v1.34.2)
+// **읽기만** 한다 — 아래 두 요청은 모두 GET(body 없음)이다. 쓰는 함수는 만들지 않는다.
+const _promoMeta = new Map();          // 셀 병합·탭 번호 — 6시간에 한 번만 묻는다(PC 와 같다)
+export async function readPromo(sheetId, tab) {
+  promo.protect(sheetId);
+  const u = promo.readUrls(SHEETS_API, sheetId, tab);
+  const j = await call(u.values);
+  const key = sheetId + "\x1f" + (tab || "");
+  let m = _promoMeta.get(key);
+  if (!m || Date.now() - m.at > 6 * 3600e3) {
+    try { m = { ...promo.metaOf(await call(u.meta), tab), at: Date.now() }; _promoMeta.set(key, m); }
+    catch (e) {
+      if (e instanceof NeedSignIn || e instanceof Offline) throw e;
+      m = { merges: [], gid: null, at: 0 };          // 병합을 몰라도 읽을 수는 있다
+    }
+  }
+  return { values: j.values || [], merges: m.merges, gid: m.gid, at: Date.now() };
 }
 
 // ---------------------------------------------------------------- 업무자료(KB)

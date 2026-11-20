@@ -203,8 +203,9 @@ r = res();
 start(req({ url: `/api/auth/start?app=kb&n=${NONCE}&hint=me%40x.com`, origin: "" }), r);
 const KL = new URL(r.headers.location || "http://x/");
 const KP = KL.searchParams;
-ok("구글 화면으로 · 드라이브 앱 공간 권한만", KL.host === "accounts.google.com"
-   && KP.get("scope") === "openid email https://www.googleapis.com/auth/drive.appdata"
+ok("구글 화면으로 · 드라이브 앱 공간 + 시트 보기(읽기 전용)만", KL.host === "accounts.google.com"
+   && KP.get("scope") === "openid email https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/spreadsheets.readonly"
+   && !/auth\/spreadsheets(\s|$)/.test(KP.get("scope"))
    && KP.get("include_granted_scopes") === "false", KP.get("scope"));
 ok("돌아올 곳은 이미 등록된 일정관리기 주소", KP.get("redirect_uri") === "https://jyplanner.vercel.app/api/auth/callback");
 ok("갱신 토큰 받게(offline · consent) · 지난 계정", KP.get("access_type") === "offline"
@@ -212,7 +213,7 @@ ok("갱신 토큰 받게(offline · consent) · 지난 계정", KP.get("access_t
 const kbSt = r.cookieHeader();
 const KST = KP.get("state");
 googleReply = { json: { access_token: "at-k", refresh_token: "rt-kb", id_token: idToken("me@x.com"),
-                        scope: "openid https://www.googleapis.com/auth/drive.appdata" } };
+                        scope: "openid https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/spreadsheets.readonly" } };
 r = res();
 await callback(req({ url: `/api/auth/callback?code=ck&state=${KST}`, cookie: kbSt + "; " + sessCookie }), r);
 const html = String(r.body);
@@ -240,6 +241,12 @@ r = res();
 await kbTok({ method: "POST", url: "/api/auth/kb-token", headers: {}, body: { h: hVal } }, r);
 ok("쪽지로 쓸 토큰을 받는다", r.statusCode === 200 && r.json().access_token === "kb-fresh"
    && r.json().email === "me@x.com" && r.json().missing.length === 0, r.body);
+ok("예전 로그인(시트 보기 권한 없음)도 동기화는 그대로 — 시트만 없다고 알린다", r.json().sheets === false, r.body);
+googleReply = { json: { access_token: "kb-fresh2", expires_in: 3599,
+                        scope: "https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/spreadsheets.readonly" } };
+r = res();
+await kbTok({ method: "POST", url: "/api/auth/kb-token", headers: {}, body: { h: hVal } }, r);
+ok("새 로그인 — 시트 보기 권한이 있다", r.statusCode === 200 && r.json().sheets === true && r.json().missing.length === 0, r.body);
 ok("구글에 그 갱신 토큰으로 묻는다", sent.at(-1).body.refresh_token === "rt-kb");
 r = res();
 await kbTok({ method: "POST", headers: {}, body: { h: sessCookie.split("=")[1] } }, r);

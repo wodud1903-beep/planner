@@ -111,7 +111,7 @@ let p = await page(ctx);
 const reqs = [];
 p.on("request", (r) => reqs.push(r.url()));
 await p.goto(s.url, { waitUntil: "networkidle" });
-ok("탭 여섯 개가 보인다", (await p.locator("nav.tabs a").count()) === 6);
+ok("탭 일곱 개가 보인다(v1.34.2 — 수입차 프로모션)", (await p.locator("nav.tabs a").count()) === 7);
 ok("주소만 치면 일정 화면이다",
    (await p.locator('nav.tabs a[data-tab="/agenda"][aria-current="page"]').count()) === 1,
    await p.evaluate(() => location.hash));
@@ -432,7 +432,7 @@ await ctx.setOffline(true);
 await p.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
 await p.waitForTimeout(600);
 ok("오프라인에서 화면이 그려진다",
-   (await p.locator("nav.tabs a").count()) === 6);
+   (await p.locator("nav.tabs a").count()) === 7);
 await ctx.setOffline(false);
 
 console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌려 본다");
@@ -603,7 +603,7 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   ok("시트를 못 읽어도 캐시로 목록이 뜬다",
      (await p4.locator("#clist button.row").count()) === 3);
   ok("시트를 못 읽어도 빈 화면이 되지 않는다",
-     (await p4.locator("nav.tabs a").count()) === 6);
+     (await p4.locator("nav.tabs a").count()) === 7);
   await ctx3.close();
 }
 
@@ -2697,6 +2697,79 @@ console.log("\n[28] v1.32 — 내 정보 자리 · 체크리스트 고치기 · 
      evs2.includes("내 상담") && !evs2.includes("지점 회의") && (await pB.locator("#agwarn").innerText()).trim() === "",
      evs2.slice(0, 80) + " / " + (await pB.locator("#agwarn").innerText()));
   await cB.close();
+}
+
+console.log("\n[29] v1.34.2 — 수입차 프로모션(읽기 전용) · 좁은 폰에서 메뉴 일곱 칸");
+{
+  const FX = JSON.parse(readFileSync(join(WEB, "verify", "fixtures", "promo.json"), "utf-8"));
+  const PID = "1W8maHjHzkyEf2QgAPi5agvHp08OLYRvMa-A9TPRl6-M";
+  const ctxP = await browser.newContext({ viewport: { width: 360, height: 800 },
+                                          permissions: ["clipboard-read", "clipboard-write"] });
+  await seed(ctxP, { account: "me@example.com" });
+  await ctxP.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  await ctxP.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxP.route("**/oauth2/v3/userinfo", (r) => r.fulfill({ json: { email: "me@example.com" } }));
+  await ctxP.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [], items: [] } }));
+  const promoReqs = [];
+  await ctxP.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes(PID)) promoReqs.push([r.request().method(), u]);
+    if (u.includes(PID) && u.includes("/values/")) return r.fulfill({ json: { values: FX.values } });
+    if (u.includes(PID)) {
+      return r.fulfill({ json: { sheets: [{ properties: { title: "수입차 프로모션", sheetId: 1350310028 },
+        merges: FX.merges.map(([a, b, c, d]) => ({ startRowIndex: a, endRowIndex: b,
+                                                    startColumnIndex: c, endColumnIndex: d })) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  const pp = await page(ctxP);
+  await pp.goto(s.url + "#/promo", { waitUntil: "networkidle" });
+  await pp.waitForSelector("#promolist .prow", { timeout: 10000 });
+  ok("브랜드마다 카드(벤츠·BMW·아우디)", (await pp.locator("#promolist .promoblk").count()) === 3);
+  const chips = await pp.locator("#promobrands button").allTextContents();
+  ok("브랜드 단추 — 전체·벤츠·BMW·아우디", JSON.stringify(chips) === JSON.stringify(["전체", "벤츠", "BMW", "아우디"]),
+     chips.join(","));
+  const grp = await pp.locator("#promolist .pgroups").first().textContent();
+  ok("묶음 제목(기본값 변동 X | 11월 프로모션)", /기본값 변동 X/.test(grp) && /11월 프로모션/.test(grp), grp);
+  ok("구역 이름 · 안내 글도 보인다", (await pp.locator("#promolist .psec").count()) >= 4
+     && (await pp.locator("#promolist .pnote").count()) === 2);
+  const lab = await pp.locator("#promolist .prow").first().locator(".pv i").allTextContents();
+  ok("칸 이름 = 시트 4행 제목", lab.includes("차량가격") && lab.includes("프로모션"), lab.join(","));
+  await pp.fill("#promoq", "e300");
+  await pp.waitForTimeout(400);
+  const ms = await pp.locator("#promolist .prow .pm").allTextContents();
+  ok("'e300' → 벤츠 E300 두 줄", JSON.stringify(ms) === JSON.stringify(["E300 4M+ AMG Line [26MY]", "E300 4M+ EX [27MY]"]),
+     ms.join(" | "));
+  const chips2 = await pp.locator("#promobrands button").allTextContents();
+  ok("단추에 브랜드별 건수", chips2.join(",") === "전체 2,벤츠 2,BMW 0,아우디 0", chips2.join(","));
+  await pp.locator("#promolist .prow").first().click();
+  await pp.waitForTimeout(200);
+  const clipP = await pp.evaluate(() => navigator.clipboard.readText());
+  ok("줄을 누르면 한 줄로 복사", clipP === "E300 4M+ AMG Line [26MY] · 차량가격 90,000,000 · MBF 9,000,000 · 프로모션 8,000,000",
+     clipP);
+  await pp.fill("#promoq", "ㅅㅍㅌㅂ");
+  await pp.waitForTimeout(400);
+  ok("초성으로도 찾는다", (await pp.locator("#promolist .prow .pm").allTextContents()).join("") .includes("스포트백"));
+  // 읽기 전용 — 이 앱 어디에서도 이 시트에 쓰지 못한다(보내기 전에 막는다)
+  const before = promoReqs.length;
+  const guard = await pp.evaluate(async (pid) => {
+    const sh = await import("./js/sheets.js");
+    try { await sh.writeCells(pid, "수입차 프로모션", 5, { price: "1" }, [[4, "price"]], ["price"]); return "보냄"; }
+    catch (e) { return e.constructor.name; }
+  }, PID);
+  ok("프로모션 시트에 쓰기는 보내기 전에 막힌다", guard === "ReadOnlySheet" && promoReqs.length === before, guard);
+  ok("프로모션 시트로는 GET 말고 아무것도 안 나갔다", promoReqs.every(([m]) => m === "GET") && promoReqs.length >= 2,
+     promoReqs.map(([m]) => m).join(","));
+  // 좁은 폰(360px)에서 메뉴 일곱 칸이 넘치지 않는다
+  const over = await pp.evaluate(() => [...document.querySelectorAll("nav.tabs a")]
+    .filter((a) => a.getBoundingClientRect().right > innerWidth + 1 || a.scrollWidth > a.clientWidth + 1).length);
+  ok("360px 폰에서 메뉴 일곱 칸이 다 보인다", over === 0, over);
+  ok("메뉴의 '프로모션' 이 골라져 있다",
+     (await pp.locator('nav.tabs a[aria-current="page"]').getAttribute("data-tab")) === "/promo");
+  await ctxP.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

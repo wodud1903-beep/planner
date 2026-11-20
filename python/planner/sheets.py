@@ -84,6 +84,11 @@ class _Patient:
             return fn
 
         def call(*a, **k):
+            # 읽기 전용 시트(수입차 프로모션)로 가는 쓰기는 보내지 않는다(v1.34.2 — net.check_write)
+            if name == "request":
+                net.check_write(a[0] if a else k.get("method", ""), a[1] if len(a) > 1 else k.get("url", ""))
+            else:
+                net.check_write(name, a[0] if a else k.get("url", ""))
             r = None
             for wait in QUOTA_WAITS + (None,):
                 r = fn(*a, **k)

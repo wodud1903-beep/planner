@@ -13,6 +13,7 @@ import * as CM from "../js/commission.js";
 import * as WK from "../js/weekly.js";
 import * as BD from "../js/board.js";
 import * as SH from "../js/sheets.js";
+import * as PR from "../js/promo.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -173,6 +174,44 @@ for (const [i, want] of [[0, "A"], [1, "B"], [7, "H"], [15, "P"], [16, "Q"],
   eq(`colLetter(${i})`, SH.colLetter(i), want);
 }
 console.log("  12개 대조");
+
+console.log("\n[17] 수입차 프로모션 (promo.py) — 해석 · 검색 · 복사 글");
+{
+  const P = V.promo;
+  const fx = JSON.parse(readFileSync(join(here, "fixtures", "promo.json"), "utf-8"));
+  const blocks = PR.parse(fx.values, fx.merges);
+  // 파이썬 정답표와 같은 열쇠 차례로(내용 비교 — 차례만 다른 것은 같은 것)
+  const plain = PR.stripPrep(blocks).map(({ key, brand, title, groups, headers, col, rows }) =>
+    ({ key, brand, title, groups, headers, col, rows }));
+  eq("parse(블록)", plain, P.blocks);
+  eq("parse(병합 모름 — 묶음 너비)", PR.parse(fx.values, []).map((b) => b.groups), P.blocks_nomerge);
+  eq("headerRow", PR.headerRow(fx.values), P.header_row);
+  eq("modelCount", PR.modelCount(blocks), P.model_count);
+  for (const [q, brand, want, counts] of P.search) {
+    const got = PR.search(blocks, q, brand).map(([b, rows]) => [b.key, rows.map((r) => [r.kind, r.cells[0]])]);
+    eq(`search(${q}, ${brand})`, got, want);
+    eq(`hitCount(${q})`, PR.hitCount(PR.search(blocks, q, "")), counts);
+  }
+  for (const [key, row, want] of P.row_text) {
+    const b = blocks.find((x) => x.key === key);
+    eq(`rowText(${key} ${row})`, PR.rowText(b, b.rows.find((r) => r.row === row)), want);
+  }
+  for (const [s, want] of P.is_number) eq(`isNumber(${s})`, PR.isNumber(s), want);
+  for (const [s, want] of P.tone) eq(`toneOf(${s})`, PR.toneOf(s), want);
+  for (const [s, want] of P.brand_token) eq(`brandToken(${s})`, PR.brandToken(s), want);
+  for (const [s, want] of P.clean_title) eq(`cleanTitle(${s})`, PR.cleanTitle(s), want);
+  console.log(`  ${P.search.length * 2 + P.row_text.length + P.is_number.length + P.tone.length + P.brand_token.length + P.clean_title.length + 4}개 대조`);
+  // 읽기 전용 — 이 시트로 가는 쓰기는 보내기 전에 막힌다
+  const u = `https://sheets.googleapis.com/v4/spreadsheets/${PR.DEF_SHEET_ID}/values:batchUpdate`;
+  let blocked = 0;
+  for (const m of ["POST", "PUT", "PATCH", "DELETE"]) {
+    try { PR.readOnlyGuard(m, u); } catch (e) { if (e instanceof PR.ReadOnlySheet) blocked++; }
+  }
+  eq("읽기 전용 — 쓰기 4가지 모두 막힘", blocked, 4);
+  let okGet = true;
+  try { PR.readOnlyGuard("GET", u); PR.readOnlyGuard("POST", u.replace(PR.DEF_SHEET_ID, "MYSHEET")); } catch (e) { okGet = false; }
+  eq("읽기 · 다른 시트 쓰기는 그대로", okGet, true);
+}
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);

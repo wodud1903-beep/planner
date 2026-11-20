@@ -6,13 +6,14 @@ import { html, render, $, raw, esc } from "./dom.js";
 import { icon } from "./icons.js";
 import * as auth from "../auth.js";
 
-// 여섯 칸이다. 접힌 커버 화면(~400px)에서 한 칸이 66px 남짓이라 글자는 짧게.
+// 일곱 칸이다(v1.34.2 — 수입차 프로모션). 좁은 폰(~360px)에서 한 칸이 51px 남짓이라 글자는 짧게(app.css 가 줄인다).
 // ⚠️ 주소(#/agenda)는 그대로 둔다 — 홈 화면 아이콘·북마크가 그 주소를 들고 있다.
 const TABS = [
   ["/agenda", "grid", "홈"],
   ["/docs", "folder", "서류"],
   ["/customers", "people", "고객"],
   ["/calc", "calc", "수당"],
+  ["/promo", "car", "프로모션"],
   ["/kb", "search", "자료"],
   ["/about", "info", "정보"],
 ];
