@@ -32,7 +32,7 @@ from . import (
     account_settings, alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
     customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_backup,
+    google_client, hotkey, kb, kb_files, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_backup,
     sheet_cache, sheets, sync,
     theme, updater, weekly,
 )
@@ -45,8 +45,9 @@ from .customer_files_tab import CustomerFilesTab
 from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
 from .kb_tab import KbTab, QuickSearch
+from .promo_tab import PromoTab
 from .livesearch import LiveLineEdit
-from .doc_viewer import DocViewer
+from .customer_attach import AttachOpener, all_files as customer_files
 from .edit_dialog import EditDialog
 from .google_button import GoogleSignInButton
 from .icon import make_icon
@@ -168,6 +169,8 @@ class MainWindow(QMainWindow):
     sig_sheet_ments = Signal(object)                 # {행번호: 고객안내멘트}
     sig_sheet_docs = Signal(object)                  # {행번호: S열 =IMAGE() 수식}
     sig_sheet_uids = Signal(object)                  # {행번호: U열 고객ID}
+    sig_sheet_files = Signal(object, int)            # ({행번호: V열 서류 첨부 글}, epoch) — v1.33
+    sig_files_failed = Signal(str)                   # 고객은 저장했지만 서류 목록을 못 적었다
     sig_sheet_drops = Signal(object, int)            # (시트 드롭다운 목록 {key: [값]}, epoch)
     sig_sheet_rates = Signal(object)                 # 공유 수당율 표
     sig_sheet_kb = Signal(object)                    # 공유 업무자료 목록
@@ -340,6 +343,10 @@ class MainWindow(QMainWindow):
         self.sig_sheet_ments.connect(self._on_sheet_ments)
         self.sig_sheet_docs.connect(self._on_sheet_docs)
         self.sig_sheet_uids.connect(self._on_sheet_uids)
+        self.sig_sheet_files.connect(self._on_sheet_files)
+        self.sig_files_failed.connect(lambda e: QMessageBox.warning(
+            self, config.APP_NAME, "고객 정보는 저장했지만 첨부 서류 목록을 시트에 적지 못했습니다:\n"
+            + e + "\n\n[수정] 에서 서류를 다시 넣고 [저장] 해 주세요."))
         self.sig_sheet_drops.connect(self._on_sheet_drops)
         self.sig_sheet_rates.connect(self._on_sheet_rates)
         self.sig_sheet_kb.connect(self._on_sheet_kb)
@@ -540,6 +547,8 @@ class MainWindow(QMainWindow):
             self.tab_greet.apply_theme()
         if hasattr(self, "tab_kb"):
             self.tab_kb.apply_theme()
+        if hasattr(self, "tab_promo"):
+            self.tab_promo.apply_theme()
         # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
         if self._cal_win is not None:
             try:
@@ -731,6 +740,12 @@ class MainWindow(QMainWindow):
             # (탭은 창의 설정을 직접 보기도 하지만, 여기서도 확실히 맞춰 둔다)
             self.tab_files.set_settings(self.settings)
             self._files_loaded = False       # 계정이 바뀌면 폴더도 달라진다
+        if hasattr(self, "tab_promo"):
+            # 계정이 바뀌면 저장본(계정 폴더)·볼 권한도 다르다 — 처음 상태로, 시트도 그 계정 설정대로
+            self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
+            self.tab_promo.reset()
+        if hasattr(self, "btn_follow_ment"):
+            self.btn_follow_ment.setText(followup.button_text(self.settings))
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -1137,6 +1152,11 @@ class MainWindow(QMainWindow):
         # 내 계정에서만 고친 회사 자료 — 저장하는 그 자리에서 내 계정(kb_edits.json)으로 올린다(v1.30)
         self.tab_kb.on_local_saved = self._on_kb_local_saved
         self.tabs.addTab(self.tab_kb, "자료검색")
+        # 수입차 프로모션(v1.34) — 회사 프로모션 시트의 조건표. 처음 열 때 읽는다(저장본부터).
+        self.tab_promo = PromoTab()
+        self.tab_promo.set_auth(self.gauth)
+        self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
+        self.tabs.addTab(self.tab_promo, "수입차 프로모션")
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
@@ -1232,20 +1252,26 @@ class MainWindow(QMainWindow):
         """이름 순서대로 탭을 옮긴다(저장은 하지 않는다).
 
         판을 바꾼 뒤 탭이 늘거나 줄 수 있으므로 **이름으로** 맞춘다. 목록에 없는
-        탭(새로 생긴 것)은 건드리지 않고 제자리에 둔다 — 새 기능이 눈에 안 띄는
-        맨 끝으로 밀리지 않게.
+        탭(새로 생긴 것)은 만든 순서에서 **바로 앞 탭 뒤에** 끼운다 — 새 기능이 눈에 안 띄는
+        맨 끝으로 밀리지 않게(v1.34 — 예전엔 설명과 달리 맨 끝으로 밀렸다).
         """
         self._tab_moving = True
         try:
-            at = 0
+            cur = self._tab_names()
+            order = []
             for name in want:
-                cur = self._tab_names()
-                if name not in cur:
-                    continue            # 없어진 탭
-                i = cur.index(name)
+                if name in cur and name not in order:
+                    order.append(name)       # 없어진 탭은 건너뛴다
+            for idx, name in enumerate(cur):
+                if name in order:
+                    continue
+                prev = cur[idx - 1] if idx > 0 else None
+                pos = order.index(prev) + 1 if prev in order else min(idx, len(order))
+                order.insert(pos, name)
+            for at, name in enumerate(order):
+                i = self._tab_names().index(name)
                 if i != at:
                     self.tabs.tabBar().moveTab(i, at)
-                at += 1
         except Exception:
             pass
         finally:
@@ -1273,6 +1299,8 @@ class MainWindow(QMainWindow):
                 and self.tabs.widget(idx) is self.tab_files):
             self._files_loaded = True
             self.tab_files.reload()
+        if hasattr(self, "tab_promo") and self.tabs.widget(idx) is self.tab_promo:
+            self.tab_promo.on_shown()
 
     def _build_main_tab(self) -> QWidget:
         """대시보드 — 플로우 첫 화면처럼 흰 카드를 늘어놓는다(v1.23, dashboard.py).
@@ -1320,6 +1348,11 @@ class MainWindow(QMainWindow):
                                   "시트 '월마감' 탭에도 적습니다(매달 지난달 것은 저절로)")
         self.btn_month.clicked.connect(self.open_monthly)
         row.addWidget(self.btn_month)
+        # 출고 1개월 안내멘트(v1.34.1) — 예전엔 [내 할일] 메모에 들어가던 글. 누르면 바로 복사(카톡에 Ctrl+V)
+        self.btn_follow_ment = QPushButton(followup.button_text(self.settings))
+        self.btn_follow_ment.setToolTip("출고 후 안부 안내멘트를 복사합니다 — 글은 [설정] → [알림·일정] 에서 고칩니다")
+        self.btn_follow_ment.clicked.connect(self.copy_follow_ment)
+        row.addWidget(self.btn_follow_ment)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
@@ -1583,7 +1616,9 @@ class MainWindow(QMainWindow):
         self.lbl_cust = QLabel("고객관리 시트를 불러오려면 [불러오기]를 누르세요.")
         v.addWidget(self.lbl_cust)
 
-        # 안내멘트·견적서는 버튼만 들어가므로 버튼 폭이면 충분하다.
+        # 안내멘트는 버튼만 들어가므로 버튼 폭이면 충분하다.
+        # (v1.33 — 지점장 요청으로 '견적서 보기' 칸을 없애고 그 폭을 '내용' 에 줬다. 서류는
+        #  [수정] 창의 '첨부 서류' 칸과 오른쪽 단추 [📎 첨부 서류 보기] 에서 본다.)
         # '내용' 은 길어서 다 못 보여 준다 — 남는 폭을 이 열이 받고, 좁아지면
         # 이 열부터 줄어든다(_fit_cust_columns). 잘린 부분은 툴팁으로 본다.
         #
@@ -1597,8 +1632,8 @@ class MainWindow(QMainWindow):
         # 잘려도 되는 건 '내용' 뿐이므로, 글씨 크기를 건드리면 여기도 다시 재야 한다.
         self.tbl_cust = self._make_table(
             ["순번", "고객명 / 사업자", "금융사", "차종", "차량가격",
-             "계약일", "출고일", "진행현황", "수수료", "내용", "안내멘트", "견적서"],
-            [46, 236, 116, 180, 134, 116, 116, 78, 124, 255, 80, 58],
+             "계약일", "출고일", "진행현황", "수수료", "내용", "안내멘트"],
+            [46, 236, 116, 180, 134, 116, 116, 78, 124, 313, 80],
             stretch_last=False)
         # 11pt 는 커 보인다 하셔서 한 단계 내린다(기본 글씨와 같은 10pt)
         # 고객관리는 열이 많아 글자를 한 단계 작게 둔다(10pt) — 키우면 열이 잘린다.
@@ -1949,7 +1984,6 @@ class MainWindow(QMainWindow):
     # 짧은 값이라 가운데로 모아야 읽기 좋은 열 (순번·계약일·출고일·진행현황)
     CENTER_COLS = (0, 5, 6, 7)
     COL_MENT_BTN = 10
-    COL_DOC_BTN = 11
 
     def _ment_key(self, cr) -> str:
         """안내멘트 복사 이력 키.
@@ -2040,8 +2074,8 @@ class MainWindow(QMainWindow):
                             f"{cr.get('customer')} 안내멘트를 복사했습니다.")
 
     def _on_cust_dblclick(self, index):
-        # 버튼이 놓인 열(안내멘트·견적서)에서는 창을 열지 않는다
-        if index.column() in (self.COL_MENT_BTN, self.COL_DOC_BTN):
+        # 버튼이 놓인 열(안내멘트)에서는 창을 열지 않는다
+        if index.column() == self.COL_MENT_BTN:
             return
         self.on_customer_edit()
 
@@ -2085,6 +2119,10 @@ class MainWindow(QMainWindow):
             a = menu.addAction("🚑 보험사 사고접수 연락처")
             a.triggered.connect(lambda: self.open_kb_for("보험사 사고접수"))
             name = (cr.values.get("customer") or "").strip()
+            att = customer_files(cr)
+            if att:
+                a = menu.addAction(f"📎 첨부 서류 보기 ({len(att)}개)")
+                a.triggered.connect(lambda _c=False, row=cr: self.show_customer_files(row))
             if name:
                 a = menu.addAction(f"📁 고객정보에서 '{name}' 서류 보기")
                 a.triggered.connect(
@@ -2198,6 +2236,11 @@ class MainWindow(QMainWindow):
         epoch = self._sheet_epoch
         live = lambda: epoch == self._sheet_epoch          # noqa: E731
 
+        # 드롭다운 목록(금융사 등)은 거의 안 바뀐다 — [불러오기] 를 눌렀거나 30분 지났을 때만 새로 읽는다(v1.34,
+        # 시트 읽기 한도를 아낀다). 그 밖엔 들고 있던 것을 그대로 쓴다.
+        old_drops = dict(self._sheet_dropdowns or {})
+        want_drops = manual or time.time() - getattr(self, "_drops_at", 0.0) > 30 * 60
+
         def worker():
             try:
                 # 1) 목록 + 요약 (요청 1회, 분량 큰 안내멘트는 제외)
@@ -2209,12 +2252,16 @@ class MainWindow(QMainWindow):
                 self.sig_sheet_rows.emit((rows, summary, _hdr, epoch), last, "")
                 ments = docs = uids = drops = None
                 # 1-2) 칸에 걸린 드롭다운 목록(금융사 등) — 고객이 없는 새 시트에서도 고를 수 있게
-                try:
-                    drops = sheets.read_dropdowns(self.gauth, sid, sname, _hdr)
-                    if live():
-                        self.sig_sheet_drops.emit(drops or {}, epoch)
-                except Exception:
-                    pass
+                if want_drops:
+                    try:
+                        drops = sheets.read_dropdowns(self.gauth, sid, sname, _hdr)
+                        self._drops_at = time.time()
+                    except Exception:
+                        drops = None
+                if drops is None:
+                    drops = old_drops            # 안 읽었거나 못 읽었다 — 들고 있던 것(없으면 빈 것)
+                if drops is not None and live():
+                    self.sig_sheet_drops.emit(drops or {}, epoch)
                 # 2) 안내멘트는 목록을 띄운 뒤 뒤이어 채운다
                 try:
                     ments = sheets.read_ments(self.gauth, sid, sname)
@@ -2222,24 +2269,22 @@ class MainWindow(QMainWindow):
                         self.sig_sheet_ments.emit(ments)
                 except Exception:
                     pass
-                # 3) 견적서/계약서(S열)는 수식 그대로 읽어야 '이미지 있음' 을 안다
+                # 3) 견적서(S열 수식 — 그림이 있는지) · 고객ID(U열) · 서류 첨부(V열, v1.33) — 한 요청으로(v1.34).
+                #    S 는 수식 그대로 읽어야 '이미지 있음' 을 안다. U·V 가 아직 없는 시트면 빈 값이다.
+                files = None
                 try:
-                    docs = sheets.read_docs(self.gauth, sid, sname)
+                    docs, uids, files = sheets.read_extras(self.gauth, sid, sname)
                     if docs and live():
                         self.sig_sheet_docs.emit(docs)
-                except Exception:
-                    pass
-                # 4) 고객ID(U열) — 아직 U열이 없는 시트면 그냥 빈 값이다.
-                #    목록 조회에 묶으면 U열 없는 시트에서 목록까지 통째로 실패한다.
-                try:
-                    uids = sheets.read_uids(self.gauth, sid, sname)
                     if uids and live():
                         self.sig_sheet_uids.emit(uids)
+                    if live():
+                        self.sig_sheet_files.emit(files or {}, epoch)
                 except Exception:
                     pass
                 # 5) 다음에 켤 때 바로 보이게 받은 그대로 둔다(v1.26 — sheet_cache)
                 if raw and live():
-                    sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs, drops)
+                    sheet_cache.save(sid, sname, raw[0], raw[1], ments, uids, docs, drops, files)
                 # 6) 고객ID 까지 다 왔다 — 월 마감은 이때 본다
                 if live():
                     self.sig_sheet_done.emit(epoch)
@@ -2277,6 +2322,8 @@ class MainWindow(QMainWindow):
                 cr.values["doc"] = c["docs"][cr.row]
             if c["uids"].get(cr.row):
                 cr.uid = c["uids"][cr.row]
+            if c.get("files", {}).get(cr.row):
+                cr.files_cell = c["files"][cr.row]
         self._sheet_cache_note = "새로 불러오는 중…"
         self._show_summary(summary)
         self.refresh_customers()
@@ -2317,6 +2364,7 @@ class MainWindow(QMainWindow):
         self._sheet_loaded = False
         self.sheet_choices = {}
         self._sheet_dropdowns = {}
+        self._drops_at = 0.0             # 다른 시트 — 드롭다운도 새로 읽는다
         self.lbl_cust_summary.hide()
         self._summary_data = []
         self.refresh_customers()
@@ -2412,6 +2460,22 @@ class MainWindow(QMainWindow):
             self._kb_quick = QuickSearch(self)
         self._kb_quick.popup()
 
+    def _on_sheet_files(self, files: dict, epoch: int):
+        """서류 첨부(V열)가 뒤늦게 도착 — 행마다 채운다(표는 그대로 — 보이는 칸이 아니다)."""
+        if epoch != self._sheet_epoch:
+            return
+        for cr in self.sheet_rows:
+            cr.files_cell = files.get(cr.row, "")
+
+    def show_customer_files(self, cr) -> None:
+        """오른쪽 단추 [📎 첨부 서류 보기] — 그 고객의 서류를 크게(← → 로 넘기기)."""
+        atts = customer_files(cr)
+        if not atts:
+            return
+        if not hasattr(self, "_cust_opener"):
+            self._cust_opener = AttachOpener(self, lambda: self.gauth)
+        self._cust_opener.open(atts[0], atts)
+
     def _on_sheet_docs(self, docs: dict):
         """S열 수식(견적서/계약서)이 뒤늦게 도착 → 해당 행에 채우고 표를 다시 그린다.
 
@@ -2430,6 +2494,23 @@ class MainWindow(QMainWindow):
     def _on_sheet_rows(self, payload, last_row, err: str):
         self.btn_cust_load.setEnabled(True)
         self._sheet_loading = None           # 목록이 왔다(또는 실패) — 다시 불러올 수 있다
+        if payload is None and sheets.QUOTA_MSG.splitlines()[0] in (err or ""):
+            # 구글 시트 한도(1분에 60번)에 걸렸다(v1.34) — 창을 띄우지 않는다. 기다리면 풀리므로
+            # 한도가 풀릴 때쯤 저절로 다시 읽는다(보이던 목록은 그대로). 다섯 번 넘게 안 되면 한 번만 알린다.
+            n = getattr(self, "_quota_retries", 0) + 1
+            self._quota_retries = n
+            wait = int(sheets.quota_left()) + 5
+            if n <= 5:
+                self.lbl_cust.setText(f"구글 시트 사용 한도(1분)에 걸려 {wait}초 뒤 저절로 다시 읽습니다")
+                QTimer.singleShot(wait * 1000, lambda: self.load_sheet_async(manual=False))
+            else:
+                self.lbl_cust.setText("구글 시트 사용 한도에 계속 걸립니다 — 잠시 뒤 [불러오기] 를 눌러 주세요")
+                if n == 6:
+                    self.sig_toast.emit(config.APP_NAME, "구글 시트 사용 한도(계정마다 1분에 60번)에 계속 걸립니다. "
+                                        "같은 계정으로 켜 둔 다른 PC·폰 화면이 많으면 줄여 주세요.")
+            return
+        if payload is not None:
+            self._quota_retries = 0
         if payload is None:
             if getattr(self, "_sheet_cached_at", "") and not self._sheet_loaded:
                 # 저장해 둔 목록을 보여 주는 중 — 창을 띄우지 않고 조금 뒤 다시 읽는다
@@ -2608,15 +2689,6 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _c=False, row=cr: self._copy_customer_ment(row))
             self.tbl_cust.setCellWidget(r, self.COL_MENT_BTN, btn)
 
-            # 견적서/계약서 보기 — 시트에 이미지가 등록된 고객만 누를 수 있다
-            has_doc = bool(sheets.doc_url(cr.get("doc")))
-            dbtn = QPushButton("보기" if has_doc else "—")
-            dbtn.setEnabled(has_doc and not pend)
-            dbtn.setToolTip("등록된 견적서/계약서 이미지를 크게 봅니다"
-                            if has_doc else "등록된 견적서/계약서가 없습니다")
-            dbtn.clicked.connect(lambda _c=False, row=cr: self._show_customer_doc(row))
-            self.tbl_cust.setCellWidget(r, self.COL_DOC_BTN, dbtn)
-
             if pend:
                 fg = QColor(theme.c("subtext"))
                 for c in range(self.COL_MENT_BTN):
@@ -2690,12 +2762,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME,
                                     "시트의 머리글(순번/고객명…) 줄을 아직 모릅니다. [불러오기] 를 다시 눌러 주세요.")
             return
-        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self)
+        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self, files=[], auth=self.gauth)
         if res is None:
             return
-        vals, img, _cleared = res
-        if img and not self._confirm_image_share():
-            return
+        vals, fres, _cleared = res
+        files = fres["files"]
         # 행 번호를 **먼저 예약**한다. 추가는 API 왕복이 여러 번이라 몇 초가 걸리는데,
         # 그 사이 두 번째 추가가 같은 번호를 집어 앞 고객을 덮어썼다(과거 실제 버그).
         last = self._sheet_last_row
@@ -2703,7 +2774,8 @@ class MainWindow(QMainWindow):
 
         # 화면에 먼저 반영 (임시 행)
         uid = sheets.new_uid()          # 메모/이력을 붙들어 둘 불변 ID
-        pend = sheets.CustomerRow(row=last + 1, seq="", total="", uid=uid)
+        pend = sheets.CustomerRow(row=last + 1, seq="", total="", uid=uid,
+                                  files_cell=sheets.files_cell(uid, files))
         pend.values = dict(vals)
         self._sheet_pending.append(pend)
         self.refresh_customers()
@@ -2712,7 +2784,6 @@ class MainWindow(QMainWindow):
         self._sync_deliver_event(pend, {}, dict(vals))
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
-        name = (vals.get("customer") or "고객").replace("/", "_")[:40]
 
         rows_snapshot = list(self.sheet_rows)
         hdr_row = self._sheet_header_row
@@ -2720,11 +2791,6 @@ class MainWindow(QMainWindow):
         def worker():
             try:
                 v = dict(vals)
-                if img:
-                    url = sheets.upload_image(
-                        self.gauth, img,
-                        f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
-                    v["doc"] = sheets.image_formula(url)
                 # 순번은 앱이 계산해서 넣는다(A열이 수식이면 "" → 수식에 맡김)
                 seq = sheets.next_seq(self.gauth, sid, sname, last, rows_snapshot, header_row=hdr_row)
                 try:
@@ -2736,24 +2802,15 @@ class MainWindow(QMainWindow):
                 newrow = sheets.append_row(self.gauth, sid, sname, v, last,
                                            seq=seq, uid=uid, header_row=hdr_row)
                 self.sig_sheet_written.emit(pend, newrow, "")
+                if files:                    # 첨부 서류(이미 드라이브에 올렸다) → V열
+                    try:
+                        sheets.write_files(self.gauth, sid, sname, int(newrow or pend.row), uid, files,
+                                           header_row=hdr_row)
+                    except Exception as e:
+                        self.sig_files_failed.emit((str(e).splitlines() or ["오류"])[0][:200])
             except Exception as e:
                 self.sig_sheet_written.emit(pend, None, str(e))
         threading.Thread(target=worker, daemon=True).start()
-
-    def _confirm_image_share(self) -> bool:
-        """이미지를 셀 안 그림으로 넣으려면 '링크 공개'가 필요하다는 사실을 1회 확인."""
-        if getattr(self, "_img_share_ok", False):
-            return True
-        r = QMessageBox.question(
-            self, config.APP_NAME,
-            "셀 안에 그림으로 보이게 하려면 이미지를 구글 드라이브에 올린 뒤\n"
-            "'링크가 있는 누구나 보기' 로 공개해야 합니다.\n"
-            "(구글 시트가 이미지를 가져올 때 로그인 정보를 쓰지 못하기 때문입니다)\n\n"
-            "주소를 아는 사람은 해당 견적서를 볼 수 있습니다. 계속할까요?")
-        if r != QMessageBox.Yes:
-            return False
-        self._img_share_ok = True
-        return True
 
     def on_customer_edit(self):
         if not self._sheet_ready():
@@ -2766,15 +2823,17 @@ class MainWindow(QMainWindow):
             self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 수정하세요.")
             return
         res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
-                                 cr.values, self.sheet_choices, cr.ment, self)
+                                 cr.values, self.sheet_choices, cr.ment, self,
+                                 files=cr.files(), auth=self.gauth)
         if res is None:
             return
         if not self._sheet_writable():       # 보기 전용 — 열어 보기만 되고 저장은 안 된다
             return
-        vals, img, doc_cleared = res
-        if img and not self._confirm_image_share():
-            return
+        vals, fres, doc_cleared = res
         old = dict(cr.values)
+        old_files = cr.files_cell
+        if fres["changed"]:
+            cr.files_cell = sheets.files_cell(cr.uid, fres["files"])
         # 다이얼로그는 손대지 않은 칸(견적서, 못 읽은 날짜)의 키를 아예 안 준다.
         # 화면에도 기존 값을 그대로 유지해야 표가 빈칸으로 보이지 않는다.
         merged = dict(cr.values)
@@ -2786,18 +2845,14 @@ class MainWindow(QMainWindow):
         self._sync_deliver_event(cr, old, merged)
 
         sid, sname = self.settings.sheet_id.strip(), self.settings.sheet_name.strip()
-        name = (vals.get("customer") or "고객").replace("/", "_")[:40]
+
+        hdr_row = self._sheet_header_row
 
         def worker():
             try:
                 v = dict(vals)
-                if img:
-                    url = sheets.upload_image(
-                        self.gauth, img,
-                        f"견적서_{name}_{datetime.now():%Y%m%d_%H%M%S}.png")
-                    v["doc"] = sheets.image_formula(url)
-                elif doc_cleared:
-                    v["doc"] = ""       # 지우기를 누른 경우에만 S열을 비운다
+                if doc_cleared:
+                    v["doc"] = ""       # S열 옛 견적서 그림을 서류에서 뺀 경우에만 S열을 비운다
                 # 고치기 **전** 이름·ID 로 그 고객이 아직 그 줄에 있는지 확인하고 쓴다
                 # (그 사이 시트가 정렬됐거나 폰에서 고객을 넣고 뺐을 수 있다)
                 cr.row = sheets.update_row(self.gauth, sid, sname, cr.row, v,
@@ -2805,19 +2860,23 @@ class MainWindow(QMainWindow):
                 self.sig_sheet_written.emit(None, cr.row, "")
             except Exception as e:
                 cr.values = old         # 롤백 (UI 갱신은 핸들러에서)
+                cr.files_cell = old_files
                 self.sig_sheet_written.emit(None, None, str(e))
+                return
+            # 첨부 서류(v1.33) — 고객 줄을 쓴 다음, 같은 줄의 V열에
+            for fid, new_name in fres["renamed"]:
+                kb_files.rename_remote(self.gauth, fid, new_name)
+            if fres["changed"]:
+                try:
+                    sheets.write_files(self.gauth, sid, sname, cr.row, cr.uid, fres["files"],
+                                       header_row=hdr_row)
+                except Exception as e:
+                    cr.files_cell = old_files
+                    self.sig_files_failed.emit((str(e).splitlines() or ["오류"])[0][:200])
+                    return
+            if fres["removed"]:
+                kb_files.trash(self.gauth, fres["removed"])     # 뺀 서류는 드라이브 휴지통으로(30일 안에 되살림)
         threading.Thread(target=worker, daemon=True).start()
-
-    def _show_customer_doc(self, cr):
-        """등록된 견적서/계약서 이미지를 크게 본다."""
-        url = sheets.doc_url(cr.get("doc"))
-        if not url:
-            QMessageBox.information(
-                self, config.APP_NAME,
-                "이 고객에게 등록된 견적서/계약서가 없습니다.\n"
-                "[수정] 에서 이미지를 붙여넣어 등록할 수 있습니다.")
-            return
-        DocViewer.show_for(cr.get("customer"), url, self.gauth, self)
 
     # ------------------------------------------------- 캘린더 → 고객으로 이동
     def _rows_named(self, name: str) -> list:
@@ -3070,10 +3129,13 @@ class MainWindow(QMainWindow):
         if cr in self._sheet_pending:
             self.sig_toast.emit(config.APP_NAME, "시트에 등록 중입니다. 잠시 후 삭제하세요.")
             return
+        gone = [f["id"] for f in cr.files()]
         if QMessageBox.question(
                 self, config.APP_NAME,
                 f"'{cr.get('customer')}' 의 입력 내용을 모두 지울까요?\n"
                 "(합계·안내멘트 같은 함수 칸은 그대로 두고, 직접 입력한 값만 지웁니다)"
+                + (f"\n\n첨부 서류 {len(gone)}개는 구글 드라이브 휴지통으로 옮깁니다(30일 안에 되살릴 수 있습니다)."
+                   if gone else "")
         ) != QMessageBox.Yes:
             return
 
@@ -3094,6 +3156,9 @@ class MainWindow(QMainWindow):
                 self.sig_sheet_written.emit(None, cr.row, "")
             except Exception as e:
                 self.sig_sheet_deleted_fail.emit(cr, str(e))
+                return
+            if gone:
+                kb_files.trash(self.gauth, gone)
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_sheet_delete_fail(self, cr, err: str):
@@ -3125,8 +3190,25 @@ class MainWindow(QMainWindow):
             self._sheet_last_row = max(self._sheet_last_row, pend.row)
         self.refresh_customers()
         self.sig_toast.emit(config.APP_NAME, "고객관리 시트에 저장했습니다.")
-        # 수식(순번·합계·안내멘트)이 계산된 결과를 잠시 뒤 다시 읽어온다
-        QTimer.singleShot(2500, lambda: self.load_sheet_async(manual=False))
+        # 수식(순번·합계·안내멘트)이 계산된 결과를 잠시 뒤 다시 읽어온다.
+        # v1.34: 여러 고객을 잇달아 저장하면 한 번만(마지막 저장 2.5초 뒤) — 저장마다 다시 읽어 한도를 먹었다
+        self._reload_after_save()
+
+    def _reload_after_save(self, ms: int = 2500):
+        """저장 뒤 다시 읽기 — 잇달아 저장하면 타이머를 다시 맞춰 마지막에 한 번만 읽는다."""
+        t = getattr(self, "_save_reload_timer", None)
+        if t is None:
+            t = QTimer(self)
+            t.setSingleShot(True)
+            t.timeout.connect(self._save_reload_fire)
+            self._save_reload_timer = t
+        t.start(ms)
+
+    def _save_reload_fire(self):
+        if getattr(self, "_sheet_loading", None) == self._sheet_epoch:
+            self._reload_after_save(1500)    # 읽는 중이면 끝난 뒤에 — 방금 저장한 것이 빠지지 않게
+            return
+        self.load_sheet_async(manual=False)
 
     def _build_alarm_tab(self) -> QWidget:
         w = QWidget()
@@ -3378,6 +3460,10 @@ class MainWindow(QMainWindow):
                     self.load_sheet_async(manual=False)
             if getattr(self.settings, "branch_cal", "") != prev_branch and self.gauth.is_connected():
                 QTimer.singleShot(0, self.fetch_all_async)   # 지점 캘린더를 바꿨다 — 일정을 새로 받는다
+            if hasattr(self, "tab_promo"):
+                self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
+            if hasattr(self, "btn_follow_ment"):
+                self.btn_follow_ment.setText(followup.button_text(self.settings))
         self.update_google_status()
         # 로그인/로그아웃이 있었으면 데이터 갱신
         if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
@@ -3438,6 +3524,8 @@ class MainWindow(QMainWindow):
             self.tab_files.reload()
         if now[2] != prev[2]:
             self.apply_theme()
+        if hasattr(self, "tab_promo"):
+            self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
         self._apply_hotkeys()
 
     def _apply_carry(self):
@@ -3548,6 +3636,8 @@ class MainWindow(QMainWindow):
         if self._otp_skip > 0:               # 방금 못 읽었다 — 조금 쉬었다가
             self._otp_skip -= 1
             return
+        if sheets.quota_left() > 0:
+            return                           # 시트 한도(1분)에 걸렸다 — 풀릴 때까지 쉬어 고객 목록·저장이 먼저 되게(v1.34)
         self._otp_tick += 1
         if otp.idle_seconds() > otp.IDLE_SEC and self._otp_tick % otp.IDLE_EVERY:
             return                           # 자리 비움 — 20초에 한 번만(시트 읽기 한도를 아낀다)
@@ -3561,6 +3651,8 @@ class MainWindow(QMainWindow):
                 items = self._otp.poll(self.gauth, sid, tab)
             except otp.NoAccess:
                 err = "denied"               # 이 계정은 그 시트를 볼 수 없다
+            except sheets.QuotaError:
+                err = "quota"                # 한도 — 1분 쉰다(알리지 않는다)
             except requests.RequestException:
                 err = "net"                  # 인터넷이 잠깐 끊겼다 — 알리지 않는다
             except Exception as e:
@@ -3582,8 +3674,8 @@ class MainWindow(QMainWindow):
             return
         if err:
             self._otp_skip = otp.BACKOFF_TICKS
-            if err == "net":
-                return                       # 인터넷이 끊긴 것은 다른 곳에서 이미 보인다
+            if err in ("net", "quota"):
+                return                       # 인터넷이 끊긴 것은 다른 곳에서 이미 보인다 · 한도는 1분이면 풀린다
             self._otp_errs += 1
             if self._otp_errs == 3:          # 계속 못 읽으면 한 번만 알린다
                 self.lbl_status.setText("인증문자 시트를 읽지 못했습니다 — [설정] 의 시트 주소·로그인 계정을 확인하세요")
@@ -3929,20 +4021,21 @@ class MainWindow(QMainWindow):
             return
         self._rename_old_followups()
         self._drop_duplicate_followups()
+        # v1.34.1(지점장): "내 할일에 출고 1개월은 적지 말고, 기존처럼 캘린더에만" — 할일 목록은 건드리지 않고
+        # 구글 캘린더에만 종일 일정으로 올린다. 안내 멘트는 대시보드 [출고 1개월 안내멘트] 단추가 복사한다.
+        # 캘린더에 쓸 수 없으면(로그인 전) 아예 검사하지 않는다 — '처리함' 으로만 적히고 빠지지 않게.
+        if not self.gauth.is_connected():
+            return
         on_cal = followup.calendar_names(self._own_events())
         added = followup.check_followups(
-            self.settings, self._own_events(), self.todos, self.followup_tracker)
+            self.settings, self._own_events(), list(self.todos), self.followup_tracker,
+            skip_names=on_cal)
         if added:
-            self._save_todos()
             self.followup_tracker.save()
             self._touch_sync()
-            self.refresh_todo()
-            self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 [내 할일]에 추가했습니다.")
-            # 설정 시 구글 캘린더에도 종일 일정으로 등록
-            # 캘린더에 이미 그 고객의 팔로업이 있으면(다른 PC 가 올림) 또 올리지 않는다
-            items = [(it.title, it.run_date) for it in added
-                     if followup.followup_name(it.title) not in on_cal]
-            if items and self.settings.follow_to_calendar and self.gauth.is_connected():
+            self.sig_toast.emit("팔로업 자동 등록", f"{len(added)}건을 구글 캘린더에 올렸습니다.")
+            items = [(it.title, it.run_date) for it in added]
+            if items:
                 rmin = self._reminder_minutes()
 
                 def worker():
@@ -3953,6 +4046,15 @@ class MainWindow(QMainWindow):
                         except Exception:
                             pass
                 threading.Thread(target=worker, daemon=True).start()
+
+    def copy_follow_ment(self):
+        """[출고 1개월 안내멘트] — 설정의 안내멘트를 클립보드로."""
+        txt = followup.copy_ment(self.settings)
+        if not txt:
+            self.sig_toast.emit(config.APP_NAME, "안내멘트가 비어 있습니다 — [설정] → [알림·일정] 에서 적어 주세요.")
+            return
+        QApplication.clipboard().setText(txt)
+        self.sig_toast.emit(config.APP_NAME, "출고 안내멘트를 복사했습니다 — 카톡 창에서 Ctrl+V")
 
     def _drop_duplicate_followups(self):
         """겹쳐 올라간 [출고 1개월] 일정·할일을 하나만 남기고 지운다(같은 제목 · 같은 날)."""

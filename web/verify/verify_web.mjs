@@ -111,7 +111,7 @@ let p = await page(ctx);
 const reqs = [];
 p.on("request", (r) => reqs.push(r.url()));
 await p.goto(s.url, { waitUntil: "networkidle" });
-ok("탭 여섯 개가 보인다", (await p.locator("nav.tabs a").count()) === 6);
+ok("탭 일곱 개가 보인다(v1.34.2 — 수입차 프로모션)", (await p.locator("nav.tabs a").count()) === 7);
 ok("주소만 치면 일정 화면이다",
    (await p.locator('nav.tabs a[data-tab="/agenda"][aria-current="page"]').count()) === 1,
    await p.evaluate(() => location.hash));
@@ -432,7 +432,7 @@ await ctx.setOffline(true);
 await p.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
 await p.waitForTimeout(600);
 ok("오프라인에서 화면이 그려진다",
-   (await p.locator("nav.tabs a").count()) === 6);
+   (await p.locator("nav.tabs a").count()) === 7);
 await ctx.setOffline(false);
 
 console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌려 본다");
@@ -479,6 +479,10 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
       docDl.push(u);
       return r.fulfill({ body: QPNG, contentType: "image/png" });
     }
+    if (u.includes("REG1") && u.includes("alt=media")) {   // PC v1.33 첨부 서류(내 계정 — 링크 공개 없음)
+      docDl.push(u);
+      return r.fulfill({ body: QPNG, contentType: "image/jpeg" });
+    }
     return r.fulfill({ json: { files: [] } });
   });
   await ctx3.route("**/accounts.google.com/**", (r) => r.abort());
@@ -494,6 +498,12 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
       ] } });
     }
     if (/!R\d+:R\d+/.test(u)) return r.fulfill({ json: { values: [[MENT]] } });
+    // V열 — PC 가 적은 첨부 서류 목록(앱 전용 숨김 칸)
+    if (/!V\d+:V\d+/.test(u)) {
+      return r.fulfill({ json: { values: [[JSON.stringify({ uid: "", files: [
+        { id: "REG1", name: "자동차등록증.jpg", mime: "image/jpeg", size: 10 },
+        { id: "CONF1", name: "계약확인서.pdf", mime: "application/pdf", size: 20 }] })]] } });
+    }
     // S열은 수식으로 물어봐야 =IMAGE(...) 가 온다
     if (/!S\d+:S\d+/.test(u)) {
       return r.fulfill({ json: { values: [[u.includes("FORMULA")
@@ -552,13 +562,26 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
 
   // ⚠️ 견적서는 S열의 =IMAGE() **수식**이다. 표시값으로 읽으면 빈 문자열이라
   //    '견적서 없음' 과 구분되지 않는다 — 폰에서 안 보이던 이유가 이것이었다.
-  await p3.waitForSelector("#cdoc .vimg", { timeout: 10000 });
+  // PC v1.33 — 고객마다 서류 여러 개(V열 목록). 옛 견적서 그림(S열)은 첫 서류로 함께 보인다.
+  await p3.waitForSelector("#cdocs .attcard", { timeout: 10000 });
   ok("견적서를 수식으로 읽는다",
      seen.some((u) => /!S\d+:S\d+/.test(u) && /FORMULA/.test(u)),
      seen.filter((u) => /!S\d+:S/.test(u)).map((u) => u.slice(-40)).join(" "));
-  ok("견적서 이미지가 나온다",
-     (await p3.locator("#cdoc .vimg").getAttribute("src")).startsWith("blob:"));
-  ok("견적서를 드라이브 API 로 받아 온다", docDl.length === 1, docDl.length + "건");
+  ok("첨부 서류 목록(V열)을 그 고객 한 칸만 읽는다", seen.filter((u) => /!V\d+:V\d+/.test(u)).length === 1);
+  const docNames = await p3.locator("#cdocs .attname").allTextContents();
+  ok("옛 견적서 그림 + PC 에서 올린 서류가 모두 보인다",
+     JSON.stringify(docNames) === JSON.stringify(["견적서(시트 그림).png", "자동차등록증.jpg", "계약확인서.pdf"]),
+     docNames.join(" | "));
+  await p3.waitForFunction(() => [...document.querySelectorAll("#cdocs img.attimg")]
+    .every((i) => (i.getAttribute("src") || "").startsWith("blob:")), null, { timeout: 10000 });
+  ok("그림 서류는 작은 그림으로 — 드라이브 API 로 받아 온다(링크 공개 아님)",
+     docDl.length === 2 && (await p3.locator('#cdocs .attcard[data-k="2"] .attpdf').count()) === 1, docDl.length + "건");
+  await p3.locator('#cdocs .attcard[data-k="1"] button[data-act="open"]').last().click();
+  await p3.waitForSelector("#cdocview .vimg", { timeout: 10000 });
+  ok("[크게] — 같은 고객의 다른 서류로 넘길 수 있다(2 / 3)",
+     (await p3.locator("#cdocview #vpos").textContent()).trim() === "2 / 3");
+  ok("이미 받은 것은 다시 받지 않는다", docDl.length === 2, docDl.length + "건");
+  await p3.click("#cdocview #vclose");
   ok("멘트 본문이 그려진다", (await p3.locator("pre.ment").textContent()).includes("정상 접수"));
   const tels = await p3.locator("#cdetail a.tel").evaluateAll((a) => a.map((x) => x.href));
   ok("연락처가 눌러서 걸리는 tel: 링크다",
@@ -580,7 +603,7 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   ok("시트를 못 읽어도 캐시로 목록이 뜬다",
      (await p4.locator("#clist button.row").count()) === 3);
   ok("시트를 못 읽어도 빈 화면이 되지 않는다",
-     (await p4.locator("nav.tabs a").count()) === 6);
+     (await p4.locator("nav.tabs a").count()) === 7);
   await ctx3.close();
 }
 
@@ -2674,6 +2697,79 @@ console.log("\n[28] v1.32 — 내 정보 자리 · 체크리스트 고치기 · 
      evs2.includes("내 상담") && !evs2.includes("지점 회의") && (await pB.locator("#agwarn").innerText()).trim() === "",
      evs2.slice(0, 80) + " / " + (await pB.locator("#agwarn").innerText()));
   await cB.close();
+}
+
+console.log("\n[29] v1.34.2 — 수입차 프로모션(읽기 전용) · 좁은 폰에서 메뉴 일곱 칸");
+{
+  const FX = JSON.parse(readFileSync(join(WEB, "verify", "fixtures", "promo.json"), "utf-8"));
+  const PID = "1W8maHjHzkyEf2QgAPi5agvHp08OLYRvMa-A9TPRl6-M";
+  const ctxP = await browser.newContext({ viewport: { width: 360, height: 800 },
+                                          permissions: ["clipboard-read", "clipboard-write"] });
+  await seed(ctxP, { account: "me@example.com" });
+  await ctxP.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  await ctxP.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxP.route("**/oauth2/v3/userinfo", (r) => r.fulfill({ json: { email: "me@example.com" } }));
+  await ctxP.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [], items: [] } }));
+  const promoReqs = [];
+  await ctxP.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes(PID)) promoReqs.push([r.request().method(), u]);
+    if (u.includes(PID) && u.includes("/values/")) return r.fulfill({ json: { values: FX.values } });
+    if (u.includes(PID)) {
+      return r.fulfill({ json: { sheets: [{ properties: { title: "수입차 프로모션", sheetId: 1350310028 },
+        merges: FX.merges.map(([a, b, c, d]) => ({ startRowIndex: a, endRowIndex: b,
+                                                    startColumnIndex: c, endColumnIndex: d })) }] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  const pp = await page(ctxP);
+  await pp.goto(s.url + "#/promo", { waitUntil: "networkidle" });
+  await pp.waitForSelector("#promolist .prow", { timeout: 10000 });
+  ok("브랜드마다 카드(벤츠·BMW·아우디)", (await pp.locator("#promolist .promoblk").count()) === 3);
+  const chips = await pp.locator("#promobrands button").allTextContents();
+  ok("브랜드 단추 — 전체·벤츠·BMW·아우디", JSON.stringify(chips) === JSON.stringify(["전체", "벤츠", "BMW", "아우디"]),
+     chips.join(","));
+  const grp = await pp.locator("#promolist .pgroups").first().textContent();
+  ok("묶음 제목(기본값 변동 X | 11월 프로모션)", /기본값 변동 X/.test(grp) && /11월 프로모션/.test(grp), grp);
+  ok("구역 이름 · 안내 글도 보인다", (await pp.locator("#promolist .psec").count()) >= 4
+     && (await pp.locator("#promolist .pnote").count()) === 2);
+  const lab = await pp.locator("#promolist .prow").first().locator(".pv i").allTextContents();
+  ok("칸 이름 = 시트 4행 제목", lab.includes("차량가격") && lab.includes("프로모션"), lab.join(","));
+  await pp.fill("#promoq", "e300");
+  await pp.waitForTimeout(400);
+  const ms = await pp.locator("#promolist .prow .pm").allTextContents();
+  ok("'e300' → 벤츠 E300 두 줄", JSON.stringify(ms) === JSON.stringify(["E300 4M+ AMG Line [26MY]", "E300 4M+ EX [27MY]"]),
+     ms.join(" | "));
+  const chips2 = await pp.locator("#promobrands button").allTextContents();
+  ok("단추에 브랜드별 건수", chips2.join(",") === "전체 2,벤츠 2,BMW 0,아우디 0", chips2.join(","));
+  await pp.locator("#promolist .prow").first().click();
+  await pp.waitForTimeout(200);
+  const clipP = await pp.evaluate(() => navigator.clipboard.readText());
+  ok("줄을 누르면 한 줄로 복사", clipP === "E300 4M+ AMG Line [26MY] · 차량가격 90,000,000 · MBF 9,000,000 · 프로모션 8,000,000",
+     clipP);
+  await pp.fill("#promoq", "ㅅㅍㅌㅂ");
+  await pp.waitForTimeout(400);
+  ok("초성으로도 찾는다", (await pp.locator("#promolist .prow .pm").allTextContents()).join("") .includes("스포트백"));
+  // 읽기 전용 — 이 앱 어디에서도 이 시트에 쓰지 못한다(보내기 전에 막는다)
+  const before = promoReqs.length;
+  const guard = await pp.evaluate(async (pid) => {
+    const sh = await import("./js/sheets.js");
+    try { await sh.writeCells(pid, "수입차 프로모션", 5, { price: "1" }, [[4, "price"]], ["price"]); return "보냄"; }
+    catch (e) { return e.constructor.name; }
+  }, PID);
+  ok("프로모션 시트에 쓰기는 보내기 전에 막힌다", guard === "ReadOnlySheet" && promoReqs.length === before, guard);
+  ok("프로모션 시트로는 GET 말고 아무것도 안 나갔다", promoReqs.every(([m]) => m === "GET") && promoReqs.length >= 2,
+     promoReqs.map(([m]) => m).join(","));
+  // 좁은 폰(360px)에서 메뉴 일곱 칸이 넘치지 않는다
+  const over = await pp.evaluate(() => [...document.querySelectorAll("nav.tabs a")]
+    .filter((a) => a.getBoundingClientRect().right > innerWidth + 1 || a.scrollWidth > a.clientWidth + 1).length);
+  ok("360px 폰에서 메뉴 일곱 칸이 다 보인다", over === 0, over);
+  ok("메뉴의 '프로모션' 이 골라져 있다",
+     (await pp.locator('nav.tabs a[aria-current="page"]').getAttribute("data-tab")) === "/promo");
+  await ctxP.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

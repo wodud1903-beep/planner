@@ -100,6 +100,8 @@ google_client.fetch_calendar_events = lambda *a, **k: []
 sheets.read_ments = lambda *a: ({2: "김상현 고객님 안내멘트"} if NET["up"] else {})
 sheets.read_docs = lambda *a: {}
 sheets.read_uids = lambda *a: ({2: "uid-kim", 3: "uid-park"} if NET["up"] else {})
+# v1.34: S·U·V 는 한 요청으로(read_extras) — (그림, 고객ID, 서류)
+sheets.read_extras = lambda *a: ({}, sheets.read_uids(*a), {})
 sync.pull = lambda a: False
 sync.sync_now = lambda a: False
 sync.push = lambda a: None

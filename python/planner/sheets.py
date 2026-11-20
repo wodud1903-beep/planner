@@ -25,12 +25,86 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 
-from . import config
+from . import config, net
 from .google_client import GoogleAuth, GoogleError
-from .net import http as _http
+
+
+# ---------------------------------------------------------------------------
+# 구글 시트 읽기 한도(429) — v1.34
+# ---------------------------------------------------------------------------
+# 구글 시트는 계정마다 **1분에 읽기 60번**(쓰기도 60번)까지다. 이 PC 의 일정관리기(인증번호 4초마다 ·
+# 고객 목록 · 저장 뒤 다시 읽기 · 프로모션 …)와 같은 계정의 다른 PC·폰 웹이 함께 쓴다. 넘으면 그 분이
+# 지날 때까지 429 가 온다 — 예전엔 "시트 요청 실패 (HTTP 429) Quota exceeded …" 영어 창이 떴다.
+# 이제: ① 429 면 조금 쉬었다 저절로 다시 묻는다(_Patient) ② 그래도 안 되면 '한도' 라고 알리고(QuotaError)
+#      ③ 이 PC 의 다른 읽기(인증번호 등)는 1분 동안 쉬게 한다(quota_left).
+QUOTA_COOL_SEC = 60
+QUOTA_WAITS = (4, 10, 20)        # 429 뒤 쉬는 초 — 모두 34초. 분 단위 한도라 대개 두세 번째에 풀린다
+_QUOTA_UNTIL = 0.0
+_sleep = time.sleep              # 검사가 바꿔 끼운다
+
+
+class QuotaError(GoogleError):
+    """구글 시트 읽기·쓰기 한도(1분)를 넘었다 — 잠시 뒤 다시 하면 된다."""
+
+
+QUOTA_MSG = ("구글 시트 사용 한도(계정마다 1분에 60번)를 잠깐 넘었습니다.\n"
+             "1분쯤 뒤 저절로 다시 읽습니다 — 같은 계정의 다른 PC·폰에서 많이 쓰면 생길 수 있습니다.")
+
+
+def note_quota(sec: float = QUOTA_COOL_SEC) -> None:
+    """한도에 걸렸다 — 이 PC 의 시트 읽기를 잠깐 쉬게 한다."""
+    global _QUOTA_UNTIL
+    _QUOTA_UNTIL = max(_QUOTA_UNTIL, time.time() + sec)
+
+
+def quota_left() -> float:
+    """한도 때문에 더 쉬어야 하는 초(0 = 괜찮다)."""
+    return max(0.0, _QUOTA_UNTIL - time.time())
+
+
+class _Patient:
+    """요청이 429(한도)면 조금 쉬었다 다시 묻는 연결. 다른 응답은 그대로 돌려준다.
+
+    429 는 구글이 **받지 않은** 요청이라 쓰기도 다시 보내도 두 번 적히지 않는다.
+    모든 시트 요청은 작업 스레드에서 나가므로 쉬는 동안 화면은 멈추지 않는다.
+    """
+
+    _METHODS = ("get", "post", "put", "patch", "delete", "request")
+
+    def __init__(self, session):
+        self._s = session
+
+    def __getattr__(self, name):
+        fn = getattr(self._s, name)
+        if name not in self._METHODS:
+            return fn
+
+        def call(*a, **k):
+            # 읽기 전용 시트(수입차 프로모션)로 가는 쓰기는 보내지 않는다(v1.34.2 — net.check_write)
+            if name == "request":
+                net.check_write(a[0] if a else k.get("method", ""), a[1] if len(a) > 1 else k.get("url", ""))
+            else:
+                net.check_write(name, a[0] if a else k.get("url", ""))
+            r = None
+            for wait in QUOTA_WAITS + (None,):
+                r = fn(*a, **k)
+                if getattr(r, "status_code", 0) != 429:
+                    return r
+                note_quota()
+                if wait is None:
+                    break
+                _sleep(wait)
+            return r
+        return call
+
+
+def _http():
+    # ⚠️ net.http 를 **부를 때** 찾는다(검사가 net.http 를 바꿔 끼워도 따라가게 — otp._http 와 같은 이유)
+    return _Patient(net.http())
 
 # 열 인덱스(0=A) → (필드키, 화면표시 이름)
 FIELDS: list[tuple[int, str, str]] = [
@@ -76,6 +150,13 @@ LAST_COL = 19                           # T
 # 메모/이력을 붙들어 둘 불변 키가 필요하다. 사람이 볼 값이 아니라 열을 숨겨 둔다.
 COL_UID = 20
 UID_HEADER = "고객ID(앱 전용 · 지우지 마세요)"
+
+# V 서류 첨부 — 앱이 쓰는 숨김 열(v1.33). 견적서·등록증·계약확인서 등 여러 개.
+#   {"uid": 고객ID, "files": [{id, name, mime, size}]} — 자료검색 첨부(G열)와 같은 모양.
+#   파일 본체는 **내 구글 드라이브 '고객서류' 폴더**(링크 공개 안 함 — 이 계정만 본다).
+#   uid 가 이 줄의 고객ID 와 다르면 쓰지 않는다 — 줄이 밀려 남의 서류가 붙지 않게.
+COL_FILES = 21
+FILES_HEADER = "서류 첨부(앱 전용 · 지우지 마세요)"
 
 # 고객 추가는 한 번에 하나씩 (행 번호가 겹쳐 앞 고객이 덮어써지는 것을 막는다)
 _APPEND_LOCK = threading.Lock()
@@ -199,7 +280,12 @@ class CustomerRow:
     center: str = ""         # P 고객센터 번호
     accident: str = ""       # Q 사고접수 연락처
     uid: str = ""            # U 고객ID (앱 전용 숨김 열 — 메모/이력을 붙들어 두는 키)
+    files_cell: str = ""     # V 서류 첨부 글(앱 전용 숨김 열, v1.33) — files() 로 읽는다
     values: dict = field(default_factory=dict)   # 직접기재 필드키 → 값
+
+    def files(self) -> list:
+        """이 고객의 서류 첨부 [{id, name, mime, size}] — 고객ID 가 맞는 것만."""
+        return files_from(self.files_cell, self.uid)
 
     def get(self, key: str) -> str:
         return self.values.get(key, "")
@@ -265,6 +351,10 @@ def _check(r) -> None:
 
     if r.status_code == 401:
         raise GoogleError("구글 로그인이 만료되었습니다. [설정]에서 다시 로그인하세요.")
+
+    if r.status_code == 429 or "quota exceeded" in low or "rate_limit_exceeded" in low:
+        note_quota()
+        raise QuotaError(QUOTA_MSG)
 
     if r.status_code == 403:
         # 구글 원문도 그대로 보여 준다. 가장 흔한 경우(이 계정에 그 시트의 권한이 없다 — 일반 직원이
@@ -458,29 +548,24 @@ def _sheet_props(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
     raise GoogleError(f"'{sheet_name}' 시트를 찾지 못했습니다.")
 
 
-def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
-                      header_row: int) -> None:
-    """U열을 쓸 수 있게 준비한다 (열 확보 → 머리글 → 숨김).
+def _ensure_app_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+                       header_row: int, col: int, header: str) -> None:
+    """앱 전용 숨김 열을 쓸 수 있게 준비한다 (열 확보 → 머리글 → 숨김).
 
-    시트가 T열까지만 있으면 U 는 아예 존재하지 않아 읽기·쓰기 모두 400 이 난다.
+    시트가 T열까지만 있으면 U·V 는 아예 존재하지 않아 읽기·쓰기 모두 400 이 난다.
     그럴 땐 먼저 열을 늘린다. 사람이 볼 값이 아니라 숨기지만, 열을 펼쳐 봤을 때
     무엇인지 알 수 있도록 머리글은 남긴다.
     """
     props = _sheet_props(auth, sheet_id, sheet_name)
     gid = props["gid"]
-    reqs = []
-    if props["cols"] <= COL_UID:
-        # 격자에 U열이 없다 → 필요한 만큼 열을 추가한다
-        reqs.append({"appendDimension": {
-            "sheetId": gid, "dimension": "COLUMNS",
-            "length": COL_UID + 1 - props["cols"],
-        }})
-    if reqs:
+    if props["cols"] <= col:
+        # 격자에 그 열이 없다 → 필요한 만큼 열을 추가한다
         rb = _http().post(config.SHEETS_BATCH_UPDATE_URL.format(sheet_id=sheet_id),
-                           headers=_headers(auth), timeout=30, json={"requests": reqs})
+                          headers=_headers(auth), timeout=30, json={"requests": [{"appendDimension": {
+                              "sheetId": gid, "dimension": "COLUMNS", "length": col + 1 - props["cols"]}}]})
         _check(rb)
 
-    a1 = f"{col_letter(COL_UID)}{header_row}"
+    a1 = f"{col_letter(col)}{header_row}"
     url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, a1))
     r = _http().get(url, headers=_headers(auth), timeout=20)
     cur = ""
@@ -490,8 +575,8 @@ def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
     if cur.strip():
         return                                   # 이미 준비됨
     rp = _http().put(url, headers=_headers(auth), timeout=20,
-                      params={"valueInputOption": "RAW"},
-                      json={"values": [[UID_HEADER]]})
+                     params={"valueInputOption": "RAW"},
+                     json={"values": [[header]]})
     _check(rp)
     # 열 숨기기
     rb = _http().post(
@@ -499,11 +584,106 @@ def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
         headers=_headers(auth), timeout=30,
         json={"requests": [{"updateDimensionProperties": {
             "range": {"sheetId": gid, "dimension": "COLUMNS",
-                      "startIndex": COL_UID, "endIndex": COL_UID + 1},
+                      "startIndex": col, "endIndex": col + 1},
             "properties": {"hiddenByUser": True},
             "fields": "hiddenByUser",
         }}]})
     _check(rb)
+
+
+def ensure_uid_column(auth: GoogleAuth, sheet_id: str, sheet_name: str,
+                      header_row: int) -> None:
+    """U열(고객ID)을 쓸 수 있게 준비한다."""
+    _ensure_app_column(auth, sheet_id, sheet_name, header_row, COL_UID, UID_HEADER)
+
+
+# ---------------------------------------------------------------------------
+# 서류 첨부(V열, v1.33)
+# ---------------------------------------------------------------------------
+def clean_files(files) -> list:
+    """첨부 목록을 저장 형식으로 — [{id, name, mime, size}]. 아직 안 올린 것(id 없음)은 뺀다."""
+    out = []
+    for f in files if isinstance(files, list) else []:
+        if not isinstance(f, dict):
+            continue
+        fid, name = str(f.get("id") or "").strip(), str(f.get("name") or "").strip()
+        if not fid or not name:
+            continue
+        try:
+            size = max(0, int(f.get("size") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        out.append({"id": fid, "name": name, "mime": str(f.get("mime") or "").strip(), "size": size})
+    return out
+
+
+def files_cell(uid: str, files) -> str:
+    """V열에 적을 글. 첨부가 없으면 "" (칸을 비운다)."""
+    fl = clean_files(files)
+    if not fl:
+        return ""
+    return json.dumps({"uid": str(uid or ""), "files": fl}, ensure_ascii=False, separators=(",", ":"))
+
+
+def files_from(cell: str, uid: str = "") -> list:
+    """V열 글 → 첨부 목록. 고객ID 가 서로 있는데 다르면 [] (줄이 밀려 남의 것이 붙지 않게)."""
+    t = str(cell or "").strip()
+    if not t:
+        return []
+    try:
+        o = json.loads(t)
+    except Exception:
+        return []
+    if not isinstance(o, dict):
+        return []
+    owner = str(o.get("uid") or "").strip()
+    if owner and str(uid or "").strip() and owner != str(uid).strip():
+        return []
+    return clean_files(o.get("files"))
+
+
+def read_files(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
+    """V열(서류 첨부)을 읽는다 → {행번호: 글}. V열이 아직 없는 시트면 {} (조용히)."""
+    c = col_letter(COL_FILES)
+    url = config.SHEETS_VALUES_URL.format(sheet_id=sheet_id, rng=_rng(sheet_name, f"{c}1:{c}"))
+    r = _http().get(url, headers=_headers(auth), timeout=20)
+    if r.status_code != 200:
+        return {}
+    out = {}
+    for i, row in enumerate((r.json() or {}).get("values", [])):
+        v = (row[0] if row else "") or ""
+        if str(v).strip().startswith("{"):
+            out[i + 1] = str(v).strip()
+    return out
+
+
+def write_files(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int,
+                uid: str, files, header_row: int = 0) -> None:
+    """V열에 서류 목록을 적는다. 고객ID 를 주면 그 줄의 U열이 같은지 먼저 확인한다."""
+    if header_row:
+        _ensure_app_column(auth, sheet_id, sheet_name, header_row, COL_FILES, FILES_HEADER)
+    if uid:
+        url = config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_UID)}{row}"))
+        r = _http().get(url, headers=_headers(auth), timeout=20)
+        if r.status_code == 200:
+            vals = (r.json() or {}).get("values", [])
+            cur = str(vals[0][0]).strip() if (vals and vals[0]) else ""
+            if cur and cur != uid:
+                raise GoogleError("서류를 적으려던 줄에 다른 고객이 있습니다(시트가 바뀌었습니다).\n"
+                                  "[불러오기] 한 뒤 다시 해 주세요.")
+    url = config.SHEETS_VALUES_URL.format(
+        sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_FILES)}{row}"))
+    r = _http().put(url, headers=_headers(auth), timeout=20,
+                    params={"valueInputOption": "RAW"},
+                    json={"values": [[files_cell(uid, files)]]})
+    _check(r)
+
+
+def doc_file_id(cell: str) -> str:
+    """S열(=IMAGE("…uc?export=view&id=…")) → 드라이브 파일 id. 없으면 ""."""
+    m = re.search(r"[?&]id=([\w-]+)", doc_url(cell) or "")
+    return m.group(1) if m else ""
 
 
 def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
@@ -525,6 +705,39 @@ def read_docs(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> dict:
         if str(v).strip():
             out[i + 1] = str(v).strip()
     return out
+
+
+def read_extras(auth: GoogleAuth, sheet_id: str, sheet_name: str) -> tuple:
+    """S열 수식(견적서 그림) · U열 고객ID · V열 서류 첨부를 **한 번에** 읽는다 → (docs, uids, files).
+
+    v1.34: 예전엔 셋을 따로 읽어 고객 목록 한 번에 읽기 요청이 7~8번이었다(시트 한도 1분 60번을 빨리 먹었다).
+    셋 다 '수식 그대로'(FORMULA)로 읽어도 되는 칸이라 한 요청에 묶는다. 시트가 U·V 열까지 없으면
+    격자 밖이라 통째로 400 이 난다 — 그때만 예전처럼 하나씩(없는 열은 빈 값).
+    """
+    u, v = col_letter(COL_UID), col_letter(COL_FILES)
+    r = _http().get(config.SHEETS_BATCH_GET_URL.format(sheet_id=sheet_id), headers=_headers(auth), timeout=30,
+                    params=[("ranges", f"'{sheet_name}'!S1:S"), ("ranges", f"'{sheet_name}'!{u}1:{u}"),
+                            ("ranges", f"'{sheet_name}'!{v}1:{v}"), ("valueRenderOption", "FORMULA")])
+    if r.status_code == 400:
+        try:
+            docs = read_docs(auth, sheet_id, sheet_name)
+        except QuotaError:
+            raise
+        except Exception:
+            docs = {}
+        return docs, read_uids(auth, sheet_id, sheet_name), read_files(auth, sheet_id, sheet_name)
+    _check(r)
+    vrs = (r.json() or {}).get("valueRanges", []) or []
+
+    def col(i, keep):
+        out = {}
+        rows = (vrs[i].get("values", []) if i < len(vrs) else []) or []
+        for n, row in enumerate(rows):
+            x = str((row[0] if row else "") or "").strip()
+            if x and keep(x):
+                out[n + 1] = x
+        return out
+    return (col(0, lambda x: True), col(1, lambda x: True), col(2, lambda x: x.startswith("{")))
 
 
 def next_seq(auth: GoogleAuth, sheet_id: str, sheet_name: str,
@@ -1097,6 +1310,14 @@ def clear_row(auth: GoogleAuth, sheet_id: str, sheet_name: str, row: int,
     # 그대로 따라붙으면 안 된다.
     try:
         write_uid(auth, sheet_id, sheet_name, row, "")
+    except Exception:
+        pass
+    # 서류 첨부(V열)도 비운다 — 같은 까닭(v1.33). V열이 없는 시트면 그냥 넘어간다.
+    try:
+        url = config.SHEETS_VALUES_URL.format(
+            sheet_id=sheet_id, rng=_rng(sheet_name, f"{col_letter(COL_FILES)}{row}"))
+        _http().put(url, headers=_headers(auth), timeout=20,
+                    params={"valueInputOption": "RAW"}, json={"values": [[""]]})
     except Exception:
         pass
     return row

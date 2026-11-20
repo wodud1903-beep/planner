@@ -32,6 +32,7 @@ ROWS = (
     ("kb", "회사 업무자료"),
     ("files", "고객 서류 폴더"),
     ("otp", "휴대폰 인증번호 받기"),
+    ("promo", "수입차 프로모션 시트"),
     ("update", "프로그램 판(업데이트)"),
 )
 
@@ -136,6 +137,22 @@ def check_otp(win) -> tuple:
     return OK, f"인증문자 시트를 읽고 있습니다(최근 {len(rows)}줄).", ""
 
 
+def check_promo(win) -> tuple:
+    """수입차 프로모션(v1.34) — 이 계정이 회사 프로모션 시트를 볼 수 있나('뷰어' 공유면 된다)."""
+    if not win.gauth.is_connected():
+        return WAIT, "로그인하면 볼 수 있습니다.", ""
+    from . import promo
+    s = win.settings
+    try:
+        raw = promo.read(win.gauth, getattr(s, "promo_sheet", ""), getattr(s, "promo_tab", ""))
+    except Exception as e:
+        return BAD, " ".join(str(e).split()), "settings"
+    n = promo.model_count(promo.parse(raw.get("values") or [], raw.get("merges") or []))
+    if not n:
+        return WARN, "시트는 열리지만 조건표(4행 열 제목 · 모델 줄)를 찾지 못했습니다 — 탭 이름을 확인하세요.", "settings"
+    return OK, f"조건표 모델 {n}개를 볼 수 있습니다.", ""
+
+
 def check_update(win) -> tuple:
     from . import updater
     cur = "v" + config.APP_VERSION
@@ -151,7 +168,8 @@ def check_update(win) -> tuple:
 
 
 CHECKS = {"login": check_login, "scopes": check_scopes, "sync": check_sync, "sheet": check_sheet,
-          "kb": check_kb, "files": check_files, "otp": check_otp, "update": check_update}
+          "kb": check_kb, "files": check_files, "otp": check_otp, "promo": check_promo,
+          "update": check_update}
 
 
 def run_all(win, emit=None) -> dict:

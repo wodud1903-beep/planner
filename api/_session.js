@@ -43,11 +43,15 @@ const SCOPES = [
 // 업무자료검색 웹(kbsearch.vercel.app)의 로그인도 여기서 대신 받아 준다(v1.29) — 그 주소는 구글
 // 콘솔에 따로 등록하지 않아도 되게. 그쪽에는 갱신 토큰을 **잠근 쪽지**(sealKb)만 건네고, 쓸 토큰은
 // 그쪽 서버가 쪽지를 들고 /api/auth/kb-token 에 와서 받는다. 클라이언트 비밀은 여기에만 있다.
-//   · 권한은 드라이브 '앱 전용 공간' 하나(고친 심사서류를 PC 와 주고받는 파일)만 묻는다.
+//   · 권한은 드라이브 '앱 전용 공간'(고친 심사서류를 PC 와 주고받는 파일)과
+//     스프레드시트 **보기**(v1.34.2 — 수입차 프로모션 화면. readonly 라 시트를 고칠 수 없다)만 묻는다.
 //   · 쪽지는 일정관리기 로그인 쿠키와 다른 열쇠로 잠근다 — 서로 바꿔 쓸 수 없다.
 //   · 쪽지는 정해 둔 주소(KB_ORIGIN)로만 보낸다.
 const KB_ORIGIN = (process.env.KB_ORIGIN || "https://kbsearch.vercel.app").replace(/\/$/, "");
-const KB_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/drive.appdata"];
+const KB_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const KB_SCOPES = ["openid", "email", "https://www.googleapis.com/auth/drive.appdata", KB_SHEETS_SCOPE];
+// 동기화에 꼭 있어야 하는 것 — 프로모션 보기 권한이 없는 예전 로그인도 동기화는 그대로 되게(따로 알린다)
+const KB_SYNC_SCOPES = ["https://www.googleapis.com/auth/drive.appdata"];
 
 const SESSION = "__Host-jyp";        // 갱신 토큰
 const STATE = "__Host-jyp_st";       // 로그인 도중 잠깐(위조 방지 값 + 돌아갈 화면)
@@ -175,7 +179,7 @@ function safeReturn(r) {
 
 module.exports = {
   CLIENT_ID, ORIGIN, REDIRECT, TOKEN_URL, AUTH_URL, SCOPES, SESSION, STATE,
-  KB_ORIGIN, KB_SCOPES, sealKb, unsealKb,
+  KB_ORIGIN, KB_SCOPES, KB_SYNC_SCOPES, KB_SHEETS_SCOPE, sealKb, unsealKb,
   configured, seal, unseal, cookie, setCookies, sessionCookie, clearSession,
   stateCookie, clearState, send, redirect, guard, google, emailOf, missingScopes, safeReturn,
 };

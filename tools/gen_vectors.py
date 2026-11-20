@@ -28,9 +28,49 @@ for name in ("planner.google_client", "planner.net"):
         mod.GoogleAuth = object
         mod.GoogleError = Exception
         mod.http = lambda: None
+        mod.protect = lambda *a: None          # promo.py 가 켤 때 부른다(읽기 전용 표시)
+        mod.check_write = lambda *a: None
+        mod.ReadOnlySheet = Exception
         sys.modules[name] = mod
 
-from planner import board, commission, hangul, sheets, weekly  # noqa: E402
+from planner import board, commission, hangul, promo, sheets, weekly  # noqa: E402
+
+# 수입차 프로모션(v1.34.2) — 웹(web/js/promo.js)이 PC 와 같게 해석·검색하는지
+PROMO_QUERIES = [("", ""), ("", "bmw"), ("e300", ""), ("E 300", ""), ("x5", ""), ("q5 스포트백", ""),
+                 ("ㅅㅍㅌㅂ", ""), ("스포트배", ""), ("eqs", ""), ("전기차", ""), ("트레이드", ""),
+                 ("컨퀘스트", ""), ("벤츠 glc", ""), ("아우디", ""), ("벤", ""), ("bmw x", ""),
+                 ("아우디 q7", "bmw"), ("zzzz", ""), ("라인업amg", ""), ("e", "audi")]
+
+
+def _promo_vectors():
+    fx = json.loads((ROOT / "web" / "verify" / "fixtures" / "promo.json").read_text(encoding="utf-8"))
+    blocks = promo.parse(fx["values"], fx["merges"])
+    strip = lambda b: {k: (list(map(list, v)) if k == "groups" else v) for k, v in b.items() if k != "rows"}
+    out = {
+        "blocks": [dict(strip(b), rows=[{k: v for k, v in r.items() if k != "prep"} for r in b["rows"]])
+                   for b in blocks],
+        "blocks_nomerge": [[list(g) for g in b["groups"]] for b in promo.parse(fx["values"], [])],
+        "header_row": promo.header_row(fx["values"]),
+        "model_count": promo.model_count(blocks),
+        "search": [],
+        "row_text": [],
+        "is_number": [[s, promo.is_number(s)] for s in
+                      ["4,900,000", "0", "0%", "4%추가", "신형", "", " 1,000 ", "-", "12.5%", "3만원"]],
+        "tone": [[s, promo.tone_of(s)] for s in
+                 ["재고없음", "재고 없음", "종료", "단종", "신형", "연식변경", "9,000,000", "비고", "11/5기준 재고 0", ""]],
+        "brand_token": [[s, promo.brand_token(s)] for s in
+                        ["벤츠", "벤", "메", "BMW", "비", "아우", "audi", "glc", "", "스포트백", "볼보"]],
+        "clean_title": [[s, promo.clean_title(s)] for s in
+                        ["벤츠 11월 프로모션      ***** 11/03 (화) 기준 *****", "  a  b ", "*x*", ""]],
+    }
+    for q, brand in PROMO_QUERIES:
+        found = promo.search(blocks, q, brand)
+        out["search"].append([q, brand, [[b["key"], [[r["kind"], r["cells"][0]] for r in rows]] for b, rows in found],
+                              promo.hit_count(promo.search(blocks, q, ""))])
+    for b in blocks:
+        for r in b["rows"]:
+            out["row_text"].append([b["key"], r["row"], promo.row_text(b, r)])
+    return out
 
 HANGUL_CASES = [
     ("김상현", ["ㄱㅅㅎ", "김상", "김", "ㄱㅅㅎㅇ", "상현", "", "ㅅㅎ"]),
@@ -304,6 +344,8 @@ def main() -> int:
     for rows in RATE_ROWS:
         got = sheets.read_rates.__wrapped__ if False else None   # (통신 함수라 직접 안 쓴다)
         out["parse_rates"].append([rows, _parse_rates(rows)])
+
+    out["promo"] = _promo_vectors()
 
     dest = ROOT / "web" / "verify" / "vectors.json"
     dest.parent.mkdir(parents=True, exist_ok=True)

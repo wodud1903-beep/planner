@@ -145,6 +145,9 @@ export function pcExtras(pc) {
   if (!cfg || typeof cfg !== "object") return null;
   const out = { otpSheet: String(cfg.otpSheet || "").trim(), otpTab: String(cfg.otpTab || "").trim() };
   if (typeof cfg.branchCal === "string") out.branchCal = cfg.branchCal.trim();
+  // 수입차 프로모션 시트(v1.34.2) — PC [설정] → [화면·기타] 에서 바꿨으면 그쪽을 읽는다
+  if (typeof cfg.promoSheet === "string") out.promoSheet = cfg.promoSheet.trim();
+  if (typeof cfg.promoTab === "string") out.promoTab = cfg.promoTab.trim();
   return out;
 }
 /** 마지막으로 읽은 PC 설정의 나머지(loadSettings 를 가볍지 않게 부른 뒤). */

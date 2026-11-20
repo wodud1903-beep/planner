@@ -4,14 +4,15 @@
 (순번·합계·고객센터 번호·사고접수연락처·고객안내멘트·등록완료)은 건드리지 않는다.
 
 - 계약일/출고일: 달력에서 고르고, 시트 서식(2026. 8. 14)으로 저장
-- 견적서/계약서: Ctrl+V 로 이미지를 붙여넣어 셀 안 그림으로 등록
+- 서류(견적서·등록증·계약확인서 등, v1.33): 여러 개 — Ctrl+V · 끌어다 놓기 · [파일 추가…]
+  (customer_attach.CustomerFilesBox — 자료검색 첨부와 같은 부품)
 - 고객안내멘트: 시트 R열 내용을 클립보드로 복사
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QGuiApplication, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QTextEdit,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, searchcombo, sheets
+from .customer_attach import CustomerFilesBox, legacy_att
 from .incentive_box import IncentiveBox
 
 
@@ -62,92 +64,6 @@ class MoneyEdit(QLineEdit):
         return sheets.digits_only(self.text())
 
 
-class ImagePasteBox(QFrame):
-    """Ctrl+V 로 이미지를 붙여넣는 상자. 미리보기 + 지우기."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setMinimumHeight(120)
-        self.setFocusPolicy(Qt.StrongFocus)
-        self._png: bytes = b""          # 새로 붙여넣은 이미지
-        self._existing: str = ""        # 시트에 이미 들어있는 값(수식/텍스트)
-        self._cleared: bool = False     # [지우기] 로 기존 이미지를 없앴는지
-
-        v = QVBoxLayout(self)
-        v.setContentsMargins(8, 8, 8, 8)
-        self.lbl = QLabel("여기를 클릭하고 Ctrl+V 로 견적서/계약서 이미지를 붙여넣으세요")
-        self.lbl.setWordWrap(True)
-        self.lbl.setAlignment(Qt.AlignCenter)
-        v.addWidget(self.lbl)
-
-        self.preview = QLabel()
-        self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.hide()
-        v.addWidget(self.preview)
-
-        row = QHBoxLayout()
-        self.btn_paste = QPushButton("붙여넣기 (Ctrl+V)")
-        self.btn_paste.clicked.connect(self.paste_from_clipboard)
-        self.btn_clear = QPushButton("지우기")
-        self.btn_clear.clicked.connect(self.clear_image)
-        row.addWidget(self.btn_paste)
-        row.addWidget(self.btn_clear)
-        row.addStretch()
-        v.addLayout(row)
-
-        sc = QShortcut(QKeySequence.Paste, self)
-        sc.activated.connect(self.paste_from_clipboard)
-
-    def set_existing(self, value: str):
-        self._existing = value or ""
-        if self._existing and not self._png:
-            self.lbl.setText("이미 등록된 이미지가 있습니다. 바꾸려면 새로 붙여넣으세요.")
-
-    def paste_from_clipboard(self):
-        img = QGuiApplication.clipboard().image()
-        if img.isNull():
-            QMessageBox.information(
-                self, config.APP_NAME,
-                "클립보드에 이미지가 없습니다.\n"
-                "캡처 도구나 이미지 프로그램에서 복사한 뒤 다시 시도하세요.")
-            return
-        from PySide6.QtCore import QBuffer, QByteArray
-        ba = QByteArray()
-        buf = QBuffer(ba)
-        buf.open(QBuffer.WriteOnly)
-        img.save(buf, "PNG")
-        buf.close()
-        self._png = bytes(ba)
-        pm = QPixmap.fromImage(img).scaledToWidth(
-            min(360, img.width()), Qt.SmoothTransformation)
-        self.preview.setPixmap(pm)
-        self.preview.show()
-        self.lbl.setText(f"새 이미지 준비됨 ({img.width()}×{img.height()}, "
-                         f"{len(self._png) // 1024}KB) — 저장하면 시트에 올라갑니다")
-
-    def clear_image(self):
-        self._png = b""
-        # 이미 시트에 등록돼 있던 이미지도 함께 지우겠다는 뜻으로 본다.
-        # (예전엔 _existing 을 그대로 둬서 [지우기] 가 아무 일도 하지 않았다)
-        if self._existing:
-            self._cleared = True
-            self._existing = ""
-        self.preview.clear()
-        self.preview.hide()
-        self.lbl.setText("여기를 클릭하고 Ctrl+V 로 견적서/계약서 이미지를 붙여넣으세요")
-
-    def was_cleared(self) -> bool:
-        """등록돼 있던 이미지를 [지우기] 로 없앴는지."""
-        return bool(getattr(self, "_cleared", False)) and not self._png
-
-    def png_bytes(self) -> bytes:
-        return self._png
-
-    def existing(self) -> str:
-        return self._existing
-
-
 class CustomerDialog(QDialog):
     #  key            라벨            위젯종류
     LAYOUT = [
@@ -164,7 +80,7 @@ class CustomerDialog(QDialog):
         ("terms", "계약조건", "text"),
         ("note", "내용", "text"),
         ("kind", "출고유형", "combo"),
-        ("doc", "견적서/계약서", "image"),
+        ("doc", "첨부 서류", "files"),
     ]
 
     # 시트에 아직 그 값이 안 쓰였어도 항상 고를 수 있어야 하는 항목.
@@ -186,7 +102,7 @@ class CustomerDialog(QDialog):
     FONT_PT = 12
 
     def __init__(self, caption: str, values: dict, choices: dict,
-                 ment: str = "", parent=None):
+                 ment: str = "", parent=None, files: list | None = None, auth=None):
         super().__init__(parent)
         self.setWindowTitle(caption)
         self.resize(680, 820)
@@ -257,9 +173,15 @@ class CustomerDialog(QDialog):
                 hl.addWidget(chk)
                 w = (de, chk, holder)
                 form.addRow(label, holder)
-            elif kind == "image":
-                w = ImagePasteBox()
-                w.set_existing(cur)
+            elif kind == "files":
+                # 시트 V열 목록 + (거기 없으면) S열 옛 견적서 그림을 맨 앞에
+                fl = [dict(f) for f in (files or [])]
+                old = legacy_att(cur)
+                self._legacy_id = old["id"] if old else ""
+                if old and old["id"] not in {f.get("id") for f in fl}:
+                    fl.insert(0, old)
+                w = CustomerFilesBox(fl, auth=auth)
+                self.files_box = w
                 form.addRow(label, w)
             elif kind == "money":
                 w = MoneyEdit(cur)
@@ -333,8 +255,12 @@ class CustomerDialog(QDialog):
         self.lbl_ment.setText("복사했습니다 ✅")
 
     def _ok(self):
-        if not self.values().get("customer", "").strip():
+        name = self.values().get("customer", "").strip()
+        if not name:
             QMessageBox.information(self, config.APP_NAME, "고객명을 입력하세요.")
+            return
+        # 새로 넣은 서류부터 올린다 — 못 올리면 창을 닫지 않는다(넣은 것을 잃지 않게)
+        if hasattr(self, "files_box") and not self.files_box.upload_pending(name):
             return
         self.accept()
 
@@ -350,10 +276,10 @@ class CustomerDialog(QDialog):
                 if holder.property("unreadable") and not holder.property("touched"):
                     continue      # 못 읽은 원래 값을 그대로 둔다 (키를 안 넣는다)
                 out[key] = "" if chk.isChecked() else sheets.fmt_date(de.date().toPython())
-            elif kind == "image":
+            elif kind in ("image", "files"):
                 # 견적서/계약서(S열)는 여기서 절대 내보내지 않는다.
                 # 표시값이 빈 문자열인 =IMAGE() 수식을 되돌려 써서 그림을 지웠었다.
-                # 새 이미지는 new_image(), 지우기는 doc_cleared() 로 따로 전달한다.
+                # 서류는 files_result(), S열 그림을 뺐는지는 doc_cleared() 로 따로 전달한다.
                 continue
             elif kind == "text":
                 out[key] = w.toPlainText().strip()
@@ -361,21 +287,20 @@ class CustomerDialog(QDialog):
                 out[key] = w.text().strip()
         return out
 
-    def new_image(self) -> bytes:
-        """새로 붙여넣은 이미지(PNG). 없으면 빈 바이트."""
-        w, _kind = self.widgets["doc"]
-        return w.png_bytes()
+    def files_result(self) -> dict:
+        """서류 — {files, changed, removed, renamed} (customer_attach.CustomerFilesBox.result)."""
+        return self.files_box.result()
 
     def doc_cleared(self) -> bool:
-        """등록돼 있던 견적서/계약서를 [지우기] 로 없앴는지."""
-        w, _kind = self.widgets["doc"]
-        return w.was_cleared()
+        """S열 옛 견적서 그림을 서류 목록에서 뺐는지 — 그러면 S열도 비운다."""
+        lid = getattr(self, "_legacy_id", "")
+        return bool(lid) and lid not in {f["id"] for f in self.files_result()["files"]}
 
     @classmethod
     def run(cls, caption: str, values: dict, choices: dict, ment: str = "",
-            parent=None):
-        """반환: (값 dict, 새 이미지 bytes, 기존 이미지 지움 여부) 또는 None(취소)."""
-        d = cls(caption, values, choices, ment, parent)
+            parent=None, files: list | None = None, auth=None):
+        """반환: (값 dict, 서류 결과 dict, S열 그림 뺌 여부) 또는 None(취소)."""
+        d = cls(caption, values, choices, ment, parent, files=files, auth=auth)
         if d.exec() != QDialog.Accepted:
             return None
-        return d.values(), d.new_image(), d.doc_cleared()
+        return d.values(), d.files_result(), d.doc_cleared()

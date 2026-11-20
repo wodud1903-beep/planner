@@ -130,6 +130,30 @@ export function docUrl(cell) {
   return "";
 }
 
+// ---------------------------------------------------------------- 첨부 서류(V열, PC v1.33)
+// PC 일정관리기가 고객마다 견적서·등록증·계약확인서 등을 여러 개 올리고, 그 목록을 시트 V열
+// (앱 전용 숨김 칸)에 {"uid": 고객ID, "files": [{id, name, mime, size}]} 로 적는다(sheets.py 와 같은 규칙).
+// 고객ID 가 서로 있는데 다르면 쓰지 않는다 — 줄이 밀려 남의 서류가 붙지 않게.
+export function filesFrom(cell, uid = "") {
+  const t = String(cell || "").trim();
+  if (!t) return [];
+  let o;
+  try { o = JSON.parse(t); } catch (e) { return []; }
+  if (!o || typeof o !== "object") return [];
+  const owner = String(o.uid || "").trim();
+  if (owner && String(uid || "").trim() && owner !== String(uid).trim()) return [];
+  return (Array.isArray(o.files) ? o.files : [])
+    .filter((f) => f && String(f.id || "").trim() && String(f.name || "").trim())
+    .map((f) => ({ id: String(f.id).trim(), name: String(f.name).trim(),
+                   mime: String(f.mime || "").trim(), size: Number(f.size) || 0 }));
+}
+
+/** S열의 옛 견적서 그림 → 첨부 하나(없으면 null). PC 와 같은 이름으로 보인다. */
+export function legacyAtt(docCell) {
+  const id = driveIdOf(docUrl(docCell));
+  return id ? { id, name: "견적서(시트 그림).png", mime: "image/png", size: 0, sheet: true } : null;
+}
+
 /** 드라이브 주소에서 파일 id. 못 찾으면 "".
  *
  * 견적서는 드라이브에 올라가 있다. 주소를 <img src> 에 그냥 넣는 대신 id 를 뽑아

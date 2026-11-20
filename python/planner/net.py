@@ -25,12 +25,55 @@ import requests
 
 _local = threading.local()
 
+# ---------------------------------------------------------------------------
+# 읽기만 하는 스프레드시트(v1.34.2) — 이 프로그램은 여기에 **절대 쓰지 않는다**
+# ---------------------------------------------------------------------------
+# 지점장: "수입차 프로모션 시트가 강제로 수정된 이력이 있다. 절대 할인내역이 수정되면 안 된다."
+# 프로모션 화면은 처음부터 읽기(GET)만 했지만, 로그인 권한(spreadsheets)으로는 고칠 수도 있다.
+# 그래서 모든 구글 요청이 지나는 이 연결에서 막는다 — 이 시트(파일) 주소로 가는 GET 이 아닌 요청
+# (값 쓰기·지우기·서식·탭 추가·드라이브 이름 바꾸기·휴지통 …)은 보내지 않고 ReadOnlySheet 를 던진다.
+_READ_ONLY: set = set()
+_SAFE = ("GET", "HEAD", "OPTIONS")
+
+
+class ReadOnlySheet(Exception):
+    """읽기 전용으로 정한 시트에 쓰려 했다 — 보내지 않았다."""
+
+
+def protect(sheet_id: str) -> None:
+    """이 스프레드시트를 읽기 전용으로(이 프로그램이 켜져 있는 동안)."""
+    sid = str(sheet_id or "").strip()
+    if len(sid) >= 20:               # 진짜 시트 id 만(짧은 글자로 엉뚱한 주소가 막히지 않게)
+        _READ_ONLY.add(sid)
+
+
+def is_protected(sheet_id: str) -> bool:
+    return str(sheet_id or "").strip() in _READ_ONLY
+
+
+def check_write(method: str, url: str) -> None:
+    """읽기 전용 시트로 가는 쓰기 요청이면 ReadOnlySheet."""
+    if str(method or "GET").upper() in _SAFE:
+        return
+    u = str(url or "")
+    for sid in _READ_ONLY:
+        if sid in u:
+            raise ReadOnlySheet("수입차 프로모션 시트는 읽기 전용입니다 — 이 프로그램은 그 시트를 고치지 않습니다.")
+
+
+class _Guarded(requests.Session):
+    """보내기 직전에 check_write 를 거친다(get·post·put·patch·delete 가 모두 request 로 모인다)."""
+
+    def request(self, method, url, *args, **kwargs):
+        check_write(method, url)
+        return super().request(method, url, *args, **kwargs)
+
 
 def http() -> requests.Session:
     """이 스레드가 쓸 연결. 없으면 만들어 둔다."""
     s = getattr(_local, "session", None)
     if s is None:
-        s = requests.Session()
+        s = _Guarded()
         _local.session = s
     return s
 

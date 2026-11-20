@@ -29,7 +29,7 @@ def _path():
 
 def save(sheet_id: str, sheet_name: str, left: list, right: list,
          ments: dict | None = None, uids: dict | None = None, docs: dict | None = None,
-         drops: dict | None = None) -> None:
+         drops: dict | None = None, files: dict | None = None) -> None:
     """방금 읽은 것을 그대로 둔다(행 번호 키는 글자로)."""
     o = {
         "v": VER, "sheet_id": sheet_id, "sheet_name": sheet_name,
@@ -39,6 +39,7 @@ def save(sheet_id: str, sheet_name: str, left: list, right: list,
         "uids": {str(k): v for k, v in (uids or {}).items()},
         "docs": {str(k): v for k, v in (docs or {}).items()},
         "drops": {str(k): list(v) for k, v in (drops or {}).items()},   # 시트 드롭다운 목록(v1.28.4)
+        "files": {str(k): v for k, v in (files or {}).items()},         # 서류 첨부(V열, v1.33)
     }
     try:
         config.atomic_write(_path(), json.dumps(o, ensure_ascii=False))
@@ -68,6 +69,7 @@ def load(sheet_id: str, sheet_name: str) -> dict | None:
                 pass
         return out
     o["ments"], o["uids"], o["docs"] = ints(o.get("ments")), ints(o.get("uids")), ints(o.get("docs"))
+    o["files"] = ints(o.get("files"))
     return o
 
 

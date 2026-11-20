@@ -8,7 +8,7 @@ import * as store from "../store.js";
 import * as sheets from "../sheets.js";
 import * as hangul from "../hangul.js";
 import * as fmt from "../fmt.js";
-import { parseRows, statuses, choices, FIELDS, HeaderNotFound, docUrl, driveIdOf }
+import { parseRows, statuses, choices, FIELDS, HeaderNotFound, filesFrom, legacyAtt }
   from "../customers.js";
 import * as drive from "../drive.js";
 import * as appdata from "../appdata.js";
@@ -290,8 +290,9 @@ export async function showDetail(rowNo) {
     <p class="kbhead">이력 · 메모</p>
     <div id="cfeed"></div>
 
-    <p class="kbhead">견적서 / 계약서</p>
+    <p class="kbhead">첨부 서류</p>
     <div id="cdoc"><p class="empty">확인 중…</p></div>
+    <div id="cdocview"></div>
 
     <p class="kbhead">고객 안내멘트</p>
     <div id="cment"><p class="empty">불러오는 중…</p></div>`);
@@ -335,51 +336,133 @@ function paintMent(text) {
 }
 
 
-// ---------------------------------------------------------------- 견적서 이미지
-let _docView = null;
+// ---------------------------------------------------------------- 첨부 서류(PC v1.33)
+//
+// PC 에서 고객마다 올린 견적서·자동차등록증·계약확인서 등(시트 V열 목록) + 예전 견적서 그림(S열).
+// 파일은 그 계정의 구글 드라이브에 있고 링크 공개를 하지 않는다 — 내 로그인으로 받아 띄운다.
+// [크게] 는 같은 고객의 다른 서류로 ◀ ▶ · ← → · 밀기로 넘긴다. [보내기] 는 폰 공유 창(카톡 등).
+let _doc = { files: [], blobs: new Map(), urls: [], view: null, seq: 0 };
+
+function dropDocs() {
+  for (const u of _doc.urls) URL.revokeObjectURL(u);
+  if (_doc.view) _doc.view.close();
+  _doc = { files: [], blobs: new Map(), urls: [], view: null, seq: _doc.seq + 1 };
+}
+
+async function docBlob(f) {
+  if (_doc.blobs.has(f.id)) return _doc.blobs.get(f.id);
+  let b = null;
+  try { b = await drive.download(f.id); } catch (e) { b = null; }
+  if (b) _doc.blobs.set(f.id, b);
+  return b;
+}
+
+const canShareFiles = () => {
+  try {
+    return typeof navigator.share === "function" && typeof navigator.canShare === "function"
+      && navigator.canShare({ files: [new File(["x"], "x.png", { type: "image/png" })] });
+  } catch (e) { return false; }
+};
 
 async function loadDoc(row) {
   const box = $("#cdoc");
   if (!box) return;
-  if (_docView) { _docView.close(); _docView = null; }
-  let cell = "";
+  dropDocs();
+  const seq = _doc.seq;
+  let doc = "", cell = "", who = { uid: "" };
   try {
-    cell = await sheets.readDocFormula(sheetId(), sheetTab(), row);
+    [doc, cell, who] = await Promise.all([
+      sheets.readDocFormula(sheetId(), sheetTab(), row),
+      sheets.readFilesCell(sheetId(), sheetTab(), row),
+      sheets.readUid(sheetId(), sheetTab(), row).catch(() => ({ uid: "" })),
+    ]);
   } catch (e) {
     render(box, html`<p class="empty">${e instanceof sheets.NeedScope
       ? "권한이 없습니다. 위 [다시 로그인] 을 눌러 주세요."
-      : "견적서를 확인하지 못했습니다."}</p>`);
+      : "첨부 서류를 확인하지 못했습니다."}</p>`);
     return;
   }
-  const url = docUrl(cell);
-  if (!url) { render(box, html`<p class="empty">올라온 견적서가 없습니다.</p>`); return; }
+  if (seq !== _doc.seq || !$("#cdoc")) return;        // 그사이 다른 고객을 열었다
+  const files = filesFrom(cell, who.uid);
+  const old = legacyAtt(doc);
+  if (old && !files.some((f) => f.id === old.id)) files.unshift(old);
+  _doc.files = files;
+  if (!files.length) {
+    render(box, html`<p class="empty">올라온 서류가 없습니다. PC 일정관리기의 [수정] 에서 올립니다.</p>`);
+    return;
+  }
+  const send = canShareFiles() ? "보내기" : "저장";
+  render(box, `<div class="kbatt" id="cdocs">${files.map((f, i) => `<div class="attcard" data-k="${i}">
+      <button class="attthumb" data-act="open" aria-label="${esc(f.name)} 크게 보기">${drive.isPdf(f.name)
+        ? '<span class="attpdf">PDF</span>' : `<img class="attimg" alt="${esc(f.name)}">`}</button>
+      <span class="attname">${esc(f.name)}</span>
+      <span class="attbtns"><button class="chip" data-act="open">크게</button>
+        <button class="chip" data-act="send">${send}</button></span></div>`).join("")}</div>`);
+  files.forEach(async (f, i) => {
+    const card = $(`#cdocs .attcard[data-k="${i}"]`);
+    if (!card) return;
+    card.onclick = (e) => {
+      const act = e.target.closest("[data-act]");
+      if (!act) return;
+      if (act.dataset.act === "open") openDoc(i, true);
+      else sendDoc(f, act);
+    };
+    if (drive.isPdf(f.name)) return;
+    const b = await docBlob(f);
+    if (seq !== _doc.seq) return;
+    const img = $(".attimg", card);
+    if (b && img) {
+      const u = URL.createObjectURL(b);
+      _doc.urls.push(u);
+      img.src = u;
+    } else if (img) {
+      img.alt = "받지 못함";
+    }
+  });
+}
 
-  const id = driveIdOf(url);
-  if (!id) {
-    // 드라이브가 아닌 주소면 그냥 그대로 띄운다
-    render(box, html`<img class="vimg" src="${url}" alt="견적서">`);
+async function openDoc(i, first) {
+  const f = _doc.files[i];
+  const box = $("#cdocview");
+  if (!f || !box) return;
+  const seq = _doc.seq;
+  const mount = (blob, pending) => {
+    if (_doc.view) _doc.view.close();
+    _doc.view = viewer.mount(box, {
+      blob, pending, name: f.name, isPdf: drive.isPdf(f.name), driveUrl: drive.openInDrive(f.id),
+      nav: { pos: i, count: _doc.files.length, go: (j) => openDoc(j, false) },
+    });
+    _doc.view.onClose(() => { if (_doc.view) _doc.view.close(); _doc.view = null; render(box, ""); });
+  };
+  let b = _doc.blobs.get(f.id) || null;
+  if (!b) {
+    mount(null, true);                          // '받는 중' — 다 받으면 그 자리에
+    b = await docBlob(f);
+    if (seq !== _doc.seq) return;
+  }
+  if (!b && first) { window.open(drive.openInDrive(f.id), "_blank", "noopener"); return; }
+  mount(b, false);
+  if (first) box.scrollIntoView({ block: "start", behavior: "smooth" });
+  for (const j of [i + 1, i - 1]) if (_doc.files[j]) docBlob(_doc.files[j]);   // 옆 서류는 미리
+}
+
+async function sendDoc(f, btn) {
+  const b = await docBlob(f);
+  if (!b) { btn.textContent = "받지 못함"; return; }
+  const type = b.type || f.mime || (drive.isPdf(f.name) ? "application/pdf" : "image/png");
+  const file = new File([b], f.name, { type });
+  if (canShareFiles() && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: f.name }); } catch (e) { /* 닫음 */ }
     return;
   }
-  render(box, html`<p class="empty">견적서를 불러오는 중…</p>`);
-  try {
-    // 주소를 <img src> 에 바로 넣지 않는다. 드라이브의 uc?export=view 는
-    // 요즘 리다이렉트가 끼어 <img> 에서 자주 깨진다. 내 권한으로 받아서 띄운다.
-    const blob = await drive.download(id);
-    _docView = viewer.mount(box, {
-      blob, name: "견적서 / 계약서", isPdf: (blob.type || "").includes("pdf"),
-      driveUrl: drive.openInDrive(id),
-    });
-    _docView.onClose(() => {
-      if (_docView) { _docView.close(); _docView = null; }
-      render(box, html`<button class="chip" id="cdocopen">견적서 다시 보기</button>`);
-      const b = $("#cdocopen");
-      if (b) b.onclick = () => loadDoc(row);
-    });
-  } catch (e) {
-    render(box, html`<p class="empty">견적서를 열지 못했습니다.</p>
-      <p style="text-align:center"><a class="bigcopy" href="${drive.openInDrive(id)}"
-         target="_blank" rel="noopener">드라이브에서 열기</a></p>`);
-  }
+  const a = document.createElement("a");
+  const u = URL.createObjectURL(b);
+  _doc.urls.push(u);
+  a.href = u;
+  a.download = f.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 // ---------------------------------------------------------------- 시트 설정
@@ -508,7 +591,7 @@ export async function editScreen(m) {
       ${raw(WRITABLE.map(field).join(""))}
       <button class="bigcopy" id="esave" style="margin-top:18px">저장</button>
       <p class="empty" id="emsg"></p>
-      <p class="synced">견적서는 폰에서 고칠 수 없습니다 — PC 에서 해 주세요.</p>
+      <p class="synced">첨부 서류(견적서·등록증 등)는 PC 일정관리기의 [수정] 에서 올립니다.</p>
     </div>`);
 
   // 금액은 치는 동안 1,000 단위

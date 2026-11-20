@@ -182,10 +182,12 @@ class AttachList(QListWidget):
       owner.rename_attachment()          : 편집 창 — 두 번 누르기 · F2 · [이름 바꾸기]
     """
 
-    def __init__(self, owner, editable: bool = False, parent=None):
+    def __init__(self, owner, editable: bool = False, parent=None, open_on_double: bool = False):
         super().__init__(parent)
         self._owner = owner
         self._editable = editable
+        # 편집 창이어도 두 번 누르면 크게 보기(고객 서류 칸, v1.33) — 이름 바꾸기는 F2·단추·오른쪽 단추
+        self._open_on_double = open_on_double
         self.setViewMode(QListView.IconMode)
         self.setIconSize(QSize(THUMB, THUMB))
         self.setGridSize(QSize(THUMB + 34, THUMB + 46))   # 이름 두 줄까지
@@ -311,7 +313,7 @@ class AttachList(QListWidget):
 
     def _dbl(self, li):
         # 편집 창에서는 두 번 누르면 이름 바꾸기, 보기 화면에서는 크게 보기
-        if self._editable:
+        if self._editable and not self._open_on_double:
             fn = getattr(self._owner, "rename_attachment", None)
             if callable(fn):
                 self.setCurrentItem(li)
@@ -335,6 +337,8 @@ class AttachList(QListWidget):
         o = self._owner
         m = QMenu(self)
         if self._editable:
+            if self._open_on_double and hasattr(o, "open_attachment"):
+                m.setDefaultAction(m.addAction("크게 보기", lambda a=att: o.open_attachment(a)))
             if hasattr(o, "rename_attachment"):
                 m.addAction("이름 바꾸기 (F2)", o.rename_attachment)
             if hasattr(o, "remove_attachments"):

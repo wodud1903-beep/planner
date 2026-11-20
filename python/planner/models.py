@@ -231,6 +231,15 @@ def save_list(path: Path, items) -> None:
     config.atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def promo_where(sheet, tab) -> tuple:
+    """수입차 프로모션 시트·탭(v1.34) — 비어 있으면 회사 프로모션 시트. 기본 시트에 탭이 비면 '수입차 프로모션'."""
+    sid = str(sheet or "").strip() or config.PROMO_DEF_SHEET_ID
+    t = str(tab or "").strip()
+    if not t and sid == config.PROMO_DEF_SHEET_ID:
+        t = config.PROMO_DEF_TAB
+    return sid, t
+
+
 def otp_where(sheet, tab) -> tuple:
     """인증문자 시트·탭 — 비어 있으면 지점 기본 시트(v1.31.1). 기본 시트에 탭이 비면 '시트1'."""
     sid = str(sheet or "").strip() or config.OTP_DEF_SHEET_ID
@@ -315,6 +324,9 @@ class AppSettings:
     sheet_backups: list = field(default_factory=list)
     # 지점 공유 캘린더(v1.32) — 그 캘린더의 일정을 내 일정과 함께 본다(앞에 [지점])
     branch_cal: str = config.DEF_BRANCH_CAL
+    # 수입차 프로모션(v1.34) — 왼쪽 메뉴 '수입차 프로모션' 이 읽는 시트·탭(비우면 회사 프로모션 시트)
+    promo_sheet: str = config.PROMO_DEF_SHEET_ID
+    promo_tab: str = config.PROMO_DEF_TAB
     # 탭을 끌어서 바꾼 순서(탭 이름). 비어 있으면 만든 순서 그대로.
     tab_order: list = field(default_factory=list)
     # 왼쪽 메뉴를 접어(아이콘만) 쓰는가
@@ -377,6 +389,8 @@ class AppSettings:
             "sheetBackup": bool(self.sheet_backup),
             "sheetBackups": list(self.sheet_backups or []),
             "branchCal": self.branch_cal,
+            "promoSheet": self.promo_sheet,
+            "promoTab": self.promo_tab,
             "tabOrder": list(self.tab_order or []),
             "sideCollapsed": bool(self.side_collapsed),
             "newsDoc": self.news_doc,
@@ -462,6 +476,7 @@ class AppSettings:
         s.sheet_backup = bool(o.get("sheetBackup", True))
         s.sheet_backups = [x for x in (o.get("sheetBackups") or []) if isinstance(x, dict) and x.get("id")]
         s.branch_cal = str(o.get("branchCal", config.DEF_BRANCH_CAL) or "").strip()
+        s.promo_sheet, s.promo_tab = promo_where(o.get("promoSheet"), o.get("promoTab"))
         s.tab_order = [str(x) for x in (o.get("tabOrder") or [])]
         s.side_collapsed = bool(o.get("sideCollapsed", False))
         s.news_doc = str(o.get("newsDoc", config.DEF_NEWS_DOC) or "")
