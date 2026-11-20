@@ -1,0 +1,12 @@
+{
+  "name": "kbsearch-web",
+  "private": true,
+  "type": "module",
+  "description": "업무자료검색 웹 — 로그인 없이 회사 공통 자료 검색 · 관리자 서버 on/off",
+  "dependencies": {
+    "@vercel/blob": "2.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
