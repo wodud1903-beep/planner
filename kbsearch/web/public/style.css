@@ -292,6 +292,81 @@ dialog input:focus, dialog textarea:focus { border-color: var(--accent); box-sha
   .vnav.prev { left: calc(50% - 60px); }
   .vnav.next { right: calc(50% - 60px); }
 }
+/* ---------------------------------------------------------------- 화면 고르기(v1.34.2) */
+.views { display: flex; gap: 6px; padding: 0 24px 12px; flex: none; max-width: 1368px; width: 100%; margin: 0 auto;
+  overflow-x: auto; scrollbar-width: none; }
+.views::-webkit-scrollbar { display: none; }
+.views button { flex: none; min-height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--card); color: var(--sub); font-weight: 600; font-size: 14px; }
+.views button:hover { background: var(--hover); }
+.views button[aria-selected="true"] { background: var(--select); color: var(--select-text); border-color: transparent; font-weight: 700; }
+.pview { height: 100%; max-width: 980px; margin: 0 auto; }
+.pcard, .ccard { height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.foot .grow { flex: 1; }
+.flink { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 600; font-size: 12.5px; white-space: nowrap;
+  text-decoration: none; cursor: pointer; }
+.flink + .flink { margin-left: 10px; }
+
+/* 수입차 프로모션 — 브랜드마다 덩어리, 줄마다 '칸 이름(시트 4행) 값' */
+.plist { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 8px; }
+.pempty { color: var(--sub); text-align: center; padding: 40px 12px; margin: 0; }
+div.pempty b { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
+div.pempty p { margin: 0 0 16px; font-size: 14px; }
+.promoblk { margin: 4px 0 14px; }
+.promoblk h3 { margin: 6px 0 2px; font-size: 15.5px; font-weight: 800; color: var(--select-text); }
+.promoblk .pgroups { margin: 0 0 6px; font-size: 12px; color: var(--sub); }
+.promoblk .psec { margin: 10px 0 2px; padding: 6px 10px; font-size: 13px; border-radius: var(--r-sm);
+  background: var(--select); color: var(--select-text); }
+.promoblk .prow, .promoblk .pnote { display: block; width: 100%; text-align: left; background: none; border: 0;
+  border-bottom: 1px solid var(--line); padding: 9px 4px; }
+.promoblk .prow:hover { background: var(--soft); }
+.promoblk .pm { display: block; font-size: 15px; margin-bottom: 3px; }
+.promoblk .pvs { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 14px; }
+.promoblk .pv { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.promoblk .pv i { font-style: normal; color: var(--faint); font-size: 12px; margin-right: 4px; }
+.promoblk .pv.red { color: var(--bad); font-weight: 700; }
+.promoblk .pv.blue { color: var(--select-text); font-weight: 700; }
+.promoblk .pnote { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; background: #FDF5EA;
+  border: 0; border-radius: var(--r-sm); margin: 4px 0; padding: 10px 12px; }
+
+/* 수당계산기 — 일정관리기 웹과 같은 차례 */
+.ccard { overflow: auto; padding: 4px 0 20px; }
+.ccard .chips { padding-top: 14px; }
+.flab { display: block; margin: 10px 16px 4px; font-size: 13px; font-weight: 600; color: var(--sub); }
+.csearch { margin-top: 0; }
+.carlist { list-style: none; margin: 0 16px; padding: 0; max-height: 260px; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--r-md); }
+.carlist li + li { border-top: 1px solid var(--line); }
+.carrow { display: flex; justify-content: space-between; gap: 10px; width: 100%; padding: 9px 12px; text-align: left;
+  background: none; border: 0; }
+.carrow:hover { background: var(--soft); }
+.carrow[aria-pressed="true"] { background: var(--select); }
+.carrow[aria-pressed="true"] .t { color: var(--select-text); font-weight: 700; }
+.carrow .s { color: var(--sub); font-size: 13px; white-space: nowrap; }
+.cempty { padding: 14px; color: var(--sub); text-align: center; }
+.bigin { display: block; width: calc(100% - 32px); margin: 0 16px; height: 48px; padding: 0 14px; font-size: 17px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--soft); }
+.bigin:focus { outline: none; background: var(--card); border-color: var(--accent); box-shadow: 0 0 0 4px rgb(106 90 224 / .14); }
+.calcrow { display: flex; align-items: flex-end; gap: 12px; }
+.calcrow > div { flex: 1; }
+.freechk { display: flex; align-items: center; gap: 6px; margin: 0 16px 12px 0; white-space: nowrap; font-size: 14px; }
+.calcout { display: flex; align-items: baseline; gap: 10px; margin: 16px 16px 2px; padding: 14px 16px;
+  border-radius: var(--r-md); background: var(--select); }
+.calcout span { color: var(--sub); font-size: 14px; }
+.calcout b { flex: 1; text-align: right; font-size: 26px; color: var(--select-text); font-variant-numeric: tabular-nums; }
+.crate { margin: 2px 16px 12px; text-align: right; font-size: 13px; color: var(--sub); }
+.bigcopy { display: flex; width: calc(100% - 32px); margin: 0 16px; min-height: 48px; font-size: 16px; }
+.csrc { margin: 12px 16px 0; font-size: 12.5px; color: var(--sub); text-align: center; }
+#csrc.warn { color: #A35F0D; font-weight: 600; }
+.cerr { margin: 6px 16px 0; font-size: 13px; color: var(--sub); text-align: center; }
+.cerr:empty { display: none; }
+@media (max-width: 760px) {
+  .views { padding: 0 12px 10px; }
+  .views button { padding: 0 13px; font-size: 13.5px; }
+  .plist { padding: 0 12px 8px; }
+  .calcout b { font-size: 22px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }

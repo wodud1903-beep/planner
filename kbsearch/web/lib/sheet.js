@@ -90,3 +90,29 @@ export async function readKb(fetchImpl = fetch) {
   }
   return itemsFromRows(rows.slice(1));
 }
+
+// ---------------------------------------------------------------- 수당율(v1.34.2 — 수당계산기)
+// 같은 시트의 '수당율' 탭(브랜드 | 차종 | 수당율(%) | 화물차). 일정관리기 PC·웹 수당계산기와 같은 표다.
+// 읽기만 한다 — 고치는 것은 PC 일정관리기 관리자만([설정] → 수당율).
+export const RATES_TAB = "수당율";
+
+export async function readRates(fetchImpl = fetch) {
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`
+    + `?tqx=out:csv&headers=1&sheet=${encodeURIComponent(RATES_TAB)}`;
+  let r;
+  try {
+    r = await fetchImpl(url, { redirect: "follow" });
+  } catch (e) {
+    throw new NotPublic("시트에 연결하지 못했습니다");
+  }
+  const ctype = (r.headers.get("content-type") || "").toLowerCase();
+  if (r.status !== 200 || !ctype.includes("csv")) {
+    throw new NotPublic(`시트를 공개로 읽지 못했습니다 (HTTP ${r.status})`);
+  }
+  const rows = parseCsv((await r.text()).replace(/^﻿/, ""));
+  if (!rows.length || String(rows[0][0] || "").trim() !== "브랜드") {
+    throw new NotPublic("수당율 탭이 아닌 것이 왔습니다(탭 이름이 바뀌었을 수 있습니다)");
+  }
+  // 화면(commission.js parseRates)이 푼다 — 여기서는 앞 네 칸만 그대로 건넨다
+  return rows.slice(1).map((x) => x.slice(0, 4).map((c) => String(c ?? "").trim())).filter((x) => x.some(Boolean));
+}

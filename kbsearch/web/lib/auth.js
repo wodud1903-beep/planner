@@ -5,7 +5,8 @@
 //   jyplanner 가 갱신 토큰을 **잠근 쪽지**로 만들어 /api/auth/accept 로 POST → 이 주소 쿠키에 둔다.
 // 쓸 토큰이 필요하면 /api/auth/token 이 쪽지를 jyplanner /api/auth/kb-token 에 내밀어 받아 온다.
 //   · 쪽지는 이 서버도 못 연다(잠근 열쇠는 jyplanner 에만). 화면 코드도 못 읽는다(HttpOnly).
-//   · 받는 권한은 드라이브 '앱 전용 공간' 하나 — 고친 심사서류를 PC 와 주고받는 파일(kb_edits.json).
+//   · 받는 권한은 드라이브 '앱 전용 공간'(고친 심사서류를 PC 와 주고받는 파일 kb_edits.json)과
+//     스프레드시트 **보기**(spreadsheets.readonly — 수입차 프로모션 화면, v1.34.2). 시트를 고칠 권한은 없다.
 //   · 남이 자기 쪽지를 내 브라우저에 밀어 넣지 못하게(로그인 위조) 시작할 때 정한 값(n)을 맞춰 본다.
 export const ORIGIN = (process.env.PUBLIC_ORIGIN || "https://kbsearch.vercel.app").replace(/\/$/, "");
 export const BROKER = (process.env.AUTH_BROKER || "https://jyplanner.vercel.app").replace(/\/$/, "");

@@ -88,7 +88,7 @@ export async function token(force = false) {
   if (r.status === 401) { tok = null; return null; }
   if (!r.ok || !j.access_token) throw new Error("로그인 서버에 닿지 못했습니다 — 잠시 뒤 다시 해 주세요.");
   tok = { access_token: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000,
-          email: j.email || "", missing: j.missing || [] };
+          email: j.email || "", missing: j.missing || [], sheets: j.sheets === true };
   return tok;
 }
 

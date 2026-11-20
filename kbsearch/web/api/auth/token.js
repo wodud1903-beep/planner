@@ -1,5 +1,6 @@
 // 쓸 토큰 — 쿠키의 쪽지를 jyplanner 에 내밀고 1시간짜리 토큰을 받아 준다. 팝업 없음.
-//   POST /api/auth/token → 200 {access_token, expires_in, email, missing}
+//   POST /api/auth/token → 200 {access_token, expires_in, email, missing, sheets}
+//        sheets = 시트 **보기**(읽기 전용) 권한이 있나 — 수입차 프로모션 화면(v1.34.2). 예전 로그인은 false.
 //                          401 {error:"signin"}  로그인 전 · 권한을 뺐음
 //                          502 {error}           jyplanner·구글이 잠깐 탈남(로그인은 그대로 둔다)
 import { BROKER, SESSION, cookie, sessionCookie, clearSession, goodSeal, sameOrigin } from "../../lib/auth.js";
@@ -26,5 +27,5 @@ export default async function handler(req, res) {
   if (r.status !== 200 || !j.access_token) return send(res, 502, { error: j.error || "broker" });
   res.setHeader("Set-Cookie", [sessionCookie(h)]);      // 쓰는 동안은 수명을 다시 늘린다
   send(res, 200, { access_token: j.access_token, expires_in: j.expires_in || 3600,
-                   email: j.email || "", missing: j.missing || [] });
+                   email: j.email || "", missing: j.missing || [], sheets: j.sheets === true });
 }

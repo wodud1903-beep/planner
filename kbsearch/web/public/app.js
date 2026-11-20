@@ -10,6 +10,7 @@
 //   · 처음이면 목록 모양의 빈 자리(skeleton)를 먼저 보여 준다.
 import * as kb from "./kb.js";
 import * as sync from "./sync.js";
+import * as views from "./views.js";       // 위 메뉴의 [수입차 프로모션] · [수당계산기](v1.34.2)
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -246,12 +247,12 @@ async function load(boot) {
 }
 
 function showOff(message) {
-  $("#split").hidden = true;
+  views.setOff(true);                      // 메뉴·프로모션·수당계산기도 함께 감춘다
   $("#off").hidden = false;
   $("#off-msg").textContent = message;
 }
 function showOn() {
-  $("#split").hidden = false;
+  views.setOff(false);                     // 고른 화면(자료검색 · 프로모션 · 수당)을 다시 보인다
   $("#off").hidden = true;
 }
 
@@ -654,6 +655,7 @@ $("#q").addEventListener("keydown", (e) => {
 // '/' 로 검색칸 — 다른 칸에 쓰는 중이면 그대로 둔다
 document.addEventListener("keydown", (e) => {
   if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (views.current() !== "kb") return;     // 프로모션·수당 화면에서는 자료 검색칸이 숨어 있다
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
   if ($("#admin").open || vdlg.open || shdlg.open || sdlg.open) return;
@@ -671,7 +673,11 @@ const sdlg = $("#syncdlg");
 let syncing = false, syncAgain = false, lastSync = 0, syncMsg = "", syncBad = false, soonTimer = 0;
 
 const savedAcct = () => { try { return localStorage.getItem(ACCT_KEY) || ""; } catch (e) { return ""; } };
-const setAcct = (v) => { try { v ? localStorage.setItem(ACCT_KEY, v) : localStorage.removeItem(ACCT_KEY); } catch (e) { /* 무시 */ } };
+const setAcct = (v) => {
+  const before = savedAcct();
+  try { v ? localStorage.setItem(ACCT_KEY, v) : localStorage.removeItem(ACCT_KEY); } catch (e) { /* 무시 */ }
+  if (before !== (v || "")) views.accountChanged();     // 프로모션은 그 계정으로 다시 읽는다(앞사람 것을 남기지 않는다)
+};
 const signedIn = () => !!(sync.account() || savedAcct());
 const syncedHere = (it) => signedIn() && sync.isSyncKey(it._key);
 
@@ -1000,6 +1006,8 @@ $("#btn-off").onclick = () => flip(false);
 $("#btn-on").onclick = () => flip(true);
 
 // ------------------------------------------------------------------ 시작
+// 프로모션 화면의 [구글 로그인] — 구글 동기화와 같은 로그인(시트는 '보기' 권한만 받는다)
+views.init({ login: () => login(false) });
 const cached = readCache();
 if (cached) setItems(cached.items, cached.at, true);
 else paintSkeleton();

@@ -38,7 +38,7 @@ state._setStore({
 
 // ---- Vercel 처럼 돌리는 작은 서버 ----
 const handlers = {};
-for (const n of ["status", "kb", "switch", "file"]) handlers[n] = (await import(`../api/${n}.js`)).default;
+for (const n of ["status", "kb", "switch", "file", "rates"]) handlers[n] = (await import(`../api/${n}.js`)).default;
 
 // ---- 가짜 구글 드라이브 내려받기(/api/file 이 서버에서 받는 것) — 시트(자료 목록)는 진짜를 읽는다
 const FAKE_PNG = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(300, 7)]);
@@ -906,6 +906,127 @@ console.log("[8] 내 메모 — PC·일정관리기 메모를 웹에서 보기(�
   await ctx.close();
 }
 
+console.log("[9] v1.34.2 — 수입차 프로모션(읽기 전용) · 수당계산기");
+{
+  // 수당율 — 같은 공개 시트의 '수당율' 탭(진짜를 읽는다)
+  const rrows = await sheet.readRates();
+  ok("수당율 탭을 읽는다(브랜드 · 차종 · 수당율 · 화물차)", rrows.length > 20 && rrows.some((r) => r[0] === "현대")
+     && rrows.some((r) => r[0] === "기아"), rrows.length);
+  let hit = false;
+  try { await sheet.readRates(async () => new Response("<html>", { status: 200, headers: { "content-type": "text/html" } })); }
+  catch (e) { hit = e instanceof sheet.NotPublic; }
+  ok("잠긴 시트(HTML)면 수당율도 NotPublic", hit);
+  let [rst, rj] = await api("/api/rates");
+  ok("/api/rates — 200 · 줄 그대로", rst === 200 && Array.isArray(rj.rows) && rj.rows.length === rrows.length, rst);
+  const CM = await import("../public/commission.js");
+  const RATES = CM.parseRates(rj.rows);
+  ok("일정관리기와 같은 풀이(commission.js)로 현대·기아", RATES && RATES.hyundai.length > 10 && RATES.kia.length > 10);
+  // 같은 파일인가(일정관리기 웹의 것을 그대로 쓴다)
+  for (const f of ["promo.js", "commission.js", "fmt.js", "hangul.js"]) {
+    const mine = path.join(ROOT, "public", f), theirs = path.join(ROOT, "..", "..", "web", "js", f);
+    if (fs.existsSync(theirs)) ok(`${f} — 일정관리기 웹과 같은 파일`, fs.readFileSync(mine, "utf-8") === fs.readFileSync(theirs, "utf-8"));
+  }
+  const vsrc = fs.readFileSync(path.join(ROOT, "public", "views.js"), "utf-8");
+  ok("프로모션 화면은 GET 만(method 를 바꾸는 줄이 없다)", !/method\s*:/.test(vsrc) && vsrc.includes('readOnlyGuard("GET"'));
+
+  const FX = JSON.parse(fs.readFileSync(path.join(ROOT, "verify", "promo_fixture.json"), "utf-8"));
+  const PID = "1W8maHjHzkyEf2QgAPi5agvHp08OLYRvMa-A9TPRl6-M";
+  const ctx = await browser.newContext({ viewport: { width: 412, height: 860 }, serviceWorkers: "block",
+                                         permissions: ["clipboard-read", "clipboard-write"] });
+  let tokMode = "none";                         // none(로그인 전) · old(예전 로그인 — 시트 권한 없음) · ok
+  await ctx.route("**/api/auth/token", (r) => tokMode === "none"
+    ? r.fulfill({ status: 401, json: { error: "signin" } })
+    : r.fulfill({ json: { access_token: "kb-at", expires_in: 3600, email: "me@x.com", missing: [], sheets: tokMode === "ok" } }));
+  const preq = [];
+  await ctx.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    preq.push([r.request().method(), u]);
+    if (!u.includes(PID)) return r.fulfill({ status: 404, json: {} });
+    if (u.includes("/values/")) return r.fulfill({ json: { values: FX.values } });
+    return r.fulfill({ json: { sheets: [{ properties: { title: "수입차 프로모션", sheetId: 1350310028 },
+      merges: FX.merges.map(([a, b, c, d]) => ({ startRowIndex: a, endRowIndex: b, startColumnIndex: c, endColumnIndex: d })) }] } });
+  });
+  await ctx.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [] } }));
+  const pg = await ctx.newPage();
+  const errs = [];
+  pg.on("pageerror", (e) => errs.push(String(e)));
+  await pg.goto(BASE + "/");
+  await pg.waitForSelector("#list button.row");
+  const tabs = await pg.locator("#views button").allTextContents();
+  ok("위 메뉴 — 자료검색 · 수입차 프로모션 · 수당계산기", tabs.join(",") === "자료검색,수입차 프로모션,수당계산기", tabs.join(","));
+
+  // 수당계산기 — 로그인 없이
+  await pg.click('#views button[data-v="calc"]');
+  await pg.waitForSelector("#calc-view:not([hidden])");
+  ok("수당계산기로 바꾸면 자료검색은 숨는다", !(await pg.locator("#split").isVisible()));
+  await pg.waitForFunction(() => /회사 시트/.test(document.querySelector("#csrc").textContent));
+  await pg.fill("#ccar", "ㄱㄹㅈ");
+  const cars = await pg.locator("#ccars .t").allTextContents();
+  ok("차종 초성 검색(ㄱㄹㅈ → 그랜저)", cars.length >= 1 && cars.every((c) => c.includes("그랜저")), cars.join(","));
+  await pg.locator("#ccars button").first().click();
+  await pg.fill("#cprice", "50000000");
+  const shown = await pg.locator("#cprice").inputValue();
+  const pick = RATES.hyundai.find((x) => x[0] === cars[0]);
+  const want = CM.calc(50000000, pick[1], pick[2], 70, false);
+  const res = await pg.locator("#cres").innerText();
+  ok("차량가는 1,000 단위로 · 결과는 일정관리기와 같은 계산", shown === "50,000,000" && res === "₩ " + want.toLocaleString("ko-KR"),
+     `${shown} ${res} (정답 ${want})`);
+  await pg.click("#ccopy");
+  const ctext = await pg.evaluate(() => navigator.clipboard.readText());
+  ok("결과 복사", ctext.includes(`현대 ${cars[0]}`) && ctext.includes(`최종 지급수수료 ${want.toLocaleString("ko-KR")}원`), ctext);
+  await pg.check("#cfree");
+  ok("면세 차량", (await pg.locator("#cres").innerText()) === "₩ " + CM.calc(50000000, pick[1], pick[2], 70, true).toLocaleString("ko-KR"));
+  await pg.fill("#ccar", "");
+  await pg.click('#cbrand button[data-b="kia"]');
+  ok("기아로 바꾸면 기아 차종", (await pg.locator("#ccars .t").allTextContents()).some((t) => /K5|쏘렌토|카니발/.test(t)));
+
+  // 수입차 프로모션 — 로그인 전
+  await pg.click('#views button[data-v="promo"]');
+  await pg.waitForSelector("#promo-login");
+  ok("프로모션 — 로그인 전엔 로그인 안내(시트 보기만 한다고 알린다)",
+     /로그인이 필요/.test(await pg.locator("#promolist").innerText()) && /보기만/.test(await pg.locator("#promolist").innerText()));
+  // 예전 로그인(시트 권한 없음) — 동기화는 그대로, 프로모션만 다시 로그인 안내
+  tokMode = "old";
+  await pg.evaluate(() => localStorage.setItem("kbsearch:acct:v1", "me@x.com"));
+  await pg.click("#promo-reload");
+  await pg.waitForFunction(() => /보기 권한/.test(document.querySelector("#promolist").textContent));
+  ok("예전 로그인 — '스프레드시트 보기' 를 체크하라고 안내", /스프레드시트 보기/.test(await pg.locator("#promolist").innerText()));
+  ok("권한이 없으면 시트에 묻지도 않는다", preq.length === 0, preq.length);
+  // 새 로그인(시트 보기 권한 있음)
+  tokMode = "ok";
+  await pg.click("#promo-reload");
+  await pg.waitForSelector("#promolist .prow");
+  ok("브랜드마다 덩어리 3개", (await pg.locator("#promolist .promoblk").count()) === 3);
+  const chips = await pg.locator("#promobrands button").allTextContents();
+  ok("브랜드 단추", chips.join(",") === "전체,벤츠,BMW,아우디", chips.join(","));
+  await pg.fill("#promoq", "x5");
+  await pg.waitForTimeout(300);
+  const xs = await pg.locator("#promolist .prow .pm").allTextContents();
+  ok("'x5' → BMW X5", xs.join("|") === "X5 30d M Spt [26MY]", xs.join("|"));
+  const labs = await pg.locator("#promolist .prow .pv i").allTextContents();
+  ok("칸 이름 = BMW 4행 제목(현금 · 제휴사)", labs.includes("현금") && labs.includes("제휴사"), labs.join(","));
+  await pg.locator("#promolist .prow").first().click();
+  const ptext = await pg.evaluate(() => navigator.clipboard.readText());
+  ok("줄을 누르면 한 줄 복사", ptext.startsWith("X5 30d M Spt [26MY] · 차량가 120,000,000"), ptext);
+  ok("프로모션 시트로는 GET 만 나갔다(읽기 전용)", preq.length >= 2 && preq.every(([m]) => m === "GET"),
+     preq.map(([m]) => m).join(","));
+  const blocked = await pg.evaluate(async () => {
+    const P = await import("/promo.js");
+    try { P.readOnlyGuard("POST", `https://sheets.googleapis.com/v4/spreadsheets/${P.DEF_SHEET_ID}/values:batchUpdate`); return "보냄"; }
+    catch (e) { return e.constructor.name; }
+  });
+  ok("쓰기 요청은 보내기 전에 막힌다", blocked === "ReadOnlySheet", blocked);
+  // 다시 열어도 마지막 화면(프로모션)과 받아 둔 표
+  await pg.reload();
+  await pg.waitForSelector("#promo-view:not([hidden])");
+  ok("다시 열면 마지막에 본 화면", await pg.locator("#promo-view").isVisible() && !(await pg.locator("#split").isVisible()));
+  await pg.click('#views button[data-v="kb"]');
+  ok("자료검색으로 돌아온다", await pg.locator("#split").isVisible() && !(await pg.locator("#promo-view").isVisible()));
+  ok("프로모션·수당 — 스크립트 오류 없음", errs.length === 0, errs.join(" | "));
+  await pg.screenshot({ path: path.join(process.env.SHOT_DIR || "/tmp", "kbweb-kb-after.png") });
+  await ctx.close();
+}
+
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on("dialog", (d) => d.accept());
 await page.goto(BASE + "/");
@@ -931,6 +1052,8 @@ const p2 = await browser.newPage();
 await p2.goto(BASE + "/");
 await p2.waitForSelector("#off:not([hidden])");
 ok("다른 사람이 열어도 꺼짐 안내만", await p2.locator("#off").isVisible() && !(await p2.locator("#split").isVisible()));
+ok("꺼지면 위 메뉴(프로모션·수당)도 숨는다", !(await p2.locator("#views").isVisible())
+   && !(await p2.locator("#promo-view").isVisible()) && !(await p2.locator("#calc-view").isVisible()));
 await p2.screenshot({ path: path.join(process.env.SHOT_DIR || "/tmp", "kbweb-off.png") });
 await page.click("#btn-on");
 await page.waitForSelector("#admin-state.on");
