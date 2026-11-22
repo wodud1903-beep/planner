@@ -2902,6 +2902,83 @@ ok("레일이 세로로 선다", rail.w < 200, Math.round(rail.w) + "px");
 ok("레일이 본문 왼쪽에 붙는다", rail.x < rail.bodyX,
    `rail=${Math.round(rail.x)} body=${Math.round(rail.bodyX)}`);
 
+
+console.log("\n[31] v1.35.2 — 이름이 같은 '고객정보' 가 여럿: 내 드라이브 바로 밑 것 · 예전에 잘못 찾아 둔 것은 버린다");
+{
+  // 지점장: "모바일에서는 고객서류가 잘 나오는데 PC 웹에서는 폴더가 안 나와." — 드라이브에 '고객정보' 가 다섯 개.
+  // 예전 규칙(가장 최근 수정)은 '계약고객' 하나 든 옛 복사본을 골랐고, 그 결과를 저장본(driveTop)에 두고 계속 썼다.
+  const F = "application/vnd.google-apps.folder";
+  for (const [ref, label] of [["고객정보", "이름"], ["G:\\내 드라이브\\고객정보", "PC 경로(G:\\내 드라이브\\…)"]]) {
+    const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await c.addInitScript(([ref]) => {
+      sessionStorage.setItem("planner.tok", JSON.stringify({
+        token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+      if (sessionStorage.getItem("seeded31")) return;
+      sessionStorage.setItem("seeded31", "1");
+      const req = indexedDB.open("planner", 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        for (const n of ["meta", "data"]) if (!db.objectStoreNames.contains(n)) db.createObjectStore(n);
+        if (!db.objectStoreNames.contains("recent")) db.createObjectStore("recent", { keyPath: "uid" });
+      };
+      req.onsuccess = () => {
+        const t = req.result.transaction(["meta", "data"], "readwrite");
+        t.objectStore("meta").put(ref, "driveFolder");
+        // 예전 판이 잘못 찾아 둔 것(규칙 표시 없음)
+        t.objectStore("data").put({ rootId: "OLD_COPY", ref, at: 1,
+          items: [{ id: "K1", name: "계약고객", mimeType: "application/vnd.google-apps.folder" }] }, "driveTop");
+      };
+    }, [ref]);
+    const qs = [];
+    await c.route("**/accounts.google.com/**", (r) => r.abort());
+    await c.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+    await c.route("**/www.googleapis.com/drive/v3/**", (r) => {
+      const u = decodeURIComponent(r.request().url());
+      if (u.includes("appDataFolder")) return r.fulfill({ json: { files: [] } });
+      if (u.includes("name='고객정보'")) {
+        qs.push(u);
+        return r.fulfill({ json: { files: u.includes("'root' in parents") ? [{ id: "REAL" }]
+                                                                         : [{ id: "OLD_COPY" }, { id: "REAL" }] } });
+      }
+      if (u.includes("'REAL' in parents")) return r.fulfill({ json: { files: [
+        { id: "C1", name: "진정진 120i", mimeType: F }, { id: "C2", name: "최정현", mimeType: F }] } });
+      if (u.includes("'OLD_COPY' in parents")) return r.fulfill({ json: { files: [{ id: "K1", name: "계약고객", mimeType: F }] } });
+      return r.fulfill({ json: { files: [] } });
+    });
+    const pq = await page(c);
+    await pq.goto(s2.url + "#/docs", { waitUntil: "networkidle" });
+    await pq.waitForFunction(() => document.querySelector("#dlist") &&
+      document.querySelector("#dlist").textContent.includes("최정현"), null, { timeout: 8000 }).catch(() => {});
+    const t = await pq.locator("#dlist").innerText();
+    ok(`${label}: PC 웹에서 내 드라이브\\고객정보 의 고객 폴더가 나온다`, t.includes("진정진 120i") && t.includes("최정현"), t.replace(/\s+/g, " "));
+    ok(`${label}: 옛 복사본('계약고객' 하나)은 안 나온다`, !t.includes("계약고객"));
+    ok(`${label}: 내 드라이브 바로 밑에서 먼저 찾는다`, qs.length > 0 && qs[0].includes("'root' in parents"), qs.length + "번");
+    const saved = await pq.evaluate(() => new Promise((res) => {
+      const req = indexedDB.open("planner");
+      req.onsuccess = () => {
+        const g = req.result.transaction("data").objectStore("data").get("driveTop");
+        g.onsuccess = () => res(g.result || null);
+      };
+    }));
+    ok(`${label}: 새 규칙으로 다시 저장한다`, saved && saved.rootId === "REAL" && saved.rule === 2, JSON.stringify(saved && { id: saved.rootId, rule: saved.rule }));
+    await c.close();
+  }
+  const segs = await (async () => {
+    const c = await browser.newContext();
+    const pq = await page(c);
+    await pq.goto(s2.url + "#/docs");
+    const r = await pq.evaluate(async () => {
+      const m = await import("./js/drive.js");
+      return [m.driveSegs(["G:", "내 드라이브", "영업", "고객정보"]), m.driveSegs(["My Drive", "고객정보"]),
+              m.driveSegs(["영업", "고객정보"]), m.driveSegs(["G:", "고객정보"])];
+    });
+    await c.close();
+    return r;
+  })();
+  ok("경로 앞머리(G: · 내 드라이브 · My Drive)를 뗀다", JSON.stringify(segs) ===
+     JSON.stringify([["영업", "고객정보"], ["고객정보"], ["영업", "고객정보"], ["고객정보"]]), JSON.stringify(segs));
+}
+
 await browser.close();
 await s2.close();
 console.log("\n" + (fails ? `${fails}건 실패` : "전부 통과"));

@@ -872,7 +872,7 @@ def _drive_escape(name: str) -> str:
 def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
     """폴더 이름(또는 id)으로 폴더 id 를 찾는다. 못 찾으면 빈 값.
 
-    이름이 같은 폴더가 여럿이면 가장 최근 것을 쓴다.
+    이름이 같은 폴더가 여럿이면 내 드라이브 바로 밑 것, 없으면 가장 최근 것을 쓴다.
     """
     folder = (folder or "").strip()
     if not folder:
@@ -884,19 +884,21 @@ def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
                          params={"fields": "id,mimeType"})
         if r.status_code == 200 and r.json().get("mimeType") == DRIVE_FOLDER_MIME:
             return folder
-    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
-                     params={
-                         "q": (f"name='{_drive_escape(folder)}'"
-                               f" and mimeType='{DRIVE_FOLDER_MIME}'"
-                               " and trashed=false"),
-                         "fields": "files(id,name,modifiedTime)",
-                         "orderBy": "modifiedTime desc",
-                         "pageSize": 10,
-                     })
-    if r.status_code != 200:
-        raise GoogleError(f"드라이브 폴더 조회 실패 (HTTP {r.status_code})")
-    files = r.json().get("files", [])
-    return files[0]["id"] if files else ""
+    # 이름이 같은 폴더가 여럿이면 **내 드라이브 바로 밑** 것이 먼저(v1.35.2). 폴더의 수정 시각은 안에 고객
+    # 폴더를 넣어도 바뀌지 않아, '가장 최근' 만 보면 옛 복사본('계약고객' 하나 든 것)을 골랐다.
+    for parent in ("root", ""):
+        q = (f"name='{_drive_escape(folder)}'"
+             f" and mimeType='{DRIVE_FOLDER_MIME}'"
+             " and trashed=false" + (f" and '{parent}' in parents" if parent else ""))
+        r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+                         params={"q": q, "fields": "files(id,name,modifiedTime)",
+                                 "orderBy": "modifiedTime desc", "pageSize": 10})
+        if r.status_code != 200:
+            raise GoogleError(f"드라이브 폴더 조회 실패 (HTTP {r.status_code})")
+        files = r.json().get("files", [])
+        if files:
+            return files[0]["id"]
+    return ""
 
 
 # 구글이 '너무 빨리 묻는다'(429)거나 잠깐 탈이 났을 때(5xx) 다시 물어보는 횟수.

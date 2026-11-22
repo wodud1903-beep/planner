@@ -75,16 +75,36 @@ export async function folderId(ref) {
   }
   if (p.kind === "path") {
     // 내 드라이브 맨 위에서부터 한 칸씩 내려간다. 못 찾으면(옮겼거나 이름을 바꿨으면) 마지막 이름으로라도.
+    // 'G:' · '내 드라이브' 는 PC 경로의 앞머리라 건너뛴다(v1.35.2 — 예전엔 'G:' 에서 막혀 늘 이름으로만 찾았다)
+    const segs = driveSegs(p.segs);
+    if (!segs.length) return "";
     let parent = "root";
-    for (const seg of p.segs) {
+    for (const seg of segs) {
       const id = await childFolder(seg, parent);
       if (!id) { parent = ""; break; }
       parent = id;
     }
     if (parent && parent !== "root") return parent;
-    return childFolder(p.segs[p.segs.length - 1], "");
+    return folderByName(segs[segs.length - 1]);
   }
-  return childFolder(p.value, "");
+  return folderByName(p.value);
+}
+
+const MY_DRIVE = new Set(["내 드라이브", "my drive", "google drive"]);
+/** PC 경로 조각에서 드라이브 문자(G:)와 '내 드라이브' 까지를 떼어 낸다 → 내 드라이브 기준 경로. */
+export function driveSegs(segs) {
+  const xs = (segs || []).map((x) => String(x).trim()).filter(Boolean);
+  let i = -1;
+  xs.forEach((x, k) => { if (MY_DRIVE.has(x.toLowerCase())) i = k; });
+  const out = i >= 0 ? xs.slice(i + 1) : xs;
+  return out.filter((x, k) => !(k === 0 && /^[A-Za-z]:$/.test(x)));
+}
+
+/** 이름으로 폴더 찾기 — **내 드라이브 바로 밑** 것이 먼저, 없으면 어디든 가장 최근 것.
+ *  ⚠️ 지점장 드라이브에 '고객정보' 가 다섯 개 있었다(복사본·옛 백업). 폴더의 '수정 시각' 은 안에 고객
+ *     폴더를 넣어도 바뀌지 않아, '가장 최근' 만 보면 '계약고객' 하나 든 옛 폴더를 골랐다(PC 웹 — v1.35.2). */
+async function folderByName(name) {
+  return (await childFolder(name, "root")) || childFolder(name, "");
 }
 
 // 이름이 같은 폴더가 여럿이면 가장 최근 것 — 파이썬 쪽과 같은 규칙이다. parent 가 있으면 그 바로 밑에서만.
