@@ -625,3 +625,138 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 .promoblk .pchg { margin: -4px 0 8px; font-size: 13px; font-weight: 600; color: var(--warn); }
 .promoblk .pnote { white-space: pre-wrap; font-size: 13px; line-height: 1.55;
   background: var(--warn-bg); border-radius: 10px; border-bottom: 0; margin: 4px 0; padding: 10px 12px; }
+
+/* ---- 자료검색 — 업무자료검색 웹(kbsearch)과 같은 모양(v1.35.3) ----
+   왼쪽 흰 카드: 검색칸(돋보기 · '/') · 분류 칩(건수) · 두 줄 목록(분류 글자 · 제목 / 금융사 · 분류 · 📎) · 아래 건수.
+   오른쪽 흰 카드: 고르기 전엔 안내, 고르면 머리(분류 글자 · 제목 · 꼬리표) · 본문 상자 · 단추 · 첨부.
+   색은 이 앱의 테마 값에서 만든다(color-mix) — 밝게·따뜻하게·어둡게 모두 맞는다. */
+.kbv {
+  --kb-soft: color-mix(in srgb, var(--bg) 70%, var(--card));
+  --kb-faint: color-mix(in srgb, var(--sub) 70%, var(--card));
+  --kb-r: 20px; --kb-rm: 14px;
+}
+.kbv .c-violet { --c: #6247d6; } .kbv .c-blue { --c: #2c6fb5; } .kbv .c-green { --c: #2e7d32; }
+.kbv .c-orange { --c: #a35f0d; } .kbv .c-pink { --c: #b83b75; } .kbv .c-gray { --c: #5a6b7c; }
+.kbv .av, .kbv .tag:not(.plain):not(.edited) {
+  background: color-mix(in srgb, var(--c, #5a6b7c) 14%, var(--card));
+  color: color-mix(in srgb, var(--c, #5a6b7c) 78%, var(--text));
+}
+.kbcard {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--kb-r);
+  box-shadow: var(--shadow); display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  margin: 12px;
+}
+.kbsearch { position: relative; display: block; margin: 16px 16px 10px; }
+.kbsearch svg { position: absolute; left: 14px; top: 50%; width: 18px; height: 18px; transform: translateY(-50%);
+  fill: none; stroke: var(--kb-faint); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.kbsearch input {
+  width: 100%; height: 46px; padding: 0 40px 0 42px; border-radius: var(--kb-rm); font: inherit; font-size: 15.5px;
+  border: 1px solid transparent; background: var(--kb-soft); color: var(--text); outline: none;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.kbsearch input::placeholder { color: var(--kb-faint); }
+.kbsearch input:focus { background: var(--card); border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+.kbsearch .hotkey {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font: 600 11.5px system-ui, sans-serif; color: var(--kb-faint); border: 1px solid var(--edge);
+  border-radius: 6px; padding: 1px 7px; background: var(--card);
+}
+.kbsearch input:focus ~ .hotkey, .kbsearch input:not(:placeholder-shown) ~ .hotkey { display: none; }
+@container (max-width: 639px) { .kbsearch .hotkey { display: none; } }
+.kbmebtn {
+  flex: none; margin-left: auto; min-height: 30px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--card); color: var(--accent-text); font: inherit; font-size: 12.5px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+}
+.kbmebtn:hover { background: var(--kb-soft); }
+.kbchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 12px; flex: none; }
+.kbchips button {
+  white-space: nowrap; border: 1px solid var(--line); background: var(--card); color: var(--sub);
+  border-radius: 999px; padding: 0 13px; min-height: 32px; font: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: background .15s, color .15s;
+}
+.kbchips button:hover { background: var(--kb-soft); }
+.kbchips button[aria-pressed="true"] { background: var(--accent-bg); border-color: transparent;
+  color: var(--accent-text); font-weight: 700; }
+.kbchips .n { font-size: 11.5px; opacity: .7; margin-left: 4px; }
+.kblist { list-style: none; margin: 0; padding: 2px 10px 10px; flex: 1; overflow: auto; scrollbar-width: thin; }
+.kblist li + li { margin-top: 2px; }
+.kblist button.row {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer;
+  border: 0; background: none; padding: 10px 12px; border-radius: var(--kb-rm); color: var(--text); font: inherit;
+  min-height: 56px; transition: background .12s;
+}
+.kblist button.row:hover { background: var(--kb-soft); }
+.kblist button.row[aria-current="true"] { background: var(--accent-bg); }
+.kblist button.row[aria-current="true"] .t { color: var(--accent-text); }
+.kblist .tx { min-width: 0; flex: 1; }
+.kblist .t { display: block; font-size: 15px; font-weight: 600; line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kblist .s { display: block; font-size: 12.5px; color: var(--sub); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kblist .clip { color: var(--kb-faint); flex: none; }
+.kblist .clip svg { width: 15px; height: 15px; display: block; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.kblist .mk { color: var(--warn); margin-right: 4px; }
+.kblist .minepill { font-style: normal; font-size: 11px; font-weight: 700; margin-left: 6px; padding: 0 6px;
+  border-radius: 999px; background: var(--accent-bg); color: var(--accent-text); }
+.kblist .empty-row { color: var(--sub); padding: 28px 12px; text-align: center; font-size: 14px; }
+.kbv .av {
+  flex: none; width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center;
+  font-size: 14px; font-weight: 700;
+}
+.kbfoot { display: flex; align-items: center; gap: 7px; margin: 0; padding: 8px 12px 8px 18px;
+  font-size: 12.5px; color: var(--sub); border-top: 1px solid var(--line); flex: none; }
+.kbfoot .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--edge); flex: none; }
+.kbfoot.live .dot { background: #3cb371; box-shadow: 0 0 0 3px rgb(60 179 113 / .15); }
+
+/* 오른쪽 */
+.split.kbv > .right > .kbright { border: 1px solid var(--line); border-radius: var(--kb-r); padding: 26px 30px 36px; }
+.kbright .hello { min-height: 62vh; display: grid; place-content: center; justify-items: center; text-align: center; gap: 2px; padding: 24px; }
+.kbright .hello-icon { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center;
+  background: var(--accent-bg); color: var(--accent); margin-bottom: 10px; }
+.kbright .hello-icon svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.kbright .hello h2 { margin: 0; font-size: 18px; }
+.kbright .hello p { margin: 6px 0 0; color: var(--sub); font-size: 14px; line-height: 1.7; }
+.kbright .hello b { color: var(--accent-text); background: var(--accent-bg); border-radius: 6px; padding: 1px 6px; font-weight: 600; }
+@container (max-width: 639px) { .kbright .hello { display: none; } }
+.kbright .backbtn { margin-bottom: 14px; }
+.kbright .dhead { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
+.kbright .dhead .av { width: 48px; height: 48px; border-radius: 15px; font-size: 18px; }
+.kbright .dhead h2 { margin: 0; font-size: 22px; line-height: 1.3; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.kbright .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.kbright .tag { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 10px; }
+.kbright .tag.plain { background: var(--kb-soft); color: var(--sub); font-weight: 500; }
+.kbright .tag.edited { background: var(--accent-bg); color: var(--accent-text); }
+.kbright .note { background: var(--warn-bg); color: var(--text); border-radius: 10px; padding: 9px 12px; font-size: 13.5px; margin: 0 0 12px; }
+.kbright #kbbodybox > .kbbody { background: var(--kb-soft); border: 1px solid var(--line); border-radius: var(--kb-rm);
+  padding: 18px 20px; line-height: 1.75; font-size: 15px; }
+.kbright .kbbody .kbhead { color: var(--accent); font-size: 15.5px; margin: 6px 0 4px; }
+.kbright .kbbody .kbline { margin: 0; }
+.kbright .kbbody .kbsep { border-top-color: var(--edge); margin: 14px 0 10px; }
+.kbacts { display: flex; gap: 8px; margin: 16px 0 26px; flex-wrap: wrap; }
+.kbbtn {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 18px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-size: 14.5px;
+  font-weight: 600; cursor: pointer;
+}
+.kbbtn:hover { background: var(--kb-soft); }
+.kbbtn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.kbbtn.primary { background: var(--primary); border-color: transparent; color: var(--on-accent);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 28%, transparent); }
+.kbbtn.primary:hover { filter: brightness(1.06); background: var(--primary); }
+.kbbtn[aria-pressed="true"] { color: var(--warn); }
+.kbbtn:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.kbright > .kbhead { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); margin: 0 0 12px; }
+
+@container (min-width: 640px) {
+  .split.kbv > .left { overflow: hidden; display: flex; flex-direction: column; }
+  .split.kbv > .left > .kbcard { flex: 1; margin: 12px 0 14px 14px; }
+  .split.kbv > .right > .kbright { margin: 12px 14px 14px 12px; min-height: calc(100% - 26px); }
+}
+@container (max-width: 639px) {
+  .kbcard { margin: 10px 10px 14px; }
+  .kblist { overflow: visible; }
+  .split.kbv > .right > .kbright { margin: 10px; padding: 18px 16px 28px; }
+  .kbright .dhead h2 { font-size: 19px; }
+}

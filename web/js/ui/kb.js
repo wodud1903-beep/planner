@@ -24,35 +24,27 @@ let _timer = 0;
 
 const SEARCH_DELAY = 130;   // 타자가 멎으면 찾는다. 한 자마다 훑으면 밀린다.
 
-// 즐겨찾기 · 최근 본 자료(v1.35 — PC 자료검색과 같은 모양). 이 기기에 둔다(자료 제목으로 가리킨다).
-// 검색어 없이 '전체' 를 볼 때 즐겨찾기(★) → 최근 본 것(🕘) → 나머지 차례로 보여 준다.
-const RECENT_MAX = 5;
+// 즐겨찾기(v1.35 — PC 자료검색과 같은 모양). 이 기기에 둔다(자료 제목으로 가리킨다).
+// 검색어 없이 '전체' 를 볼 때 즐겨찾기(★) → 나머지 차례로 보여 준다.
+// (v1.35.3 — 지점장: 맨 위의 '최근 본 자료(🕘)' 는 없앤다. 예전에 적어 둔 kbRecent 는 쓰지 않는다)
 let _favs = [];
-let _recent = [];
 let _marksLoaded = false;
 async function loadMarks() {
   const f = await store.get("meta", "kbFavs");
-  const r = await store.get("meta", "kbRecent");
   _favs = Array.isArray(f) ? f.filter((x) => typeof x === "string") : [];
-  _recent = Array.isArray(r) ? r.filter((x) => typeof x === "string").slice(0, RECENT_MAX) : [];
   _marksLoaded = true;
 }
-export const markOf = (it) => (_favs.includes(it.title) ? "★" : _recent.includes(it.title) ? "🕘" : "");
-/** 즐겨찾기(고른 차례) → 최근 본 것 → 나머지(원래 차례). */
+export const markOf = (it) => (_favs.includes(it.title) ? "★" : "");
+/** 즐겨찾기(고른 차례) → 나머지(원래 차례). */
 export function arrange(hits) {
   const byTitle = new Map();
   for (const it of hits) if (!byTitle.has(it.title)) byTitle.set(it.title, it);
   const head = [], seen = new Set();
-  for (const t of [..._favs, ..._recent]) {
+  for (const t of _favs) {
     const it = byTitle.get(t);
     if (it && !seen.has(it)) { head.push(it); seen.add(it); }
   }
   return [...head, ...hits.filter((it) => !seen.has(it))];
-}
-async function touch(it) {
-  if (!it || !it.title) return;
-  _recent = [it.title, ..._recent.filter((t) => t !== it.title)].slice(0, RECENT_MAX);
-  await store.put("meta", "kbRecent", _recent);
 }
 async function toggleFav(it) {
   const on = !_favs.includes(it.title);
@@ -126,20 +118,25 @@ export async function screen(m) {
   const ui = await store.ui();
   _q = ui.kbQuery || "";
   _cat = ui.kbCat || "";
+  // 모양은 업무자료검색 웹(kbsearch)과 같게(v1.35.3) — 왼쪽 흰 카드(검색칸 · 분류 칩(건수) · 두 줄 목록 · 아래 건수),
+  // 오른쪽 흰 카드(고르기 전엔 안내 · 고르면 머리(분류 글자) · 꼬리표 · 본문 상자 · 단추).
   setBody(html`
-    <div class="split" id="kbsplit">
+    <div class="split kbv" id="kbsplit">
       <div class="left">
-        <div class="pane">
-          <div class="searchbar">
+        <div class="kbcard">
+          <label class="kbsearch">
+            ${raw(SEARCH_ICON)}
             <input id="kbq" type="search" placeholder="캐피탈·서류·연락처 검색 (초성도 됩니다)"
-                   value="${_q}" autocomplete="off" enterkeyhint="search">
-            <button class="chip" id="kbme" title="자료 본문의 '내 팩스' 자리에 들어갈 내 정보">내 정보</button>
-          </div>
-          <div class="cats" id="kbcats"></div>
-          <ul class="list" id="kblist"></ul>
+                   value="${_q}" autocomplete="off" enterkeyhint="search" aria-label="검색">
+            <kbd class="hotkey" aria-hidden="true">/</kbd>
+          </label>
+          <div class="kbchips" id="kbcats" role="toolbar" aria-label="분류"></div>
+          <ul class="kblist" id="kblist" aria-live="polite"></ul>
+          <div class="kbfoot" id="kbfoot"><span class="dot"></span><span id="kbfoottext">자료를 받는 중…</span>
+            <button class="kbmebtn" id="kbme" title="자료 본문의 '내 팩스' 자리에 들어갈 내 정보">내 정보</button></div>
         </div>
       </div>
-      <div class="right"><div class="pane" id="kbdetail"></div></div>
+      <div class="right"><div class="pane kbright" id="kbdetail">${raw(HELLO)}</div></div>
     </div>`);
   attach($("#kbsplit"), "kb");
 
@@ -156,6 +153,20 @@ export async function screen(m) {
   input.addEventListener("compositionend", () => { clearTimeout(_timer); run(); });
 
   $("#kbme").onclick = () => openMe();
+  // PC 에서 '/' 를 누르면 검색칸으로(업무자료검색 웹과 같다) — 다른 칸에 쓰는 중이면 그대로
+  if (!_slashBound) {
+    _slashBound = true;
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      const q = $("#kbq");
+      if (!q) return;
+      e.preventDefault();
+      q.focus();
+      q.select();
+    });
+  }
   if (!_marksLoaded) await loadMarks();
   paintCats();
   paintList();
@@ -168,15 +179,20 @@ export async function screen(m) {
 function paintCats() {
   const box = $("#kbcats");
   if (!box) return;
-  const cats = ["", ...kb.CATEGORIES.filter((c) =>
-    _items.some((it) => (it.category || "") === c))];
+  const count = (c) => _items.filter((it) => (it.category || "") === c).length;
+  const used = kb.CATEGORIES.filter((c) => count(c));
+  // 정해 둔 분류 밖의 것도 칩으로(업무자료검색 웹과 같다 — 예전엔 빠져서 그 자료는 '전체' 에서만 보였다)
+  const extra = [...new Set(_items.map((it) => it.category || "").filter((c) => c && !used.includes(c)))];
+  const cats = ["", ...used, ...extra];
   // 내 계정에서 고친 자료가 있으면 그것만 모아 보는 단추(v1.32)
   const mine = _items.filter((it) => it._local).length;
   if (mine) cats.push(MINE);
   else if (_cat === MINE) _cat = "";
+  if (_cat && !cats.includes(_cat)) _cat = "";
   render(box, cats.map((c) =>
-    html`<button data-cat="${c}" aria-pressed="${String(c === _cat)}">${
-      c === MINE ? `내가 고친 것 ${mine}` : c || "전체"}</button>`
+    html`<button data-cat="${c}" aria-pressed="${String(c === _cat)}"${raw(c === MINE ? ' class="mine"' : "")}>${
+      c === MINE ? "내가 고친 것" : c || "전체"}<span class="n">${String(
+      c === MINE ? mine : c ? count(c) : _items.length)}</span></button>`
   ).join(""));
   for (const b of $$("#kbcats button")) {
     b.onclick = () => {
@@ -193,19 +209,24 @@ function paintList() {
   if (!el) return;
   let hits = _cat === MINE ? kb.search(_idx, _q, "").filter((it) => it._local) : kb.search(_idx, _q, _cat);
   if (!_q.trim() && !_cat) hits = arrange(hits);
+  paintFoot();
   if (!hits.length) {
-    render(el, html`<li class="empty">${_items.length
-      ? "찾는 자료가 없습니다." : "자료를 불러오는 중입니다…"}</li>`);
+    render(el, html`<li class="empty-row">${raw(_items.length
+      ? "찾는 자료가 없습니다.<br>다른 말이나 초성으로 찾아 보세요." : "자료를 불러오는 중입니다…")}</li>`);
     return;
   }
+  const cur = curIndex();
   render(el, hits.map((it) => {
     const i = _items.indexOf(it);
-    const sub = [it.finance, it.category, it._local ? "내 계정에서 고침" : ""].filter(Boolean).join(" · ");
+    const fin = (it.finance || "").trim() === (it.title || "").trim() ? "" : it.finance;
+    const sub = [fin, it.category].filter(Boolean).join(" · ");
     const mk = markOf(it);
-    return html`<li><button class="row" data-i="${i}">
-        <span class="t">${raw(mk ? `<span class="mk${mk === "★" ? " fav" : ""}">${mk}</span>` : "")}${it.title}</span>
-        ${raw(sub ? `<span class="s">${esc2(sub)}</span>` : "")}
-      </button></li>`;
+    const clip = (it.files || []).length ? `<span class="clip" title="첨부 있음">${CLIP_ICON}</span>` : "";
+    return html`<li><button class="row" data-i="${i}" aria-current="${String(i === cur)}">
+        <span class="av ${colorOf(it.category)}" aria-hidden="true">${initial(it.category)}</span>
+        <span class="tx"><span class="t">${raw(mk ? `<span class="mk fav">${mk}</span>` : "")}${it.title}</span>${raw(
+          sub || it._local ? `<span class="s">${esc2(sub)}${it._local ? '<i class="minepill">내 계정에서 고침</i>' : ""}</span>` : "")}</span>
+        ${raw(clip)}</button></li>`;
   }).join(""));
   for (const b of $$("#kblist button.row")) {
     b.onclick = () => router.go("/kb/" + b.dataset.i);
@@ -214,34 +235,78 @@ function paintList() {
 const esc2 = (s) => String(s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// 분류마다 색 — 업무자료검색 웹과 같은 짝(v1.35.3)
+const COLORS = { "심사서류": "violet", "캐피탈": "blue", "전자약정": "green",
+                 "연락처": "orange", "진행절차": "pink", "기타": "gray" };
+const colorOf = (cat) => "c-" + (COLORS[cat] || "gray");
+const initial = (cat) => (cat || "자").trim().charAt(0) || "자";
+const SEARCH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>';
+const CLIP_ICON = '<svg viewBox="0 0 24 24"><path d="M20 11.5 12.2 19.3a5 5 0 0 1-7.1-7.1l8.1-8.1a3.3 3.3 0 0 1 4.7 4.7l-8 8a1.7 1.7 0 0 1-2.4-2.4l7.3-7.3"/></svg>';
+const COPY_ICON = '<svg viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></svg>';
+const EDIT_ICON = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>';
+const HELLO = `<div class="hello">
+  <span class="hello-icon" aria-hidden="true">${SEARCH_ICON}</span>
+  <h2>찾을 자료를 골라 주세요</h2>
+  <p>왼쪽 목록에서 고르면 본문과 첨부가 여기에 보입니다.<br>초성으로도 찾을 수 있어요 — 예: <b>ㄱㅇ ㅅㅅㅅㄹ</b></p>
+</div>`;
+let _slashBound = false;
+
+/** 지금 열어 둔 자료(주소 #/kb/N) — 목록에서 그 줄을 칠한다. */
+function curIndex() {
+  const c = router.current();
+  const m = c && c.path.match(/^\/kb\/(\d+)$/);
+  return m ? parseInt(m[1], 10) : -1;
+}
+
+/** 목록 아래 한 줄 — 자료 몇 건 · 언제 받았는지. */
+async function paintFoot() {
+  const el = $("#kbfoot");
+  if (!el) return;
+  const at = await store.get("meta", "kbSyncedAt");
+  const t = $("#kbfoottext");
+  if (!t) return;
+  if (!_items.length) { el.classList.remove("live"); t.textContent = "자료를 받는 중…"; return; }
+  const when = at ? new Date(at).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit" }) : "";
+  el.classList.add("live");
+  t.textContent = `업무자료 ${_items.length}건` + (when ? ` · ${when} 받음` : "");
+}
+
 export function showDetail(i) {
   const it = _items[i];
   const box = $("#kbdetail");
   const split = $("#kbsplit");
   if (!it || !box) return;
   if (split) split.classList.add("detail");
+  const fin = (it.finance || "").trim() === (it.title || "").trim() ? "" : it.finance;
+  for (const b of $$("#kblist button.row")) b.setAttribute("aria-current", String(+b.dataset.i === i));
   render(box, html`
     <button class="chip backbtn" id="kbback">← 목록</button>
-    <h2 style="margin:10px 0 2px">${it.title}</h2>
-    <p class="s" style="color:var(--sub);margin:0 0 10px">
-      ${[it.finance, it.category].filter(Boolean).join(" · ")}</p>
-    ${raw(it._local ? `<p class="s" id="kbmine" style="color:var(--accent);margin:0 0 10px">회사 공통 · 내 계정에서 고침 — 나만 보입니다</p>` : "")}
-    ${raw(it._stale ? `<p class="s" style="color:var(--sub);margin:0 0 10px">회사에서 이 자료를 새로 고쳤습니다. 새 내용으로 바꾸려면 [회사 자료로 되돌리기] 를 누르세요.</p>` : "")}
-    ${raw(it.body.includes("〔내 ") ? `<p class="s" style="margin:0 0 10px">내 정보가 비어 있는 자리가 있어요.
+    <div class="dhead">
+      <span class="av ${colorOf(it.category)}" aria-hidden="true">${initial(it.category)}</span>
+      <div>
+        <h2>${it.title}</h2>
+        <div class="tags">
+          ${raw(it.category ? `<span class="tag ${colorOf(it.category)}">${esc2(it.category)}</span>` : "")}
+          ${raw(fin ? `<span class="tag plain">${esc2(fin)}</span>` : "")}
+          ${raw(it._local ? '<span class="tag edited">공통 · 내 계정에서 고침</span>' : '<span class="tag plain">회사 공통</span>')}
+        </div>
+      </div>
+    </div>
+    ${raw(it._local ? `<p class="note" id="kbmine">회사 공통 · 내 계정에서 고침 — 나만 보입니다</p>` : "")}
+    ${raw(it._stale ? `<p class="note">회사에서 이 자료를 새로 고쳤습니다. 새 내용으로 바꾸려면 [회사 자료로 되돌리기] 를 누르세요.</p>` : "")}
+    ${raw(it.body.includes("〔내 ") ? `<p class="note">내 정보가 비어 있는 자리가 있어요.
       <button class="chip" id="kbmego">내 정보 적기</button></p>` : "")}
     <div id="kbbodybox">${raw(kb.bodyToHtml(it.body))}</div>
-    <p style="margin-top:16px">
-      <button class="chip" id="kbcopy">본문 복사</button>
-      <button class="chip" id="kbfav" aria-pressed="${String(_favs.includes(it.title))}"
+    <div class="kbacts">
+      <button class="kbbtn primary" id="kbcopy" ${(it.body || "").trim() ? "" : "disabled"}>${raw(COPY_ICON)}<span>본문 복사</span></button>
+      <button class="kbbtn" id="kbfav" aria-pressed="${String(_favs.includes(it.title))}"
               title="즐겨찾기에 넣으면 검색어 없이 볼 때 목록 맨 위에 둡니다">${_favs.includes(it.title) ? "★ 즐겨찾기" : "☆ 즐겨찾기"}</button>
-      <button class="chip" id="kbedit">내 계정에서만 고치기</button>
-      ${raw(it._local ? `<button class="chip" id="kbrevert">회사 자료로 되돌리기</button>` : "")}
-    </p>
+      <button class="kbbtn" id="kbedit" title="회사 자료는 그대로 두고 내 계정에서만 고칩니다">${raw(EDIT_ICON)}<span>내 계정에서만 고치기</span></button>
+      ${raw(it._local ? `<button class="kbbtn" id="kbrevert">회사 자료로 되돌리기</button>` : "")}
+    </div>
     ${raw(attachHtml(it.files || []))}
     <div id="kbview"></div>`);
   paintAttachments(it.files || []);
-  // 본 자료는 '최근 본 자료' 로(목록은 나중에 — 지금 보고 있는 줄이 움직이지 않게)
-  touch(it).catch(() => {});
   const fv = $("#kbfav");
   if (fv) fv.onclick = async () => {
     const on = await toggleFav(it);
@@ -264,7 +329,11 @@ export function showDetail(i) {
     }).catch(() => { btn.textContent = "복사 실패"; });
   };
   const c1 = $("#kbcopy");
-  if (c1) { c1.dataset.t = c1.textContent; c1.onclick = () => copy(it.body, c1); }
+  if (c1) {
+    const lb = $("span", c1) || c1;
+    lb.dataset.t = lb.textContent;
+    c1.onclick = () => copy(it.body, lb);
+  }
   // 체크리스트는 자료검색에 보여 주지 않는다(PC 와 같게) — 고객관리 서류 체크의 재료로만 쓴다
 }
 

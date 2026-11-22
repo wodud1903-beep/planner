@@ -2842,8 +2842,38 @@ console.log("\n[30] v1.35 — 폰 목록이 화면을 다 쓴다 · 메뉴 여�
   await pv.click("#kbback");
   await pv.waitForTimeout(300);
   const after = (await rows()).map((t) => t.trim());
-  ok("검색어 없이 보면 즐겨찾기 → 최근 본 것 → 나머지", after[0] === "★KB캐피탈" && after[1] === "🕘현대캐피탈",
-     after.join(" | "));
+  ok("검색어 없이 보면 즐겨찾기가 맨 위 · 본 자료는 올리지 않는다(최근 본 자료 없앰 — v1.35.3)",
+     after[0] === "★KB캐피탈" && !after.some((t) => t.includes("🕘"))
+     && JSON.stringify(after.slice(1)) === JSON.stringify(first.filter((t) => t !== "KB캐피탈")), after.join(" | "));
+  ok("최근 본 자료를 기기에 적지 않는다", (await pv.evaluate(() => new Promise((res) => {
+    const r = indexedDB.open("planner");
+    r.onsuccess = () => { const g = r.result.transaction("meta").objectStore("meta").get("kbRecent");
+                          g.onsuccess = () => res(g.result === undefined); };
+  }))));
+  // ---- v1.35.3 업무자료검색 웹과 같은 모양
+  ok("목록 줄 — 분류 글자 · 제목 · 아래 금융사·분류", (await pv.locator("#kblist button.row .av").count()) > 0
+     && (await pv.locator("#kblist button.row .tx .s").count()) > 0);
+  ok("분류 칩에 건수", /전체\s*\d+/.test(await pv.locator('#kbcats button[data-cat=""]').innerText()),
+     await pv.locator("#kbcats").innerText());
+  ok("목록 아래 자료 건수", (await pv.locator("#kbfoottext").innerText()).includes("건"));
+  ok("[내 정보] 단추는 그대로", await pv.locator("#kbme").isVisible());
+  await pv.setViewportSize({ width: 1366, height: 800 });
+  await pv.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pv.waitForSelector("#kblist button.row", { timeout: 8000 });
+  ok("PC 폭 — 고르기 전 오른쪽은 '찾을 자료를 골라 주세요'", (await pv.locator("#kbdetail .hello").isVisible())
+     && (await pv.locator("#kbdetail").innerText()).includes("찾을 자료를 골라 주세요"));
+  await pv.locator("#kblist button.row").first().click();
+  await pv.waitForSelector("#kbdetail .dhead", { timeout: 5000 });
+  ok("고르면 머리(분류 글자·제목·꼬리표) · 본문 상자 · 본문 복사(주 단추)",
+     (await pv.locator("#kbdetail .dhead .tags .tag").count()) >= 1 && (await pv.locator("#kbdetail .kbbody").count()) === 1
+     && (await pv.locator("#kbcopy.primary").count()) === 1);
+  ok("고른 줄을 칠한다", (await pv.locator('#kblist button.row[aria-current="true"]').count()) === 1);
+  await pv.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await pv.keyboard.press("/");
+  ok("'/' 를 누르면 검색칸으로", await pv.evaluate(() => document.activeElement && document.activeElement.id === "kbq"));
+  const ov = await pv.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  ok("가로로 넘치지 않는다", ov);
+  await pv.setViewportSize({ width: 412, height: 900 });
   // ---- P1 프로모션 바뀐 곳(같은 달 판끼리만)
   await pv.goto(s.url + "#/promo", { waitUntil: "networkidle" });
   await pv.waitForSelector("#promolist .prow", { timeout: 10000 });

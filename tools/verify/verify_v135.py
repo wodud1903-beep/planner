@@ -527,6 +527,7 @@ ok("K2 검색하면 칩 건수도 검색 결과로", view.cat_chips.texts()[0] =
 view.ed_find.setText("")
 view.flush_search()
 view._refilter()
+base_order = [view.lst.item(i).data(Qt.UserRole)["title"] for i in range(view.lst.count())]
 row_of = lambda title: [view.lst.item(i).data(Qt.UserRole)["title"] for i in range(view.lst.count())].index(title)  # noqa: E731
 view.lst.setCurrentRow(row_of("메리츠캐피탈 법인 서류"))
 view.btn_fav.click()
@@ -538,12 +539,13 @@ ok("K3 검색어 없이 보면 즐겨찾기가 맨 위", first == "메리츠캐�
 it_h = view.lst.item(row_of("하나캐피탈 중도상환 수수료"))
 view.lst.setCurrentItem(it_h)
 view.lst.itemClicked.emit(it_h)
+view._copy_body()
 view._refilter()
 order = [view.lst.item(i).data(Qt.UserRole)["title"] for i in range(view.lst.count())]
-ok("K3 누른 자료는 '최근 본 자료' 로 — 즐겨찾기 다음", order[:2] == ["메리츠캐피탈 법인 서류", "하나캐피탈 중도상환 수수료"], order)
-ok("K3 줄 앞 표시", kb_marks.mark_of(KB_ITEMS[3]) == "★" and kb_marks.mark_of(KB_ITEMS[2]) == "🕘")
-ok("K3 최근 본 자료는 이 PC 파일에", "하나캐피탈 중도상환 수수료" in _json.loads(
-    (config.data_dir() / "kb_recent.json").read_text(encoding="utf-8")))
+ok("K3 본 자료를 맨 위로 올리지 않는다(최근 본 자료 없앰 — v1.35.3)",
+   order[0] == "메리츠캐피탈 법인 서류" and order[1:] == [t for t in base_order if t != "메리츠캐피탈 법인 서류"], order)
+ok("K3 줄 앞 표시는 즐겨찾기(★)만", kb_marks.mark_of(KB_ITEMS[3]) == "★" and kb_marks.mark_of(KB_ITEMS[2]) == "")
+ok("K3 최근 본 자료 파일을 쓰지 않는다", not (config.data_dir() / "kb_recent.json").exists())
 view.lst.setCurrentRow(0)
 view.btn_fav.click()
 ok("K3 다시 누르면 뺀다", w.settings.kb_favs == [] and view.btn_fav.text().startswith("☆"))
