@@ -13,16 +13,16 @@ import re
 import threading
 from html import escape as _esc
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QMenu,
-    QAbstractItemView, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QSplitter, QTextBrowser,
-    QTextEdit, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QSplitter, QStyle, QStyledItemDelegate,
+    QStyleOptionViewItem, QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from . import config, crashlog, kb, kb_files, searchcombo, theme
+from . import chips, config, crashlog, kb, kb_files, kb_marks, searchcombo, theme
 from .clipfiles import file_mime
 from .kb_attach import AttachList, AttachViewer
 from .livesearch import LiveLineEdit
@@ -108,12 +108,89 @@ def body_to_html(text: str) -> str:
     return "".join(out)
 
 
+def sub_line(it: dict) -> str:
+    """목록 둘째 줄 — 금융사 · 분류. 금융사가 제목과 같으면(캐피탈 자료) 빼서 같은 말이
+    두 번 나오지 않게 한다(폰 웹 목록과 같은 규칙)."""
+    fin = (it.get("finance") or "").strip()
+    if fin == (it.get("title") or "").strip():
+        fin = ""
+    return " · ".join(x for x in (fin, (it.get("category") or "").strip()) if x)
+
+
+class _ItemDelegate(QStyledItemDelegate):
+    """자료 한 줄(v1.35) — 위: (★/🕘) 제목 · 아래: 금융사 · 분류(작게) · 오른쪽: 📎(첨부 있음).
+
+    예전엔 제목만 보여서 어느 금융사 · 어느 분류 자료인지 열어 봐야 알았다."""
+
+    PAD = 8
+
+    def _fonts(self, base: QFont):
+        title = QFont(base)
+        title.setPointSizeF(max(10.0, base.pointSizeF()))
+        title.setBold(True)
+        sub = QFont(base)
+        sub.setPointSizeF(max(8.0, base.pointSizeF() - 2.5))
+        sub.setBold(False)
+        sub.setWeight(QFont.Normal)
+        return title, sub
+
+    def sizeHint(self, option, index):
+        f1, f2 = self._fonts(option.font)
+        h = QFontMetrics(f1).height() + QFontMetrics(f2).height() + 14
+        return QSize(120, h)
+
+    def paint(self, p, option, index):
+        it = index.data(Qt.UserRole) or {}
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, p, opt.widget)
+        sel = bool(opt.state & QStyle.State_Selected)
+        hi = opt.palette.color(QPalette.HighlightedText)
+        f1, f2 = self._fonts(opt.font)
+        m1, m2 = QFontMetrics(f1), QFontMetrics(f2)
+        r = opt.rect.adjusted(self.PAD, 5, -self.PAD, -5)
+        clip = bool(it.get("files"))
+        right = r.right() - (22 if clip else 0)
+        x = r.left()
+        p.save()
+        mark = kb_marks.mark_of(it)
+        if mark:
+            p.setFont(f1)
+            p.setPen(hi if sel else QColor(theme.strong("orange") if mark == "★" else theme.c("subtext")))
+            p.drawText(QRect(x, r.top(), 22, m1.height()), Qt.AlignLeft | Qt.AlignVCenter, mark)
+            x += 22
+        p.setFont(f1)
+        p.setPen(hi if sel else opt.palette.color(QPalette.Text))
+        title = str(it.get("title", ""))
+        p.drawText(QRect(x, r.top(), max(10, right - x), m1.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                   m1.elidedText(title, Qt.ElideRight, max(10, right - x)))
+        tag = {kb.SRC_MINE: "내 메모", kb.SRC_LOCAL: "내 계정에서 고침"}.get(it.get("source"), "")
+        sub = sub_line(it)
+        line2 = " · ".join(x2 for x2 in (sub, tag) if x2)
+        p.setFont(f2)
+        p.setPen(hi if sel else QColor(theme.c("subtext")))
+        p.drawText(QRect(x, r.top() + m1.height() + 2, max(10, right - x), m2.height()),
+                   Qt.AlignLeft | Qt.AlignVCenter, m2.elidedText(line2, Qt.ElideRight, max(10, right - x)))
+        if clip:
+            p.setFont(f1)
+            p.drawText(QRect(right + 2, r.top(), 20, r.height()), Qt.AlignCenter, "📎")
+        p.restore()
+
+
 class _ResultList(QListWidget):
-    """검색 결과 목록. 항목에 자료 dict 를 달아 둔다."""
+    """검색 결과 목록. 항목에 자료 dict 를 달아 둔다.
+
+    줄 모양은 _ItemDelegate 가 그린다(제목 · 금융사·분류 · 📎). 줄의 글(text)은 예전처럼
+    제목(+ 내 메모 표시)으로 둔다 — 찾기·검사가 그 글을 본다."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setItemDelegate(_ItemDelegate(self))
+        self.setUniformItemSizes(True)
 
     def fill(self, items: list) -> None:
-        # 제목만 보여 준다. 캐피탈 자료는 제목과 금융사가 같아서 꼬리표를 붙이면
-        # 'SK렌터카   [SK렌터카 · 캐피탈]' 처럼 같은 말이 세 번 나온다.
         self.clear()
         for it in items:
             text = it.get("title", "")
@@ -123,6 +200,9 @@ class _ResultList(QListWidget):
                 text += "   (내 계정에서 고침)"
             li = QListWidgetItem(text)
             li.setData(Qt.UserRole, it)
+            tip = " · ".join(x for x in (sub_line(it), "첨부 있음" if it.get("files") else "") if x)
+            if tip:
+                li.setToolTip(tip)
             self.addItem(li)
 
     def current_item_data(self):
@@ -168,13 +248,11 @@ class KbView(QWidget):
         self._find_timer.timeout.connect(self._refilter)
         self.ed_find.liveText.connect(lambda _t: self._find_timer.start())
         top.addWidget(self.ed_find, 1)
-        self.cmb_cat = QComboBox()
-        searchcombo.install(self.cmb_cat)
-        self.cmb_cat.currentIndexChanged.connect(self._refilter)
-        # 검색형 콤보는 안에 입력칸이 들어가 있어서 Qt 가 재는 기본 폭이 글씨보다
-        # 좁다 → '전체 분류' 가 잘렸다. 항목이 바뀔 때마다 직접 재서 넓혀 준다.
-        top.addWidget(self.cmb_cat, 0)
         v.addLayout(top)
+        # 분류 — 드롭다운 대신 칩(v1.35). 건수는 지금 검색어로 찾은 것 중 그 분류의 수다.
+        self.cat_chips = chips.ChipBar()
+        self.cat_chips.picked.connect(lambda _k: self._refilter())
+        v.addWidget(self.cat_chips)
 
         self.lst = _ResultList()
         # 왼쪽 자료 목록 글씨를 키운다 — 상담 중에 훑는 목록이라 잘 보여야 한다
@@ -184,6 +262,8 @@ class KbView(QWidget):
         self.lst.currentRowChanged.connect(self._show)
         self.lst.itemActivated.connect(
             lambda _i: self.picked.emit(self.lst.current_item_data() or {}))
+        # 누르거나 복사한 자료는 '최근 본 자료' 로(v1.35) — 처음 열 때 저절로 고른 첫 줄은 빼고
+        self.lst.itemClicked.connect(lambda li: self._touch(li.data(Qt.UserRole)))
 
         right = QWidget()
         rv = QVBoxLayout(right)
@@ -191,7 +271,15 @@ class KbView(QWidget):
         rv.setSpacing(6)
         self.lbl_title = QLabel("")
         self.lbl_title.setWordWrap(True)
-        rv.addWidget(self.lbl_title)
+        trow = QHBoxLayout()
+        trow.addWidget(self.lbl_title, 1)
+        # 즐겨찾기(v1.35) — 누르면 이 자료가 목록 맨 위에 붙는다(★)
+        self.btn_fav = QPushButton("☆ 즐겨찾기")
+        self.btn_fav.setCheckable(True)
+        self.btn_fav.setToolTip("즐겨찾기에 넣으면 검색어 없이 볼 때 목록 맨 위에 둡니다")
+        self.btn_fav.clicked.connect(self._toggle_fav)
+        trow.addWidget(self.btn_fav, 0, Qt.AlignTop)
+        rv.addLayout(trow)
         # QTextBrowser 라야 주소를 눌러 브라우저로 넘길 수 있다.
         # QTextEdit 를 물려받았으므로 toPlainText()(본문 복사)는 그대로다.
         self.txt_body = QTextBrowser()
@@ -237,35 +325,33 @@ class KbView(QWidget):
     # ------------------------------------------------------------ 데이터
     def reload(self) -> None:
         """자료를 다시 읽어 목록을 그린다(계정·공통자료가 바뀌면 다시 부른다)."""
-        keep = (self.ed_find.text(), self.cmb_cat.currentText())
         self.items = kb.load_all()
-        cats = kb.categories(self.items)
-        self.cmb_cat.blockSignals(True)
-        self.cmb_cat.clear()
-        self.cmb_cat.addItem(ALL_CATEGORY, "")
-        for c in cats:
-            self.cmb_cat.addItem(c, c)
-        i = self.cmb_cat.findText(keep[1])
-        self.cmb_cat.setCurrentIndex(i if i >= 0 else 0)
-        self.cmb_cat.blockSignals(False)
-        self._fit_cat_width()
         self._refilter()
 
-    def _fit_cat_width(self) -> None:
-        """분류 콤보를 가장 긴 항목에 맞춘다(글씨가 잘리지 않게).
-
-        입력칸·화살표·테두리가 먹는 여백(48px)을 더하고, 너무 커지지 않게
-        상한을 둔다. 검색칸은 남는 폭을 가져가므로 그만큼 줄어든다.
-        """
-        fm = self.cmb_cat.fontMetrics()
-        wide = max([fm.horizontalAdvance(self.cmb_cat.itemText(i))
-                    for i in range(self.cmb_cat.count())] or [0])
-        self.cmb_cat.setFixedWidth(max(150, min(280, wide + 48)))
+    def _paint_cats(self, q: str) -> None:
+        """분류 칩 — 지금 검색어로 찾은 것 중 분류마다 몇 건인지."""
+        cats = kb.categories(self.items)
+        hits = kb.search(self.items, q, "") if q.strip() else self.items
+        counts = {}
+        for it in hits:
+            c = (it.get("category") or "").strip()
+            if c:
+                counts[c] = counts.get(c, 0) + 1
+        cur = self.cat_chips.current
+        shown = [c for c in cats if counts.get(c) or c == cur]
+        self.cat_chips.set_items([(c, c, counts.get(c, 0)) for c in shown])
+        # '전체' 칩의 건수는 분류 없는 자료까지 다 센 수로
+        allb = self.cat_chips.buttons().get("")
+        if allb is not None:
+            allb.setText(f"전체 {len(hits)}")
 
     def _refilter(self, *_a) -> None:
-        cat = self.cmb_cat.currentData() or ""
         q = self.ed_find.live_text()
+        self._paint_cats(q)
+        cat = self.cat_chips.current
         found = kb.search(self.items, q, cat)
+        if not q.strip() and not cat:
+            found = kb_marks.arrange(found)       # 즐겨찾기 → 최근 본 것 → 나머지
         # ⚠️ 목록을 다시 채우는 동안에는 '고른 줄이 바뀜' 신호를 막는다. 안 막으면
         #    비우는 순간 '아무것도 안 고름' 이 와서 오른쪽(첨부 줄)을 비웠다가 다시
         #    채운다 — 검색할 때마다 첨부를 통째로 다시 그리던 이유다. 다 채운 뒤 한 번만 보여 준다.
@@ -282,8 +368,29 @@ class KbView(QWidget):
             f"{n}건 찾음 (전체 {total}건)" if q.strip() or cat
             else f"전체 {total}건")
 
+    def _touch(self, it) -> None:
+        if it:
+            kb_marks.touch(it)
+
+    def _toggle_fav(self) -> None:
+        it = self.lst.current_item_data()
+        if not it:
+            return
+        on = kb_marks.toggle_fav(it)
+        self._paint_fav(it)
+        self.lst.viewport().update()
+        self.lbl_status.setText("즐겨찾기에 넣었습니다 ★ — 검색어 없이 볼 때 맨 위에 둡니다"
+                                if on else "즐겨찾기에서 뺐습니다")
+
+    def _paint_fav(self, it) -> None:
+        on = bool(it) and kb_marks.is_fav(it)
+        self.btn_fav.setEnabled(bool(it))
+        self.btn_fav.setChecked(on)
+        self.btn_fav.setText("★ 즐겨찾기" if on else "☆ 즐겨찾기")
+
     def _show(self, _row: int) -> None:
         it = self.lst.current_item_data()
+        self._paint_fav(it)
         if not it:
             self.lbl_title.setText("")
             self.txt_body.clear()
@@ -400,6 +507,7 @@ class KbView(QWidget):
             atts = self.lst_att.selected_atts() or self.lst_att.atts()
         if not atts:
             return
+        self._touch(self.lst.current_item_data())
         if any(not kb_files.cached(a) for a in atts):
             # 아직 받는 중 — 다 받으면 그때 복사한다(누른 것을 잊지 않는다)
             self._want_copy = list(atts)
@@ -486,6 +594,7 @@ class KbView(QWidget):
     def _copy_body(self) -> None:
         it = self.lst.current_item_data() or {}
         self._copy(it.get("body", ""), "본문")
+        self._touch(it)
 
     def focus_search(self) -> None:
         self.ed_find.setFocus()
@@ -497,7 +606,7 @@ class KbView(QWidget):
         분류 거르개는 '전체' 로 되돌린다. 남아 있으면 찾는 자료가 그 분류가
         아닐 때 '0건' 만 뜨고 왜 그런지 알 수 없다.
         """
-        self.cmb_cat.setCurrentIndex(0)
+        self.cat_chips.set_current("")
         self.ed_find.setText(str(query or "").strip())
         self.flush_search()             # 넘어온 말은 기다리지 않고 바로 찾는다
         self.focus_search()
@@ -686,9 +795,52 @@ class QuickSearch(QDialog):
         v.addWidget(self.view, 1)
         left = int(w * self.LIST_SHARE)
         self.view.split.setSizes([left, max(1, w - left)])
+        # 고객 · 프로모션에서도 찾는다(v1.35 — K4). main_window 가 extra_find 를 넣어 준다:
+        #   extra_find(검색어) → [{"label", "sub", "run"}] — 누르면(Enter) 창을 닫고 run()
+        self.extra_find = None
+        self.lbl_extra = QLabel("고객 · 프로모션에서도 찾았습니다  (Tab 으로 옮겨 Enter — 고객은 창을 열고, 프로모션은 그 줄을 복사)")
+        self.lbl_extra.setStyleSheet(f"color:{theme.c('subtext')};")
+        v.addWidget(self.lbl_extra)
+        self.lst_extra = QListWidget()
+        self.lst_extra.setMaximumHeight(170)
+        self.lst_extra.setStyleSheet("QListWidget { font-size: 11pt; } QListWidget::item { padding: 4px; }")
+        self.lst_extra.itemActivated.connect(self._run_extra)
+        v.addWidget(self.lst_extra)
+        self.lbl_extra.hide()
+        self.lst_extra.hide()
+        self.view._find_timer.timeout.connect(self.refresh_extra)
         self.lbl = QLabel("Enter = 본문 복사 후 닫기   ·   Esc = 닫기")
         self.lbl.setStyleSheet(f"color:{theme.c('subtext')};")
         v.addWidget(self.lbl)
+
+    def refresh_extra(self) -> None:
+        q = (self.view.ed_find.live_text() or "").strip()
+        got = []
+        if q and callable(self.extra_find):
+            try:
+                got = self.extra_find(q) or []
+            except Exception:
+                got = []
+        self.lst_extra.clear()
+        for x in got:
+            li = QListWidgetItem(x.get("label", "") + (f"     {x['sub']}" if x.get("sub") else ""))
+            li.setData(Qt.UserRole, x)
+            self.lst_extra.addItem(li)
+        on = bool(got)
+        self.lbl_extra.setVisible(on)
+        self.lst_extra.setVisible(on)
+        if on:
+            self.lst_extra.setCurrentRow(0)
+
+    def _run_extra(self, li=None) -> None:
+        li = li or self.lst_extra.currentItem()
+        x = li.data(Qt.UserRole) if li is not None else None
+        if not x:
+            return
+        self.accept()
+        run = x.get("run")
+        if callable(run):
+            QTimer.singleShot(0, run)
 
     def _pick(self, item: dict) -> None:
         self.view._copy_body()
@@ -696,10 +848,17 @@ class QuickSearch(QDialog):
 
     def keyPressEvent(self, ev):
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if self.lst_extra.hasFocus() and self.lst_extra.currentItem() is not None:
+                self._run_extra()
+                return
             self.view.flush_search()     # 치자마자 Enter 면 마지막 글자까지 찾은 뒤에
+            self.refresh_extra()
             it = self.view.lst.current_item_data()
             if it:
                 self._pick(it)
+                return
+            if self.lst_extra.count():   # 자료는 없고 고객·프로모션만 찾았으면 그 첫 줄
+                self._run_extra(self.lst_extra.item(0))
                 return
         super().keyPressEvent(ev)
 

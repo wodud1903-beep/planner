@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QTextBrowser, QToolButton,
     QVBoxLayout, QWidget,
@@ -74,13 +74,123 @@ class Card(QFrame):
         self.lbl_count.setText(text)
 
 
+class AutoText(QTextBrowser):
+    """카드 안의 글 칸 — 글 길이만큼 키가 자란다(v1.35).
+
+    예전엔 카드 높이가 정해져 있어 브리핑이 길면 **카드 안에서 따로 스크롤**해야
+    했다(바깥 화면도 스크롤이라 두 겹). 이제 글 칸이 글만큼 자라고, 화면 전체가
+    한 번에 스크롤된다. 너무 긴 묶음은 'N건 더 보기' 로 접어 둔다(main_window).
+
+    글 속 링크(브리핑의 고객·일정 이름)는 브라우저로 열지 않고 anchorClicked 로
+    넘긴다 — 누르면 그 고객 창 · 일정으로 간다.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("dashtext")
+        self.setOpenLinks(False)
+        self.setOpenExternalLinks(False)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # 링크는 밑줄 없이 — 글자색은 그리는 쪽(HTML)이 정한다
+        self.document().setDefaultStyleSheet("a { text-decoration: none; }")
+        self.document().documentLayout().documentSizeChanged.connect(self._fit)
+        self.setFixedHeight(60)
+
+    def _fit(self, *_a) -> None:
+        h = int(self.document().size().height() + 0.99) + 2 * self.frameWidth() + 2
+        h = max(40, h)
+        if h != self.height():
+            self.setFixedHeight(h)
+
+    def wheelEvent(self, ev):            # noqa: N802 — 안에서 스크롤할 것이 없으니 바깥 화면이 받게
+        ev.ignore()
+
+
 def text_view() -> QTextBrowser:
-    """카드 안의 글 칸 — 테두리 없이 카드에 녹아든다."""
-    t = QTextBrowser()
-    t.setObjectName("dashtext")
-    t.setOpenExternalLinks(True)
-    t.setFrameShape(QFrame.NoFrame)
-    return t
+    """카드 안의 글 칸 — 테두리 없이 카드에 녹아든다(키는 글만큼)."""
+    return AutoText()
+
+
+class RowActions(QWidget):
+    """표의 줄에 마우스를 올리면 그 줄 오른쪽 끝에 뜨는 작은 단추 묶음(v1.35).
+
+    '내 할일' 카드 머리에 [수정][삭제][완료][메모 복사][전체선택] 이 늘 늘어서 있어
+    어수선했다. 이제 완료는 줄 앞 체크박스로, 나머지는 그 줄에 마우스를 올렸을
+    때만 보인다. `actions` = [(글자, 풍선 도움말, 함수)] — 함수는 그 줄을 고른 뒤 부른다.
+    """
+
+    def __init__(self, table, actions: list, parent=None):
+        super().__init__(parent or table.viewport())
+        self.setObjectName("rowacts")
+        self._table = table
+        self._row = -1
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        self.buttons = []
+        for text, tip, fn in actions:
+            b = QToolButton()
+            b.setObjectName("rowact")
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _c=False, f=fn: self._run(f))
+            h.addWidget(b)
+            self.buttons.append(b)
+        self.hide()
+        vp = table.viewport()
+        vp.setMouseTracking(True)
+        table.setMouseTracking(True)
+        vp.installEventFilter(self)
+        table.verticalScrollBar().valueChanged.connect(lambda _v: self._place(-1))
+
+    @property
+    def row(self) -> int:
+        return self._row
+
+    def _run(self, fn) -> None:
+        r = self._row
+        if r < 0 or r >= self._table.rowCount():
+            return
+        self._table.selectRow(r)
+        fn()
+
+    def _place(self, row: int) -> None:
+        t = self._table
+        if row < 0 or row >= t.rowCount():
+            self._row = -1
+            self.hide()
+            return
+        self._row = row
+        self.adjustSize()
+        rect = t.visualRect(t.model().index(row, 0))
+        vp = t.viewport()
+        x = max(0, vp.width() - self.width() - 6)
+        y = rect.top() + max(0, (rect.height() - self.height()) // 2)
+        self.move(x, y)
+        self.show()
+        self.raise_()
+
+    def hover_at(self, pos) -> None:
+        """뷰포트 좌표 pos 의 줄에 단추를 띄운다(검사에서도 부른다)."""
+        if not self._table.viewport().rect().contains(pos):
+            self._place(-1)
+            return
+        idx = self._table.indexAt(pos)
+        self._place(idx.row() if idx.isValid() else -1)
+
+    def eventFilter(self, obj, ev):      # noqa: N802
+        et = ev.type()
+        if et == QEvent.MouseMove:
+            self.hover_at(ev.position().toPoint())
+        elif et == QEvent.Leave:
+            # 단추 위로 옮겨 간 것이면 그대로 둔다(단추는 뷰포트의 자식이라 Leave 가 온다)
+            if not self.underMouse():
+                self._place(-1)
+        return False
 
 
 class ShortcutTile(QToolButton):

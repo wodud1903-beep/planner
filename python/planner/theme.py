@@ -452,6 +452,24 @@ QToolButton#dashtile {{
     color: {p['text']}; font-size: 12px; padding: 4px;
 }}
 QToolButton#dashtile:hover {{ background: {p['btn_hover']}; }}
+/* 표 줄에 마우스를 올리면 뜨는 작은 단추(내 할일 — v1.35) */
+QToolButton#rowact {{
+    background: {p['panel_bg']}; border: 1px solid {p['border']}; border-radius: 6px;
+    padding: 1px 8px; color: {p['text']}; font-size: 12px;
+}}
+QToolButton#rowact:hover {{ background: {p['btn_hover']}; border-color: {p['accent']}; }}
+/* 거르기 칩(고객 진행현황 · 자료 분류 — v1.35) */
+QPushButton#chip {{
+    background: {p['btn_bg']}; border: 1px solid {p['border']}; border-radius: 12px;
+    padding: 3px 11px; color: {p['subtext']};
+}}
+QPushButton#chip:hover {{ background: {p['btn_hover']}; color: {p['text']}; }}
+QPushButton#chip:checked {{
+    background: {p['select_bg']}; color: {p['nav_sel_text']}; border-color: {p['accent']};
+    font-weight: bold;
+}}
+/* 구글 연결 표시 — 잘 붙어 있으면 작은 점 하나(문제가 있을 때만 글자로) */
+QLabel#gdot {{ color: {p['status_ok']}; font-size: 15px; padding: 0 2px; }}
 QTableWidget {{
     border: 1px solid {p['border']};
     border-radius: 9px;

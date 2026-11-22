@@ -13,15 +13,32 @@ from . import commission, searchcombo, sheets, theme
 
 
 class _BrandPage(QWidget):
-    """브랜드 한 개(현대/기아)의 계산 화면."""
+    """브랜드 한 개(현대/기아)의 계산 화면.
+
+    v1.35 — 예전엔 입력칸이 화면 폭(1200px)만큼 늘어나고 아래는 텅 비어 있었다. 이제
+    가운데 한 줄(최대 COL_W)로 모아 위에서 아래로 차종 → 차량가 → 지급율 → 결과를 둔다.
+    처음(차종·차량가 전)에는 빨간 '₩ 0' 대신 회색으로 무엇을 넣으면 되는지 알려 준다."""
+
+    COL_W = 680
+    PICK = "차종을 고르세요 — 쳐서 찾을 수 있습니다(초성도 됩니다)"
 
     def __init__(self, brand: str, parent=None):
         super().__init__(parent)
         self.brand = brand
         self.items: list = []
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(14, 12, 14, 12)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.addStretch(1)
+        col = QWidget()
+        col.setObjectName("calccol")
+        col.setMaximumWidth(self.COL_W)
+        col.setMinimumWidth(min(self.COL_W, 460))
+        col.setStyleSheet("QWidget#calccol QLineEdit, QWidget#calccol QComboBox { font-size: 12pt; }")
+        outer.addWidget(col, 4)
+        outer.addStretch(1)
+        v = QVBoxLayout(col)
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(10)
 
         gb = QGroupBox(f"{commission.BRAND_NAMES[brand]}  ·  3.3% 공제 후 수수료")
@@ -64,15 +81,20 @@ class _BrandPage(QWidget):
         self.box_result = QGroupBox()
         self.box_result.setLayout(row)
         v.addWidget(self.box_result)
+        # 아직 계산할 수 없을 때 — 무엇을 넣으면 되는지(회색 한 줄)
+        self.lbl_need = QLabel("")
+        self.lbl_need.setAlignment(Qt.AlignRight)
+        v.addWidget(self.lbl_need)
 
         row2 = QHBoxLayout()
         self.btn_copy = QPushButton("결과 복사")
+        self.btn_copy.setObjectName("dashprimary")
         self.btn_copy.clicked.connect(self._copy)
         self.btn_reset = QPushButton("초기화")
         self.btn_reset.clicked.connect(self.reset)
-        row2.addWidget(self.btn_copy)
-        row2.addWidget(self.btn_reset)
         row2.addStretch()
+        row2.addWidget(self.btn_reset)
+        row2.addWidget(self.btn_copy)
         v.addLayout(row2)
         v.addStretch()
 
@@ -85,7 +107,7 @@ class _BrandPage(QWidget):
         self.items = list(items or [])
         self.cmb_car.blockSignals(True)
         self.cmb_car.clear()
-        self.cmb_car.addItem("차종을 선택하세요", -1)
+        self.cmb_car.addItem(self.PICK, -1)
         for i, (name, _r, _t) in enumerate(self.items):
             self.cmb_car.addItem(name, i)
         idx = self.cmb_car.findText(cur)
@@ -101,7 +123,7 @@ class _BrandPage(QWidget):
                 f"{self._rate:g} %   ({'화물차' if self._truck else '승용차'} 기준)")
         else:
             self._rate, self._truck = 0.0, False
-            self.lbl_rate.setText("차종을 선택하세요")
+            self.lbl_rate.setText("차종을 고르면 나옵니다")
         self.recalc()
 
     def _on_price_edited(self, _t: str):
@@ -124,6 +146,18 @@ class _BrandPage(QWidget):
         except Exception:
             return default
 
+    def need_text(self) -> str:
+        """계산에 아직 모자란 것 — 없으면 빈 글."""
+        no_car = not getattr(self, "_rate", 0.0)
+        no_price = self._num(self.ed_price) <= 0
+        if no_car and no_price:
+            return "차종을 고르고 차량가를 넣어 주세요"
+        if no_car:
+            return "차종을 골라 주세요"
+        if no_price:
+            return "차량가를 넣어 주세요"
+        return ""
+
     def recalc(self):
         price = self._num(self.ed_price)
         pay = self._num(self.ed_pay, commission.DEF_PAY_RATE)
@@ -132,6 +166,15 @@ class _BrandPage(QWidget):
                               pay, self.chk_tax.isChecked())
         self.lbl_result.setText(f"₩ {won:,}")
         self._value = won
+        need = self.need_text()
+        self.lbl_need.setText(need)
+        self.btn_copy.setEnabled(not need)
+        self._paint_result(bool(need))
+
+    def _paint_result(self, waiting: bool) -> None:
+        # 아직 다 안 넣었으면 회색(빨간 '₩ 0' 은 무언가 잘못된 것처럼 보였다), 다 넣으면 진한 강조색
+        col = theme.c("subtext") if waiting else theme.strong("blue")
+        self.lbl_result.setStyleSheet(f"font-size:24px;font-weight:bold;color:{col};")
 
     def reset(self):
         self.ed_price.clear()
@@ -146,9 +189,10 @@ class _BrandPage(QWidget):
 
     def apply_theme(self):
         self.lbl_rate.setStyleSheet(f"color:{theme.c('subtext')};")
-        self.lbl_result.setStyleSheet(
-            f"font-size:24px;font-weight:bold;color:{theme.c('status_bad')};")
+        self._paint_result(bool(self.need_text()) if hasattr(self, "lbl_need") else True)
         self.lbl_cap.setStyleSheet(f"color:{theme.c('subtext')};")
+        if hasattr(self, "lbl_need"):
+            self.lbl_need.setStyleSheet(f"color:{theme.c('subtext')};")
 
 
 class CommissionTab(QWidget):

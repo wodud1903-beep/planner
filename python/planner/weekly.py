@@ -91,7 +91,8 @@ def sections(rows: list, today: date,
         "color": "green",
         "items": [{"lead": _label(d), "text": cr.get("customer"),
                    "sub": " · ".join(x for x in (cr.get("finance"),
-                                                 cr.get("model")) if x)}
+                                                 cr.get("model")) if x),
+                   "target": ("cust", cr)}
                   for d, cr in out],
         "note": f"수수료 합계 {_money(fee_sum)}" if out else "",
         "empty": f"{word} 출고가 없습니다",
@@ -108,7 +109,8 @@ def sections(rows: list, today: date,
         "icon": "📝", "title": f"{word} 계약", "color": "blue",
         "items": [{"lead": _label(d), "text": cr.get("customer"),
                    "sub": " · ".join(x for x in (cr.get("finance"),
-                                                 cr.get("model")) if x)}
+                                                 cr.get("model")) if x),
+                   "target": ("cust", cr)}
                   for d, cr in made],
         "empty": f"{word} 신규 계약이 없습니다",
     })
@@ -134,7 +136,8 @@ def sections(rows: list, today: date,
         secs.append({
             "icon": "⏳", "title": "진행 중 (출고 대기)", "color": "red",
             "items": [{"lead": f"{n}일째", "text": cr.get("customer"),
-                       "sub": f"{cd:%m-%d} 계약 · {cr.get('status') or '진행현황 없음'}"}
+                       "sub": f"{cd:%m-%d} 계약 · {cr.get('status') or '진행현황 없음'}",
+                       "target": ("cust", cr)}
                       for n, cd, cr in open_rows[:15]],
             "count": len(open_rows),
             "more": max(0, len(open_rows) - 15),
@@ -156,7 +159,8 @@ def sections(rows: list, today: date,
         "icon": "🔔", "title": f"{months}개월 이내 만기 예정", "color": "violet",
         "items": [{"lead": f"D-{(d - today).days}", "text": cr.get("customer"),
                    "sub": " · ".join(x for x in (f"{d:%Y-%m-%d}", cr.get("model"))
-                                     if x)}
+                                     if x),
+                   "target": ("cust", cr)}
                   for d, cr in exp[:20]],
         "count": len(exp),
         "more": max(0, len(exp) - 20),
@@ -208,14 +212,51 @@ def render_text(title: str, secs: list) -> str:
 
 def to_html(rows: list, today: date,
             expiry_months: int = EXPIRY_MONTHS, word: str = "이번 주",
-            head: bool = True) -> str:
-    """화면용 — 브리핑과 같은 색·크기 규칙. head=False 면 맨 위 기간 줄을 뺀다(카드)."""
+            head: bool = True, **fold) -> str:
+    """화면용 — 브리핑과 같은 색·크기 규칙. head=False 면 맨 위 기간 줄을 뺀다(카드).
+
+    fold — render_html 의 link · more · limit · expanded · prefix(대시보드 카드만 쓴다)."""
     return render_html(title_line(today) if head else "",
-                       sections(rows, today, expiry_months, word))
+                       sections(rows, today, expiry_months, word), **fold)
 
 
-def render_html(title: str, secs: list) -> str:
-    """섹션 목록 → 화면용 HTML(주간 요약·대시보드 다음 주 카드가 같이 쓴다)."""
+def fold_items(s: dict, limit: int, expanded, key: str):
+    """한 묶음에서 먼저 보여 줄 줄 — (보여 줄 줄, 접어 둔 수, 펼쳐 둔 것인가).
+
+    limit 줄보다 많으면 limit 줄만 보이고 나머지는 'N건 더 보기' 로 접는다. 한 줄만
+    남는 경우는 접지 않는다(‘1건 더 보기’ 를 누르는 것보다 그냥 보여 주는 게 낫다).
+    """
+    items = list(s.get("items") or [])
+    if not limit or len(items) <= limit + 1:
+        return items, 0, False
+    if key in (expanded or ()):
+        return items, 0, True
+    return items[:limit], len(items) - limit, False
+
+
+def link_html(it: dict, inner: str, link, color: str) -> str:
+    """줄의 이름 부분을 누를 수 있게 — link(it) 가 주소를 주면 <a> 로 감싼다."""
+    href = link(it) if (link and it.get("target")) else ""
+    if not href:
+        return inner
+    return (f"<a href='{href}' style='color:{color};text-decoration:none;'>"
+            f"{inner}</a>")
+
+
+def fold_html(href: str, n: int, opened: bool, sub_c: str) -> str:
+    word = "접기" if opened else f"… {n}건 더 보기"
+    return (f"<p style='margin:2px 0 4px 12px;font-size:12px;'>"
+            f"<a href='{href}' style='color:{sub_c};text-decoration:none;'>{word}</a></p>")
+
+
+def render_html(title: str, secs: list, link=None, more=None, limit: int = 0,
+                expanded=None, prefix: str = "w") -> str:
+    """섹션 목록 → 화면용 HTML(주간 요약·대시보드 다음 주 카드가 같이 쓴다).
+
+    대시보드 카드에서만(v1.35):
+      link(item) → 주소 — 고객·일정 이름을 누르면 그리로 간다(item 의 'target').
+      more(key) → 주소 — 'N건 더 보기' / '접기'. limit 줄이 넘는 묶음은 접어 둔다.
+    """
     txt, sub_c, line_c = theme.c("text"), theme.c("subtext"), theme.c("border")
 
     out = [f"<div style='font-family:Malgun Gothic;color:{txt};'>"]
@@ -238,17 +279,24 @@ def render_html(title: str, secs: list) -> str:
         if not s["items"]:
             out.append(f"<p style='margin:2px 0 6px 12px;font-size:13px;color:{sub_c};'>"
                        f"{_esc(s.get('empty', '없음'))}</p>")
-        for it in s["items"]:
+        key = f"{prefix}:{s['title']}"
+        shown, folded, opened = fold_items(s, limit if more else 0, expanded, key)
+        for it in shown:
             lead = (it.get("lead") or "").strip()
             sub = (it.get("sub") or "").strip()
             head = (f"<b style='color:{col};'>{_esc(lead)}</b> &nbsp;" if lead else "")
             tail = (f" <span style='color:{sub_c};font-size:12px;'>{_esc(sub)}</span>"
                     if sub else "")
+            name = link_html(it, f"<span style='color:{txt};'>{_esc(it['text'])}</span>", link, txt)
             out.append(f"<p style='margin:1px 0 1px 12px;font-size:14px;'>"
-                       f"{head}{_esc(it['text'])}{tail}</p>")
-        if s.get("more"):
+                       f"{head}{name}{tail}</p>")
+        if folded:
+            out.append(fold_html(more(key), folded, False, sub_c))
+        if s.get("more") and not folded:
             out.append(f"<p style='margin:2px 0 4px 12px;font-size:12px;color:{sub_c};'>"
                        f"… 외 {s['more']}건</p>")
+        if opened:
+            out.append(fold_html(more(key), 0, True, sub_c))
         if s.get("hint"):
             out.append(f"<p style='margin:4px 0 6px 12px;font-size:12px;color:{sub_c};'>"
                        f"→ {_esc(s['hint'])}</p>")

@@ -24,6 +24,43 @@ let _timer = 0;
 
 const SEARCH_DELAY = 130;   // 타자가 멎으면 찾는다. 한 자마다 훑으면 밀린다.
 
+// 즐겨찾기 · 최근 본 자료(v1.35 — PC 자료검색과 같은 모양). 이 기기에 둔다(자료 제목으로 가리킨다).
+// 검색어 없이 '전체' 를 볼 때 즐겨찾기(★) → 최근 본 것(🕘) → 나머지 차례로 보여 준다.
+const RECENT_MAX = 5;
+let _favs = [];
+let _recent = [];
+let _marksLoaded = false;
+async function loadMarks() {
+  const f = await store.get("meta", "kbFavs");
+  const r = await store.get("meta", "kbRecent");
+  _favs = Array.isArray(f) ? f.filter((x) => typeof x === "string") : [];
+  _recent = Array.isArray(r) ? r.filter((x) => typeof x === "string").slice(0, RECENT_MAX) : [];
+  _marksLoaded = true;
+}
+export const markOf = (it) => (_favs.includes(it.title) ? "★" : _recent.includes(it.title) ? "🕘" : "");
+/** 즐겨찾기(고른 차례) → 최근 본 것 → 나머지(원래 차례). */
+export function arrange(hits) {
+  const byTitle = new Map();
+  for (const it of hits) if (!byTitle.has(it.title)) byTitle.set(it.title, it);
+  const head = [], seen = new Set();
+  for (const t of [..._favs, ..._recent]) {
+    const it = byTitle.get(t);
+    if (it && !seen.has(it)) { head.push(it); seen.add(it); }
+  }
+  return [...head, ...hits.filter((it) => !seen.has(it))];
+}
+async function touch(it) {
+  if (!it || !it.title) return;
+  _recent = [it.title, ..._recent.filter((t) => t !== it.title)].slice(0, RECENT_MAX);
+  await store.put("meta", "kbRecent", _recent);
+}
+async function toggleFav(it) {
+  const on = !_favs.includes(it.title);
+  _favs = on ? [..._favs, it.title] : _favs.filter((t) => t !== it.title);
+  await store.put("meta", "kbFavs", _favs);
+  return on;
+}
+
 export async function load({ refresh = true } = {}) {
   const cached = await store.get("data", "kb");
   _edits = (await store.get("data", "kbEdits")) || {};
@@ -119,6 +156,7 @@ export async function screen(m) {
   input.addEventListener("compositionend", () => { clearTimeout(_timer); run(); });
 
   $("#kbme").onclick = () => openMe();
+  if (!_marksLoaded) await loadMarks();
   paintCats();
   paintList();
   if (!_items.length) await load();
@@ -153,7 +191,8 @@ function paintCats() {
 function paintList() {
   const el = $("#kblist");
   if (!el) return;
-  const hits = _cat === MINE ? kb.search(_idx, _q, "").filter((it) => it._local) : kb.search(_idx, _q, _cat);
+  let hits = _cat === MINE ? kb.search(_idx, _q, "").filter((it) => it._local) : kb.search(_idx, _q, _cat);
+  if (!_q.trim() && !_cat) hits = arrange(hits);
   if (!hits.length) {
     render(el, html`<li class="empty">${_items.length
       ? "찾는 자료가 없습니다." : "자료를 불러오는 중입니다…"}</li>`);
@@ -162,8 +201,9 @@ function paintList() {
   render(el, hits.map((it) => {
     const i = _items.indexOf(it);
     const sub = [it.finance, it.category, it._local ? "내 계정에서 고침" : ""].filter(Boolean).join(" · ");
+    const mk = markOf(it);
     return html`<li><button class="row" data-i="${i}">
-        <span class="t">${it.title}</span>
+        <span class="t">${raw(mk ? `<span class="mk${mk === "★" ? " fav" : ""}">${mk}</span>` : "")}${it.title}</span>
         ${raw(sub ? `<span class="s">${esc2(sub)}</span>` : "")}
       </button></li>`;
   }).join(""));
@@ -192,12 +232,23 @@ export function showDetail(i) {
     <div id="kbbodybox">${raw(kb.bodyToHtml(it.body))}</div>
     <p style="margin-top:16px">
       <button class="chip" id="kbcopy">본문 복사</button>
+      <button class="chip" id="kbfav" aria-pressed="${String(_favs.includes(it.title))}"
+              title="즐겨찾기에 넣으면 검색어 없이 볼 때 목록 맨 위에 둡니다">${_favs.includes(it.title) ? "★ 즐겨찾기" : "☆ 즐겨찾기"}</button>
       <button class="chip" id="kbedit">내 계정에서만 고치기</button>
       ${raw(it._local ? `<button class="chip" id="kbrevert">회사 자료로 되돌리기</button>` : "")}
     </p>
     ${raw(attachHtml(it.files || []))}
     <div id="kbview"></div>`);
   paintAttachments(it.files || []);
+  // 본 자료는 '최근 본 자료' 로(목록은 나중에 — 지금 보고 있는 줄이 움직이지 않게)
+  touch(it).catch(() => {});
+  const fv = $("#kbfav");
+  if (fv) fv.onclick = async () => {
+    const on = await toggleFav(it);
+    fv.textContent = on ? "★ 즐겨찾기" : "☆ 즐겨찾기";
+    fv.setAttribute("aria-pressed", String(on));
+    paintList();
+  };
   const ed = $("#kbedit");
   if (ed) ed.onclick = () => openEditor(i);
   const mg = $("#kbmego");

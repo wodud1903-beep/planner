@@ -21,7 +21,8 @@ from . import board, theme
 
 ROW = Qt.UserRole
 CARD = Qt.UserRole + 1
-COL_W = 248
+COL_W = 248          # 칸 하나의 넉넉한 폭(넓은 화면에서는 여기까지만 넓힌다)
+COL_MIN = 170        # 좁은 화면에서는 여기까지 줄여 칸 다섯 개가 한 화면에 들어오게(v1.35)
 
 
 class CardDelegate(QStyledItemDelegate):
@@ -30,7 +31,9 @@ class CardDelegate(QStyledItemDelegate):
     H = 78
 
     def sizeHint(self, option, index):
-        return QSize(COL_W - 24, self.H)
+        # 폭은 작게 알려 준다 — 줄은 어차피 칸 폭만큼 그려지고, 크게 알려 주면 칸이
+        # 좁아졌을 때 칸 안에 가로 스크롤이 생긴다
+        return QSize(80, self.H)
 
     def paint(self, p: QPainter, option, index):
         c = index.data(CARD) or {}
@@ -84,6 +87,7 @@ class BoardList(QListWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setSpacing(2)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setObjectName("boardlist")
         self.itemDoubleClicked.connect(lambda it: self.opened.emit(int(it.data(ROW))))
 
@@ -156,17 +160,20 @@ class BoardView(QWidget):
         self.lists = []
         data = board.columns(self._rows, self._today, self.chk_cancel.isChecked())
         for col in data:
-            self.cols.addWidget(self._column(col))
+            # 칸은 화면 폭을 나눠 쓴다(COL_MIN ~ COL_W) — 예전엔 248 로 박혀 있어
+            # 1536 폭 화면에서 마지막 칸(출고완료)이 잘렸다(v1.35)
+            self.cols.addWidget(self._column(col), 1)
         if not data:
             lb = QLabel("고객관리 시트를 불러오면 진행현황별로 고객이 놓입니다.")
             lb.setStyleSheet(f"color:{theme.c('subtext')};")
             self.cols.addWidget(lb)
-        self.cols.addStretch(1)
+        self.cols.addStretch(0)
 
     def _column(self, col: dict) -> QWidget:
         fr = QFrame()
         fr.setObjectName("boardcol")
-        fr.setFixedWidth(COL_W)
+        fr.setMinimumWidth(COL_MIN)
+        fr.setMaximumWidth(COL_W)
         fr.setStyleSheet(f"QFrame#boardcol {{ background:{theme.c('tab_bg')}; border-radius:12px; }}"
                          "QListWidget#boardlist { background: transparent; border: 0; }")
         v = QVBoxLayout(fr)

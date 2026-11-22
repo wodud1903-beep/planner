@@ -22,7 +22,7 @@ from PySide6.QtCore import QBuffer, QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QCursor, QDrag, QGuiApplication, QKeySequence)
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
+    QAbstractItemView, QApplication, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
     QSplitter, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -332,6 +332,12 @@ class CustomerFilesTab(QWidget):
         self._last_hits: list = []
         self._last_pool_n = -1
         self._index_failed = 0        # 훑다가 못 읽은 폴더 수
+        # 고객관리 '고객 서류'(v1.33, 드라이브)와 잇기(v1.35) — main_window 가 넣어 준다.
+        #   customer_docs(폴더 이름) → (고객 이름, [서류]) 또는 None
+        #   open_customer_docs(서류, [서류]) → 크게 보기
+        self.customer_docs = None
+        self.open_customer_docs = None
+        self._docs_for = ""
 
         v = QVBoxLayout(self)
 
@@ -417,6 +423,22 @@ class CustomerFilesTab(QWidget):
         # 미리보기에서 본 서류를 그 자리에서 바로 카카오톡으로 보낸다.
         # 보낼 수 없는 경우(드라이브 직접 조회 중 등)의 안내는 copy_selected 가
         # 이미 맡고 있으므로 한 곳에 모아 둔다.
+        # 고른 폴더(또는 지금 들어와 있는 고객 폴더)가 고객관리의 고객이면, 그 고객이
+        # [수정] 창에 올려 둔 '첨부 서류' 도 여기서 바로 본다(v1.35). 두 곳에 나뉘어 있던
+        # 서류를 한 화면에서 — 누르면 크게 보기.
+        self.docs_bar = QFrame()
+        self.docs_bar.setObjectName("custdocs")
+        db = QVBoxLayout(self.docs_bar)
+        db.setContentsMargins(10, 8, 10, 8)
+        db.setSpacing(6)
+        self.lbl_docs = QLabel("")
+        self.lbl_docs.setWordWrap(True)
+        db.addWidget(self.lbl_docs)
+        self.docs_btns = QHBoxLayout()
+        self.docs_btns.setSpacing(4)
+        db.addLayout(self.docs_btns)
+        self.docs_bar.hide()
+        rv.addWidget(self.docs_bar)
         self.pv = FilePreview(on_send=self.copy_selected)
         rv.addWidget(self.pv, 1)
         self.btn_open = QPushButton("연결 프로그램으로 열기")
@@ -660,6 +682,10 @@ class CustomerFilesTab(QWidget):
         hits = customer_files.search(base, q)
         self._last_q, self._last_hits, self._last_pool_n = q, hits, n
         return hits
+
+    def indexed_nodes(self) -> list:
+        """검색용으로 훑어 둔 목록(다 못 훑었으면 지금까지 찾은 것)."""
+        return list(self.index or self._partial or [])
 
     def search_for(self, text: str):
         """고객관리에서 '이 고객 서류 보기' 로 넘어올 때 쓴다."""
@@ -980,11 +1006,60 @@ class CustomerFilesTab(QWidget):
         self.lbl_where.setToolTip(root)
 
     # ------------------------------------------------------------ 미리보기
+    # ---- 고객관리 서류(v1.35) ----
+    def _docs_folder_name(self, n) -> str:
+        """서류를 찾아볼 고객 폴더 이름 — 고른 것이 폴더면 그 이름, 파일이면 그 파일이
+        든 맨 위 폴더(창고 바로 밑의 고객 폴더), 아무것도 안 골랐으면 지금 들어와 있는 폴더."""
+        if n is not None:
+            if n.is_dir:
+                return n.name
+            return (n.folder or "").split("/")[0]
+        if len(self.path) > 1:
+            return self.path[1].name
+        return ""
+
+    def show_customer_docs(self, folder: str) -> None:
+        """그 폴더 이름의 고객이 올려 둔 서류를 위 띠에 단추로 보여 준다(없으면 숨긴다)."""
+        got = self.customer_docs(folder) if (self.customer_docs and folder) else None
+        while self.docs_btns.count():
+            it = self.docs_btns.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        if not got or not got[1]:
+            self._docs_for = ""
+            self.docs_bar.hide()
+            return
+        name, atts = got
+        self._docs_for = folder
+        self.lbl_docs.setText(f"📎 고객관리에 올린 '{name}' 서류 {len(atts)}개 — 누르면 크게 봅니다")
+        for i, att in enumerate(atts[:6]):
+            b = QPushButton(att.get("name") or f"서류 {i + 1}")
+            b.setToolTip("고객관리 [수정] 창의 '첨부 서류' 에 올린 것입니다(구글 드라이브)")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _c=False, a=att, al=list(atts): self._open_doc(a, al))
+            self.docs_btns.addWidget(b)
+        if len(atts) > 6:
+            more = QLabel(f"외 {len(atts) - 6}개")
+            more.setStyleSheet(f"color:{theme.c('subtext')};")
+            self.docs_btns.addWidget(more)
+        self.docs_btns.addStretch(1)
+        self.docs_bar.setStyleSheet(
+            f"QFrame#custdocs {{ background:{theme.c('select_bg')}; border-radius:10px; }}"
+            f"QFrame#custdocs QLabel {{ color:{theme.c('nav_sel_text')}; }}")
+        self.docs_bar.show()
+
+    def _open_doc(self, att, atts) -> None:
+        if self.open_customer_docs is not None:
+            self.open_customer_docs(att, atts)
+
     def _on_select(self):
         n = self._current()
         self.btn_open.setEnabled(bool(n) and not n.is_dir
                                  and self.source is not None
                                  and self.source.kind == "local")
+        folder = self._docs_folder_name(n)
+        if folder != self._docs_for or not folder:
+            self.show_customer_docs(folder)
         if n is None:
             return
         title = f"{n.where}/{n.name}" if n.where else n.name

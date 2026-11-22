@@ -35,10 +35,14 @@ export async function attach(splitEl, key) {
   splitEl.insertBefore(g, right);
 
   let w = await widthOf(key);
+  // ⚠️ 좁은 화면(폰 · 접은 폴드)은 한 판씩 쓴다 — 경계선이 숨고(.gutter display:none) 목록이 화면을
+  //    다 써야 한다. 예전엔 여기서도 너비를 박아(최소 220px) 폰에서 목록이 왼쪽 절반만 쓰고
+  //    오른쪽이 비었다(v1.35 에서 고침). 그때는 박아 둔 너비를 지운다.
+  const narrow = () => getComputedStyle(g).display === "none";
   const apply = (px) => {
     const max = Math.max(MIN, splitEl.clientWidth - MIN_RIGHT);
     w = Math.round(Math.min(max, Math.max(MIN, px)));
-    left.style.width = w + "px";
+    left.style.width = narrow() ? "" : w + "px";
     g.setAttribute("aria-valuenow", String(w));
   };
   apply(w);

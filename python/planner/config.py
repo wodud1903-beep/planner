@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.34.2"
+APP_VERSION = "1.35.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -197,6 +197,14 @@ COLOR_BRIEF_BG = "#EDF2F8"     # 조용한 브리핑 배경(밝은 청회색)
 COLOR_BRIEF_TEXT = "#2C3E50"   # 브리핑 글자
 
 DAY_NAMES = ["", "일", "월", "화", "수", "목", "금", "토"]  # 1=일 .. 7=토
+
+
+def kdow(d) -> str:
+    """한국어 요일 한 글자(일~토). strftime("%a") 는 윈도에서 'Sun' 처럼 영어로 나온다.
+
+    DAY_NAMES 는 1=일 … 7=토 이고 isoweekday() 는 월=1 … 일=7 이라 %7+1 로 자리를 맞춘다.
+    """
+    return DAY_NAMES[d.isoweekday() % 7 + 1]
 
 DEF_FOLLOW_MENT = (
     "%s 고객님, 안녕하세요.\n"

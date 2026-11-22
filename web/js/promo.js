@@ -282,3 +282,152 @@ export function rowText(block, row) {
 export function stripPrep(blocks) {
   return (blocks || []).map((b) => ({ ...b, rows: b.rows.map(({ prep, ...r }) => r) }));
 }
+
+// ------------------------------------------------------------------ 바뀐 곳(v1.35 — P1)
+// 같은 달 판끼리만 견준다. 회사가 달 중간에 조건을 고치면(11/03 판 → 11/20 판) 바뀐 칸을 노랗게,
+// 새로 생긴 모델은 '신규', 빠진 모델은 이름으로 알린다. 달이 바뀌면(11월 → 12월) 표시하지 않는다.
+// 브랜드마다 '지금 판' 과 '전 판' 을 들고 있는다 — 새 표가 지금 판과 같으면 그대로(표시가 남는다).
+// ⚠️ python/planner/promo.py 와 똑같이 — vectors.json 'promo_track' 으로 대조한다.
+const KST_MS = 9 * 3600e3;
+const RE_MONTH = /([0-9]{1,2})\s*월/;
+const RE_MD = /([0-9]{1,2})\s*\/\s*([0-9]{1,2})/;
+const p2 = (n) => String(n).padStart(2, "0");
+
+export function titleMonth(title) {
+  const t = String(title || "");
+  let m = RE_MONTH.exec(t);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return +m[1];
+  m = RE_MD.exec(t);
+  if (m && +m[1] >= 1 && +m[1] <= 12) return +m[1];
+  return 0;
+}
+
+export function titleDate(title) {
+  const m = RE_MD.exec(String(title || ""));
+  if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) return `${p2(+m[1])}/${p2(+m[2])}`;
+  return "";
+}
+
+const kst = (ms) => new Date((Math.trunc(Number(ms) || 0)) + KST_MS);
+const md = (ms) => { const d = kst(ms); return `${p2(d.getUTCMonth() + 1)}/${p2(d.getUTCDate())}`; };
+
+/** block.rows 와 같은 자리의 열쇠 — 모델 줄은 '구역␟모델␟몇 번째', 나머지는 ''. */
+export function rowKeys(block) {
+  const seen = {}, out = [];
+  for (const r of (block && block.rows) || []) {
+    const cells = r.cells || [""];
+    if (r.kind !== "model" || !cells[0]) { out.push(""); continue; }
+    const base = (r.section || "") + "\x1f" + cells[0];
+    const n = seen[base] || 0;
+    seen[base] = n + 1;
+    out.push(`${base}\x1f${n}`);
+  }
+  return out;
+}
+
+export function snap(block) {
+  const rows = {}, order = [];
+  const keys = rowKeys(block);
+  ((block && block.rows) || []).forEach((r, i) => {
+    const k = keys[i];
+    if (k) { rows[k] = (r.cells || []).map(String); order.push(k); }
+  });
+  const t = String((block && block.title) || "");
+  return { title: t, month: titleMonth(t), date: titleDate(t),
+           headers: ((block && block.headers) || []).map(String), rows, order };
+}
+
+const canon = (s) => JSON.stringify([s.title, s.headers, s.order, (s.order || []).map((k) => (s.rows || {})[k])]);
+
+export function sameMonth(prev, prevAt, cur, curAt) {
+  const a = +prev.month || 0, b = +cur.month || 0;
+  if (a && b) return a === b;
+  const pa = kst(prevAt), ca = kst(curAt);
+  return pa.getUTCFullYear() === ca.getUTCFullYear() && pa.getUTCMonth() === ca.getUTCMonth();
+}
+
+function colIds(headers) {
+  const seen = {}, out = [];
+  (headers || []).forEach((h0, i) => {
+    const h = String(h0 || "").trim();
+    if (!h) { out.push(`\x1f#${i}`); return; }
+    const n = seen[h] || 0;
+    seen[h] = n + 1;
+    out.push(`${h}\x1f${n}`);
+  });
+  return out;
+}
+
+/** 전 판 → 지금 판: {changed: {줄 열쇠: [바뀐 칸 번호]}, new: [새 줄 열쇠], gone: [빠진 모델 이름], count}. */
+export function diff(prev, cur) {
+  const pid = {};
+  colIds(prev.headers).forEach((c, j) => { pid[c] = j; });
+  const cid = colIds(cur.headers);
+  const prows = prev.rows || {}, crows = cur.rows || {};
+  const changed = {}, added = [];
+  for (const k of cur.order || []) {
+    const cells = crows[k] || [];
+    if (!(k in prows)) { added.push(k); continue; }
+    const old = prows[k];
+    const cols = [];
+    for (let i = 1; i < cells.length; i++) {
+      const id = i < cid.length ? cid[i] : `\x1f#${i}`;
+      const j = id in pid ? pid[id] : -1;
+      const was = j >= 0 && j < old.length ? old[j] : "";
+      if (String(was).trim() !== String(cells[i]).trim()) cols.push(i);
+    }
+    if (cols.length) changed[k] = cols;
+  }
+  const gone = (prev.order || []).filter((k) => !(k in crows)).map((k) => (prows[k] || [""])[0]);
+  return { changed, new: added, gone, count: Object.keys(changed).length + added.length };
+}
+
+/** 한 브랜드의 기록 → 보여 줄 바뀐 곳(없으면 null). 다른 달 판끼리는 null. */
+export function markOf(h) {
+  if (!h || typeof h !== "object") return null;
+  const prev = h.prev, cur = h.cur;
+  if (!prev || typeof prev !== "object" || !cur || typeof cur !== "object") return null;
+  const pa = h.prev_at || 0, ca = h.cur_at || 0;
+  if (!sameMonth(prev, pa, cur, ca)) return null;
+  const d = diff(prev, cur);
+  if (!d.count && !d.gone.length) return null;
+  let a = prev.date || md(pa), z = cur.date || md(ca);
+  if (a === z) { a = md(pa); z = md(ca); }        // 제목 기준일은 그대로인데 값이 바뀌었다 — 받은 날로
+  d.from = a;
+  d.to = z;
+  return d;
+}
+
+/** 새로 읽은 표 → [새 기록, {브랜드 열쇠: 바뀐 곳 또는 null}]. 표에서 빠진 브랜드는 버린다. */
+export function track(history, blocks, nowMs) {
+  const old = history && typeof history === "object" ? history : {};
+  const hist = {}, marks = {};
+  for (const b of blocks || []) {
+    const s = snap(b);
+    let h = old[b.key];
+    if (!h || typeof h !== "object" || !h.cur || typeof h.cur !== "object") {
+      h = { cur: s, cur_at: Math.trunc(nowMs), prev: null, prev_at: 0 };
+    } else if (canon(h.cur) !== canon(s)) {
+      h = { cur: s, cur_at: Math.trunc(nowMs), prev: h.cur, prev_at: Math.trunc(h.cur_at || 0) };
+    }
+    hist[b.key] = h;
+    marks[b.key] = markOf(h);
+  }
+  return [hist, marks];
+}
+
+/** 저장해 둔 기록만으로(새로 읽기 전) 보여 줄 바뀐 곳. */
+export function marksFrom(history) {
+  const out = {};
+  if (history && typeof history === "object") for (const [k, h] of Object.entries(history)) out[k] = markOf(h);
+  return out;
+}
+
+/** '11/03 → 11/20 바뀐 모델 3개 · 빠진 모델: A, B'(없으면 ''). */
+export function changeText(m) {
+  if (!m) return "";
+  const bits = [`${m.from} → ${m.to} ` + (m.count ? `바뀐 모델 ${m.count}개` : "바뀜")];
+  const gone = m.gone || [];
+  if (gone.length) bits.push("빠진 모델: " + gone.slice(0, 5).join(", ") + (gone.length > 5 ? ` 외 ${gone.length - 5}개` : ""));
+  return bits.join(" · ");
+}

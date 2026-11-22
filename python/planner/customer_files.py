@@ -127,6 +127,27 @@ class Node:
         return f"{self.mtime:%Y-%m-%d}" if self.mtime else ""
 
 
+def name_pieces(cell: str) -> list:
+    """고객 칸 '박성일 / 박가네 백년약초' → ['박성일', '박가네 백년약초'](빈 조각 빼고)."""
+    import re
+    return [x.strip() for x in re.split(r"[/,]", cell or "") if x.strip()]
+
+
+def find_customer_folder(nodes: list, name: str):
+    """고객 이름에 맞는 폴더(v1.35) — 폴더 이름이 이름 조각과 같으면 먼저, 없으면 조각을 품은
+    폴더('김민준_쏘렌토' 같은 것). 여럿이면 창고 바로 밑(얕은 것) · 이름이 짧은 것부터."""
+    pieces = name_pieces(name)
+    folders = [n for n in (nodes or []) if n.is_dir and not n.is_root]
+    for exact in (True, False):
+        for pc in pieces:
+            hits = [n for n in folders
+                    if (n.name.strip() == pc if exact else pc in n.name)]
+            if hits:
+                hits.sort(key=lambda n: (n.folder.count("/") + (1 if n.folder else 0), len(n.name)))
+                return hits[0]
+    return None
+
+
 def search(nodes: list, query: str) -> list:
     """폴더명·파일명으로 거른다. 초성('ㄱㅅㅎ')도 걸린다.
 

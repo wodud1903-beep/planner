@@ -213,5 +213,46 @@ console.log("\n[17] 수입차 프로모션 (promo.py) — 해석 · 검색 · �
   eq("읽기 · 다른 시트 쓰기는 그대로", okGet, true);
 }
 
+console.log("\n[18] 프로모션 바뀐 곳 (promo.py track) — 같은 달 판끼리만");
+{
+  const T = V.promo_track;
+  // 열쇠 차례는 보지 않는다(파이썬 dict · JS 객체 — 내용만 같으면 같은 것)
+  const canon = (x) => Array.isArray(x) ? x.map(canon)
+    : (x && typeof x === "object" ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canon(x[k])])) : x);
+  let hist = {};
+  T.steps.forEach((st, i) => {
+    const [h, marks] = PR.track(hist, PR.parse(st.values, T.merges), st.now);
+    hist = h;
+    eq(`track ${i + 1}단계 — 기록`, canon(h), canon(st.hist));
+    eq(`track ${i + 1}단계 — 바뀐 곳`, canon(marks), canon(st.marks));
+    const txt = Object.fromEntries(Object.entries(marks).map(([k, m]) => [k, PR.changeText(m)]));
+    eq(`changeText ${i + 1}단계`, canon(txt), canon(st.text));
+    eq(`marksFrom ${i + 1}단계(저장본만으로)`, canon(PR.marksFrom(h)), canon(st.marks));
+  });
+  for (const [t, m, d] of T.title_month) {
+    eq(`titleMonth(${t})`, PR.titleMonth(t), m);
+    eq(`titleDate(${t})`, PR.titleDate(t), d);
+  }
+  eq("rowKeys", PR.rowKeys({ rows: [
+    { kind: "section", cells: ["전기차"], section: "" },
+    { kind: "model", cells: ["EQA", "1"], section: "전기차" },
+    { kind: "model", cells: ["EQA", "2"], section: "전기차" },
+    { kind: "note", cells: ["안내"], section: "전기차" },
+    { kind: "model", cells: ["", "x"], section: "" },
+    { kind: "model", cells: ["EQA", "3"], section: "" }] }), T.row_keys);
+  // 사람이 볼 것 — 2단계(11/20 판): 벤츠만 바뀜 · 3단계 그대로 · 4단계(12월) 없음 · 5단계(12월 안) 다시
+  const S = T.steps;
+  eq("11/20 판 — 벤츠만 표시", Object.entries(S[1].marks).filter(([, m]) => m).map(([k]) => k), ["benz"]);
+  eq("11/20 판 — 바뀐 2 · 신규 1 · 빠짐 1", [Object.keys(S[1].marks.benz.changed).length, S[1].marks.benz.new.length,
+    S[1].marks.benz.gone], [2, 1, ["GLC300 4M+ AV [26MY]"]]);
+  eq("11/20 판 — 글", S[1].text.benz, "11/03 → 11/20 바뀐 모델 3개 · 빠진 모델: GLC300 4M+ AV [26MY]");
+  eq("한 번 더 읽어도 표시가 남는다", canon(S[2].marks), canon(S[1].marks));
+  eq("12월 판 — 달이 바뀌면 표시 없음", Object.values(S[3].marks).filter(Boolean).length, 0);
+  eq("12/15 판 — 12월 안에서 바뀐 것은 다시 표시(벤츠 · 아우디)",
+    Object.entries(S[4].marks).filter(([, m]) => m).map(([k]) => k).sort(), ["audi", "benz"]);
+  eq("아우디(제목에 달이 없음)는 받은 날로", [S[4].marks.audi.from, S[4].marks.audi.to], ["12/01", "12/15"]);
+  console.log(`  ${T.steps.length * 4 + T.title_month.length * 2 + 8}개 대조`);
+}
+
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
 process.exit(fails ? 1 : 0);

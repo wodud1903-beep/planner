@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -69,7 +69,7 @@ class TodoItem:
 
     def days_text(self) -> str:
         if not self.repeats:
-            return self.run_date.strftime("%m-%d(%a)")
+            return f"{self.run_date:%m-%d}({config.kdow(self.run_date)})"
         return _days_text(self.weekdays)
 
     def to_json(self) -> dict:
@@ -150,6 +150,22 @@ class PcAlarm:
             ment=o.get("ment", ""),
             last_fire=_parse_dt(o.get("lastFire", "")),
         )
+
+    def next_fire(self, now: datetime) -> Optional[datetime]:
+        """다음에 울릴 때(v1.35 — PC 알람 표의 '다음 울림'). 꺼져 있거나 요일이 없으면 None.
+
+        오늘 그 시각이 아직 안 지났으면 오늘, 지났으면 다음 요일."""
+        if not self.enabled or not any(c in (self.weekdays or "") for c in "1234567"):
+            return None
+        for k in range(0, 8):
+            d = now.date() + timedelta(days=k)
+            dow = d.isoweekday() % 7 + 1
+            if str(dow) not in self.weekdays:
+                continue
+            at = datetime.combine(d, self.run_time)
+            if at > now.replace(second=0, microsecond=0):
+                return at
+        return None
 
     def due_now(self, now: datetime) -> bool:
         if not self.enabled:
@@ -260,6 +276,8 @@ class AppSettings:
     follow_alarm: bool = True
     follow_time: time = field(default_factory=lambda: time(10, 0))
     follow_ment: str = config.DEF_FOLLOW_MENT
+    # 재계약 안내멘트(v1.35 — 멘트복사 탭에서 고친다). 비어 있으면 기본 글(renewals.RENEW_MENT)
+    renew_ment: str = ""
     # 팔로업을 구글 캘린더에도 등록
     follow_to_calendar: bool = False
     # 출고일이 정해지면 구글 캘린더에 자동 등록 (제목 "<고객> 출고")
@@ -340,6 +358,8 @@ class AppSettings:
     # 월 마감 리포트(v1.26) — 매달 지난달 것을 시트 '월마감' 탭에 저절로 · 마지막으로 적은 달
     monthly_on: bool = True
     monthly_last: str = ""
+    # 자료검색 즐겨찾기(v1.35) — 자료 제목(내 메모는 'm:' + 제목). 동기화 묶음에 실려 다른 PC 에도
+    kb_favs: list = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {
@@ -352,6 +372,7 @@ class AppSettings:
             "followAlarm": self.follow_alarm,
             "followTime": _fmt_time(self.follow_time),
             "followMent": self.follow_ment,
+            "renewMent": self.renew_ment,
             "followToCalendar": self.follow_to_calendar,
             "hotOn": self.hot_on,
             "hotCtrl": self.hot_ctrl,
@@ -401,6 +422,7 @@ class AppSettings:
             "renewMonths": int(self.renew_months or 4),
             "monthlyOn": bool(self.monthly_on),
             "monthlyLast": self.monthly_last or "",
+            "kbFavs": [str(x) for x in (self.kb_favs or []) if str(x).strip()],
         }
 
     @classmethod
@@ -423,6 +445,7 @@ class AppSettings:
         s.follow_alarm = bool(o.get("followAlarm", True))
         s.follow_time = _parse_time(o.get("followTime", "10:00"), time(10, 0))
         s.follow_ment = o.get("followMent", config.DEF_FOLLOW_MENT)
+        s.renew_ment = str(o.get("renewMent", "") or "")
         s.follow_to_calendar = bool(o.get("followToCalendar", False))
         s.hot_on = bool(o.get("hotOn", True))
         s.hot_ctrl = bool(o.get("hotCtrl", True))
@@ -488,6 +511,8 @@ class AppSettings:
             s.renew_months = 4
         s.monthly_on = bool(o.get("monthlyOn", True))
         s.monthly_last = str(o.get("monthlyLast") or "")
+        favs = o.get("kbFavs")
+        s.kb_favs = [str(x) for x in favs if str(x).strip()] if isinstance(favs, list) else []
         return s
 
     def save(self, path: Path) -> None:

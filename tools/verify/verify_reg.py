@@ -239,9 +239,9 @@ ok("더블클릭은 수정",
 # 버튼 줄은 [고객 추가][삭제] 둘뿐이다. 서류·이력은 지우지 않고 우클릭
 # 메뉴로 옮겼다 — 이미 적어 둔 상담 메모를 못 열게 되면 안 되므로.
 btnrow = inspect.getsource(MainWindow._build_customer_tab)
-ok("버튼 줄은 [고객 추가][삭제] 뿐",
-   '("고객 추가", self.on_customer_add)' in btnrow
-   and '("삭제", self.on_customer_del)' in btnrow
+ok("버튼 줄은 [고객 추가] · 오른쪽 끝 [삭제] 뿐(v1.35 — 삭제를 추가 옆에서 뗐다)",
+   'QPushButton("고객 추가")' in btnrow and 'QPushButton("삭제")' in btnrow
+   and btnrow.index("row.addWidget(self.ed_cust_find)") < btnrow.index("row.addWidget(self.btn_cust_del)")
    and '("서류"' not in btnrow and '("이력"' not in btnrow)
 menu = inspect.getsource(MainWindow._cust_context_menu)
 ok("서류·이력은 우클릭으로 남아 있다",
@@ -283,7 +283,7 @@ cut = [(h, t2.columnWidth(i), t2.sizeHintForColumn(i))
        if h != "내용" and t2.sizeHintForColumn(i) > t2.columnWidth(i)]
 ok("가장 긴 값에서도 '내용' 외에는 안 잘린다", not cut, cut)
 ok("차량가격·내용 열이 있다", "차량가격" in heads and "내용" in heads, heads)
-ok("차량가격은 차종 바로 뒤", heads.index("차량가격") == heads.index("차종") + 1)
+ok("차량가격은 금융사·차종 바로 뒤", heads.index("차량가격") == heads.index("금융사 · 차종") + 1)
 ok("내용은 수수료 바로 뒤", heads.index("내용") == heads.index("수수료") + 1)
 ok("서류 버튼 열은 없다", "서류" not in heads, heads)
 ok("'내용' 은 남는 폭을 받아 넉넉하다", t2.columnWidth(heads.index("내용")) >= 150,

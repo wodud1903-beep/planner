@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import renewals, theme
@@ -61,7 +61,15 @@ class RenewalView(QWidget):
             self.tbl.setColumnWidth(i, w)
         hh.setSectionResizeMode(2, QHeaderView.Stretch)
         self.tbl.cellDoubleClicked.connect(self._dbl)
-        v.addWidget(self.tbl, 1)
+        # 보여 줄 고객이 없을 때 빈 표 대신 까닭을 한 줄로(v1.35)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.tbl)
+        self.lbl_empty = QLabel("")
+        self.lbl_empty.setAlignment(Qt.AlignCenter)
+        self.lbl_empty.setWordWrap(True)
+        self.lbl_empty.setStyleSheet(f"color:{theme.c('subtext')}; font-size:11pt; padding:24px;")
+        self.stack.addWidget(self.lbl_empty)
+        v.addWidget(self.stack, 1)
         self.lbl_hint = QLabel("만기가 다가오는 고객입니다. [멘트 복사] 로 안내 글을 복사해 카카오톡으로 "
                                "보내고, 상태를 바꿔 두세요(다른 PC·폰 알림에도 반영됩니다).")
         self.lbl_hint.setWordWrap(True)
@@ -94,6 +102,8 @@ class RenewalView(QWidget):
             f"{self._months}개월 안 만기 {c['전체']}명 · 미연락 {c['미연락']} · 연락함 {c['연락함']} · "
             f"상담중 {c['상담중']} · 재계약 {c['재계약']} · 안 함 {c['안 함']}{rate}")
         self.items = [x for x in allx if not (self.chk_hide.isChecked() and x[3] in renewals.CLOSED)]
+        self.lbl_empty.setText(self.empty_text(allx))
+        self.stack.setCurrentWidget(self.tbl if self.items else self.lbl_empty)
         t = self.tbl
         t.setRowCount(len(self.items))
         for r, (cr, d, left, st) in enumerate(self.items):
@@ -119,6 +129,18 @@ class RenewalView(QWidget):
                          " (아직 '미연락' 이면 '연락함' 으로 바꿉니다)")
             b.clicked.connect(lambda _c=False, cr=cr, d=d: self.copy_requested.emit(cr, d))
             t.setCellWidget(r, 6, b)
+
+    def empty_text(self, allx: list) -> str:
+        """표가 비었을 때 보여 줄 한 줄 — 왜 비었는지와 어떻게 하면 보이는지."""
+        if self.items:
+            return ""
+        if not self._rows:
+            return "고객관리 시트를 불러오면 만기가 다가오는 고객이 여기에 나옵니다."
+        if not allx:
+            return (f"{self._months}개월 안에 만기가 오는 고객이 없습니다.\n"
+                    "위 '만기' 에서 기간을 늘려 보세요.")
+        return ("모두 재계약 · 안 함으로 정리했습니다.\n"
+                "'재계약·안 함 숨기기' 를 끄면 다시 보입니다.")
 
     def _dbl(self, r: int, _c: int) -> None:
         it = self.tbl.item(r, 0)
