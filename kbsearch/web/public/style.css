@@ -18,6 +18,7 @@
   --primary-hover: #4C3CC4;
   --ok: #2E7D32; --ok-bg: #EBF6EC;
   --bad: #C0392B; --bad-bg: #FCE8E5;
+  --chg-bg: #FFF2A8; --warn: #A35F0D; --warn-bg: #FDF0DC;   /* 바뀐 곳(프로모션 — v1.35) */
   --r-lg: 20px; --r-md: 14px; --r-sm: 10px;
   --shadow: 0 1px 2px rgb(37 40 57 / .04), 0 6px 24px rgb(37 40 57 / .06);
   --shadow-up: 0 2px 4px rgb(37 40 57 / .05), 0 12px 32px rgb(37 40 57 / .10);
@@ -302,6 +303,9 @@ dialog input:focus, dialog textarea:focus { border-color: var(--accent); box-sha
 .views button[aria-selected="true"] { background: var(--select); color: var(--select-text); border-color: transparent; font-weight: 700; }
 .pview { height: 100%; max-width: 980px; margin: 0 auto; }
 .pcard, .ccard { height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+/* ⚠️ 수당계산기 카드는 세로 flex 로 두면 칸들이 카드 높이에 맞춰 **눌린다** — 차량가 입력칸이 납작해지고
+      차종 목록이 두 줄만 보였다(v1.35 에서 고침). 이 카드는 그냥 위에서 아래로 쌓고 넘치면 스크롤한다. */
+.ccard { display: block; }
 .foot .grow { flex: 1; }
 .flink { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 600; font-size: 12.5px; white-space: nowrap;
   text-decoration: none; cursor: pointer; }
@@ -310,7 +314,8 @@ dialog input:focus, dialog textarea:focus { border-color: var(--accent); box-sha
 /* 수입차 프로모션 — 브랜드마다 덩어리, 줄마다 '칸 이름(시트 4행) 값' */
 .plist { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 8px; }
 .pempty { color: var(--sub); text-align: center; padding: 40px 12px; margin: 0; }
-div.pempty b { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
+/* 제목(첫 줄)만 굵은 한 줄로 — 문장 속 <b>(예: '보기만')까지 줄이 바뀌어 문장이 끊겨 보였다(v1.35) */
+div.pempty > b { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
 div.pempty p { margin: 0 0 16px; font-size: 14px; }
 .promoblk { margin: 4px 0 14px; }
 .promoblk h3 { margin: 6px 0 2px; font-size: 15.5px; font-weight: 800; color: var(--select-text); }
@@ -326,11 +331,23 @@ div.pempty p { margin: 0 0 16px; font-size: 14px; }
 .promoblk .pv i { font-style: normal; color: var(--faint); font-size: 12px; margin-right: 4px; }
 .promoblk .pv.red { color: var(--bad); font-weight: 700; }
 .promoblk .pv.blue { color: var(--select-text); font-weight: 700; }
+.promoblk .pv.chg { background: var(--chg-bg); color: var(--text); font-weight: 700; border-radius: 6px; padding: 1px 6px; }
+.promoblk .prow.new { background: var(--chg-bg); }
+.promoblk .pnew { font-style: normal; font-size: 11px; font-weight: 700; color: var(--warn); background: var(--warn-bg);
+  border-radius: 8px; padding: 1px 6px; margin-right: 6px; vertical-align: 2px; }
+.promoblk .pchg { margin: -2px 0 8px; font-size: 13px; font-weight: 600; color: var(--warn); }
 .promoblk .pnote { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; background: #FDF5EA;
   border: 0; border-radius: var(--r-sm); margin: 4px 0; padding: 10px 12px; }
 
 /* 수당계산기 — 일정관리기 웹과 같은 차례 */
 .ccard { overflow: auto; padding: 4px 0 20px; }
+.ccols { display: block; }
+@media (min-width: 860px) {
+  /* 넓은 화면 — 왼쪽 차종 목록(길게) · 오른쪽 금액과 결과. 예전엔 가운데 한 줄로 길게 늘어졌다 */
+  .ccols { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(320px, 1fr); gap: 8px 4px; align-items: start; }
+  .cleft .carlist { max-height: 440px; }
+  .cright { padding-top: 46px; }
+}
 .ccard .chips { padding-top: 14px; }
 .flab { display: block; margin: 10px 16px 4px; font-size: 13px; font-weight: 600; color: var(--sub); }
 .csearch { margin-top: 0; }

@@ -15,6 +15,7 @@ import * as sync from "./sync.js";
 const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
 const VIEW_KEY = "kbsearch:view:v1";
 const PROMO_KEY = "kbsearch:promo:v1";
+const MARKS_KEY = "kbsearch:promoMarks:v1";    // 바뀐 곳 기록(v1.35 — 같은 달 판끼리만, 계정마다)
 const RATES_KEY = "kbsearch:rates:v1";
 const CALC_KEY = "kbsearch:calc:v1";
 const VIEWS = ["kb", "promo", "calc"];
@@ -76,6 +77,7 @@ function paintVisible() {
 // ================================================================== 수입차 프로모션
 let pBlocks = [], pGid = null, pAt = 0, pFresh = 0, pErr = "", pNeed = "", pBusy = false;
 let pq = "", pBrand = "", pTimer = 0, pShown = [], pMsg = "";
+let pMarks = {};          // {브랜드 열쇠: 바뀐 곳 | null}
 
 function take(o) {
   pBlocks = promo.parse(o.values || [], o.merges || []);
@@ -83,10 +85,19 @@ function take(o) {
   pAt = o.at || 0;
 }
 
+function markHist(email) {
+  const mk = lsGet(MARKS_KEY);
+  return mk && mk.email && mk.email === email && mk.hist && typeof mk.hist === "object" ? mk.hist : {};
+}
+
 function restorePromo() {
+  pMarks = {};
   const c = lsGet(PROMO_KEY);
   // 로그인한 계정으로 받은 것만 — 다른 계정·로그아웃 뒤에는 보이지 않는다
-  if (c && c.email && c.email === sync.account() && Array.isArray(c.values)) take(c);
+  if (c && c.email && c.email === sync.account() && Array.isArray(c.values)) {
+    take(c);
+    pMarks = promo.marksFrom(markHist(c.email));
+  }
 }
 
 /** 이 화면은 GET 만 한다 — 다른 방법을 부르면 그 자리에서 멈춘다(읽기 전용). */
@@ -131,6 +142,10 @@ async function loadPromo(manual) {
     take(o);
     pFresh = Date.now();
     lsSet(PROMO_KEY, o);
+    // 바뀐 곳 — 지난 판과 견준다(같은 달 판끼리만). 기록은 이 기기·이 계정 것
+    const [hist, marks] = promo.track(markHist(o.email), pBlocks, Date.now());
+    pMarks = marks;
+    lsSet(MARKS_KEY, { email: o.email, hist });
     if (manual) pMsg = "새로 읽었습니다.";
   } catch (e) {
     pErr = navigator.onLine === false ? "인터넷에 연결되지 않았습니다." : (e && e.message) || "프로모션 시트를 읽지 못했습니다.";
@@ -188,24 +203,36 @@ function paintPromo() {
     const title = b.title ? (named ? b.title : `${b.brand} · ${b.title}`) : b.brand;
     const groups = b.groups.map(([k0, w, t]) => `${esc(t)}: ${esc(b.headers.slice(k0, k0 + w).filter(Boolean).join("·"))}`)
       .join(" &nbsp;|&nbsp; ");
+    // 바뀐 곳(v1.35) — 같은 달 안에서 지난 판과 달라진 칸 · 새 모델
+    const m = pMarks[b.key] || null;
+    const keyOf = new Map();
+    promo.rowKeys(b).forEach((k, j) => { if (k) keyOf.set(b.rows[j], k); });
     let body = "";
     for (const r of rows) {
       const i = pShown.push([b, r]) - 1;
       if (r.kind === "section") body += `<h4 class="psec">${esc(r.cells[0])}</h4>`;
       else if (r.kind === "note") body += `<button type="button" class="pnote" data-i="${i}">${esc(r.cells[0])}</button>`;
       else {
+        const rk = keyOf.get(r) || "";
+        const isNew = !!(m && rk && m.new.includes(rk));
+        const chg = m && rk ? (m.changed[rk] || []) : [];
         let vs = "";
         for (let k = 1; k < r.cells.length; k++) {
           const v = r.cells[k];
           if (!v) continue;
           const tone = promo.toneOf(v);
-          vs += `<span class="pv${tone ? " " + tone : ""}"><i>${esc(b.headers[k] || "")}</i>${esc(v)}</span>`;
+          const hot = chg.includes(k);
+          vs += `<span class="pv${tone ? " " + tone : ""}${hot ? " chg" : ""}"${hot ? ' title="지난 판과 달라졌습니다"' : ""}>`
+            + `<i>${esc(b.headers[k] || "")}</i>${esc(v)}</span>`;
         }
-        body += `<button type="button" class="prow" data-i="${i}" title="시트 ${r.row}행 — 누르면 복사">`
-          + `<b class="pm">${esc(r.cells[0] || "—")}</b><span class="pvs">${vs}</span></button>`;
+        body += `<button type="button" class="prow${isNew ? " new" : ""}" data-i="${i}" title="시트 ${r.row}행 — 누르면 복사">`
+          + `<b class="pm">${isNew ? '<em class="pnew">신규</em>' : ""}${esc(r.cells[0] || "—")}</b><span class="pvs">${vs}</span></button>`;
       }
     }
-    out.push(`<section class="promoblk"><h3>${esc(title)}</h3>${groups ? `<p class="pgroups">${groups}</p>` : ""}${body}</section>`);
+    const chgLine = promo.changeText(m);
+    out.push(`<section class="promoblk"><h3>${esc(title)}</h3>`
+      + (chgLine ? `<p class="pchg" title="같은 달 안에서 지난 판과 달라진 곳을 노랗게 칠했습니다(달이 바뀌면 표시하지 않습니다)">✎ ${esc(chgLine)}</p>` : "")
+      + `${groups ? `<p class="pgroups">${groups}</p>` : ""}${body}</section>`);
   }
   box.innerHTML = out.join("");
   for (const el of $$("#promolist [data-i]")) el.onclick = () => copyPromo(+el.dataset.i);

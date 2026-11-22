@@ -97,25 +97,32 @@
 
     <section class="pview" id="calc-view" hidden>
       <div class="card ccard">
-        <div class="chips" id="cbrand" role="toolbar" aria-label="브랜드"></div>
-        <label class="flab" for="ccar">차종</label>
-        <div class="search csearch">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
-          <input id="ccar" type="search" placeholder="차종 검색 (초성도 됩니다)" autocomplete="off" aria-label="차종 검색">
+        <!-- 넓은 화면(PC)은 두 칸 — 왼쪽 차종 고르기 · 오른쪽 금액과 결과(v1.35). 폰은 위에서 아래로 한 줄 -->
+        <div class="ccols">
+          <div class="cleft">
+            <div class="chips" id="cbrand" role="toolbar" aria-label="브랜드"></div>
+            <label class="flab" for="ccar">차종</label>
+            <div class="search csearch">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+              <input id="ccar" type="search" placeholder="차종 검색 (초성도 됩니다)" autocomplete="off" aria-label="차종 검색">
+            </div>
+            <ul class="carlist" id="ccars"></ul>
+          </div>
+          <div class="cright">
+            <label class="flab" for="cprice">차량가 (₩)</label>
+            <input id="cprice" class="bigin" type="text" inputmode="numeric" placeholder="차량가를 입력하세요">
+            <div class="calcrow">
+              <div><label class="flab" for="cpay">지급율 (%)</label>
+                <input id="cpay" class="bigin" type="text" inputmode="decimal"></div>
+              <label class="freechk"><input id="cfree" type="checkbox"> 면세 차량</label>
+            </div>
+            <div class="calcout"><span>최종 지급수수료</span><b id="cres">₩ 0</b></div>
+            <p class="crate" id="crate"></p>
+            <button type="button" class="btn primary bigcopy" id="ccopy">결과 복사</button>
+            <p class="csrc"><span id="csrc"></span> · <button type="button" class="flink" id="creset">초기화</button></p>
+            <p class="cerr" id="cerr" role="status"></p>
+          </div>
         </div>
-        <ul class="carlist" id="ccars"></ul>
-        <label class="flab" for="cprice">차량가 (₩)</label>
-        <input id="cprice" class="bigin" type="text" inputmode="numeric" placeholder="차량가를 입력하세요">
-        <div class="calcrow">
-          <div><label class="flab" for="cpay">지급율 (%)</label>
-            <input id="cpay" class="bigin" type="text" inputmode="decimal"></div>
-          <label class="freechk"><input id="cfree" type="checkbox"> 면세 차량</label>
-        </div>
-        <div class="calcout"><span>최종 지급수수료</span><b id="cres">₩ 0</b></div>
-        <p class="crate" id="crate"></p>
-        <button type="button" class="btn primary bigcopy" id="ccopy">결과 복사</button>
-        <p class="csrc"><span id="csrc"></span> · <button type="button" class="flink" id="creset">초기화</button></p>
-        <p class="cerr" id="cerr" role="status"></p>
       </div>
     </section>
 

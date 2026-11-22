@@ -938,11 +938,12 @@ console.log("[9] v1.34.2 — 수입차 프로모션(읽기 전용) · 수당계�
     ? r.fulfill({ status: 401, json: { error: "signin" } })
     : r.fulfill({ json: { access_token: "kb-at", expires_in: 3600, email: "me@x.com", missing: [], sheets: tokMode === "ok" } }));
   const preq = [];
+  let pvals = FX.values;                         // 프로모션 시트 값(v1.35 — 바뀐 곳 검사에서 바꾼다)
   await ctx.route("**/sheets.googleapis.com/**", (r) => {
     const u = decodeURIComponent(r.request().url());
     preq.push([r.request().method(), u]);
     if (!u.includes(PID)) return r.fulfill({ status: 404, json: {} });
-    if (u.includes("/values/")) return r.fulfill({ json: { values: FX.values } });
+    if (u.includes("/values/")) return r.fulfill({ json: { values: pvals } });
     return r.fulfill({ json: { sheets: [{ properties: { title: "수입차 프로모션", sheetId: 1350310028 },
       merges: FX.merges.map(([a, b, c, d]) => ({ startRowIndex: a, endRowIndex: b, startColumnIndex: c, endColumnIndex: d })) }] } });
   });
@@ -960,6 +961,10 @@ console.log("[9] v1.34.2 — 수입차 프로모션(읽기 전용) · 수당계�
   await pg.waitForSelector("#calc-view:not([hidden])");
   ok("수당계산기로 바꾸면 자료검색은 숨는다", !(await pg.locator("#split").isVisible()));
   await pg.waitForFunction(() => /회사 시트/.test(document.querySelector("#csrc").textContent));
+  // v1.35 B1 — 카드를 세로 flex 로 두어 칸이 눌렸다(차량가 칸 20px 남짓 · 차종 목록 두 줄)
+  const geo = await pg.evaluate(() => ({ price: document.querySelector("#cprice").getBoundingClientRect().height,
+                                         cars: document.querySelector("#ccars").getBoundingClientRect().height }));
+  ok("B1 차량가 칸이 눌리지 않는다(48px) · 차종 목록도 넉넉히", geo.price >= 44 && geo.cars >= 200, JSON.stringify(geo));
   await pg.fill("#ccar", "ㄱㄹㅈ");
   const cars = await pg.locator("#ccars .t").allTextContents();
   ok("차종 초성 검색(ㄱㄹㅈ → 그랜저)", cars.length >= 1 && cars.every((c) => c.includes("그랜저")), cars.join(","));
@@ -979,12 +984,25 @@ console.log("[9] v1.34.2 — 수입차 프로모션(읽기 전용) · 수당계�
   await pg.fill("#ccar", "");
   await pg.click('#cbrand button[data-b="kia"]');
   ok("기아로 바꾸면 기아 차종", (await pg.locator("#ccars .t").allTextContents()).some((t) => /K5|쏘렌토|카니발/.test(t)));
+  // v1.35 Q1 — PC(넓은 화면)는 두 칸: 왼쪽 차종 · 오른쪽 금액과 결과
+  await pg.setViewportSize({ width: 1366, height: 800 });
+  await pg.waitForTimeout(200);
+  const two = await pg.evaluate(() => {
+    const a = document.querySelector(".cleft").getBoundingClientRect(), b = document.querySelector(".cright").getBoundingClientRect();
+    return { lx: a.left, rx: b.left, ly: a.top, ry: b.top, price: document.querySelector("#cprice").getBoundingClientRect().height };
+  });
+  ok("Q1 PC 는 두 칸(왼쪽 차종 · 오른쪽 금액)", two.rx > two.lx + 250 && Math.abs(two.ly - two.ry) < 80 && two.price >= 44,
+     JSON.stringify(two));
+  await pg.setViewportSize({ width: 412, height: 860 });
+  await pg.waitForTimeout(200);
 
   // 수입차 프로모션 — 로그인 전
   await pg.click('#views button[data-v="promo"]');
   await pg.waitForSelector("#promo-login");
   ok("프로모션 — 로그인 전엔 로그인 안내(시트 보기만 한다고 알린다)",
      /로그인이 필요/.test(await pg.locator("#promolist").innerText()) && /보기만/.test(await pg.locator("#promolist").innerText()));
+  const inl = await pg.evaluate(() => [...document.querySelectorAll("#promolist .pempty p b")].map((b) => getComputedStyle(b).display));
+  ok("B2 문장 속 '보기만' 은 줄이 바뀌지 않는다(제목만 한 줄)", inl.length >= 1 && inl.every((d) => d === "inline"), inl.join(","));
   // 예전 로그인(시트 권한 없음) — 동기화는 그대로, 프로모션만 다시 로그인 안내
   tokMode = "old";
   await pg.evaluate(() => localStorage.setItem("kbsearch:acct:v1", "me@x.com"));
@@ -1016,6 +1034,31 @@ console.log("[9] v1.34.2 — 수입차 프로모션(읽기 전용) · 수당계�
     catch (e) { return e.constructor.name; }
   });
   ok("쓰기 요청은 보내기 전에 막힌다", blocked === "ReadOnlySheet", blocked);
+  // v1.35 P1 — 같은 달 안에서 회사가 고치면(11/03 판 → 11/20 판) 바뀐 칸만 노랗게
+  await pg.fill("#promoq", "");
+  await pg.waitForTimeout(200);
+  ok("P1 처음 읽은 판은 표시 없음", (await pg.locator("#promolist .pchg, #promolist .pv.chg").count()) === 0);
+  const v1 = JSON.parse(JSON.stringify(FX.values));
+  v1[5][2] = "91,000,000";
+  v1[2][1] = String(v1[2][1]).replace("11/03", "11/20");
+  pvals = v1;
+  await pg.click("#promo-reload");
+  await pg.waitForSelector("#promolist .pchg", { timeout: 5000 }).catch(() => {});
+  const pl = await pg.locator("#promolist .pchg").allTextContents();
+  ok("P1 11/20 판 — 벤츠에 '11/03 → 11/20 바뀐 모델 1개'", pl.length === 1 && pl[0].includes("11/03 → 11/20 바뀐 모델 1개"),
+     pl.join(" | "));
+  const hotk = await pg.locator("#promolist .pv.chg").allTextContents();
+  ok("P1 바뀐 칸(차량가격 91,000,000)만 노랗게", hotk.length === 1 && hotk[0].includes("91,000,000"), hotk.join(" | "));
+  const v12 = JSON.parse(JSON.stringify(v1));
+  for (const r of [1, 2]) v12[r] = v12[r].map((c) => String(c).replace("11월", "12월").replace("11/20", "12/01").replace("11/05", "12/01"));
+  v12[5][2] = "93,000,000";
+  pvals = v12;
+  await pg.click("#promo-reload");
+  await pg.waitForTimeout(500);
+  ok("P1 12월 판 — 달이 바뀌면 벤츠·BMW 에 표시 없음",
+     (await pg.locator("#promolist .promoblk").nth(0).locator(".pchg, .pv.chg").count()) === 0
+     && (await pg.locator("#promolist .promoblk").nth(1).locator(".pchg, .pv.chg").count()) === 0);
+  pvals = FX.values;
   // 다시 열어도 마지막 화면(프로모션)과 받아 둔 표
   await pg.reload();
   await pg.waitForSelector("#promo-view:not([hidden])");
