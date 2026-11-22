@@ -107,6 +107,54 @@ body = src[src.index("def main() -> int:"):]
 ok("QApplication 보다 먼저", body.index("cabundle.ensure(") < body.index("QApplication(sys.argv)"))
 ok("앱 폴더(base_dir)/certs 에", 'cabundle.ensure(config.base_dir() / "certs")' in body)
 
+print("[7] 고객 서류 '받기 실패' — 까닭을 첫 줄에(지점장: 최근 저장한 고객 두 명 서류)")
+os.environ["APPDATA"] = tempfile.mkdtemp()
+from planner import kb_files  # noqa: E402
+
+
+class _R:
+    def __init__(self, code, body=b"", ctype="image/png"):
+        self.status_code, self.content, self.headers = code, body, {"Content-Type": ctype}
+
+
+class _Auth:
+    def __init__(self, on=True):
+        self.on = on
+
+    def is_connected(self):
+        return self.on
+
+    def _headers(self):
+        return {"Authorization": "Bearer x"}
+
+
+def _first_line(fn):
+    try:
+        fn()
+        return ""
+    except kb_files.KbFileError as e:
+        return str(e).splitlines()[0]
+
+
+_cert = OSError("Could not find a suitable TLS CA certificate bundle, invalid path: C:\\x\\cacert.pem")
+kb_files._http = lambda: types.SimpleNamespace(get=lambda *a, **k: (_ for _ in ()).throw(_cert))
+m = _first_line(lambda: kb_files.fetch(_Auth(), {"id": "C1", "name": "계약서.jpg"}))
+ok("인증서 파일이 없으면 '껐다 켜 주세요'", "보안 인증서 파일이 지워졌습니다" in m and "다시 켜" in m, m)
+m = _first_line(lambda: kb_files.fetch(_Auth(False), {"id": "C1", "name": "계약서.jpg"}))
+ok("로그인 안 됨보다 연결 오류가 먼저", "보안 인증서" in m, m)
+kb_files._http = lambda: types.SimpleNamespace(
+    get=lambda url, **k: _R(404) if "googleapis" in url else _R(200, b"<html>", "text/html"))
+m = _first_line(lambda: kb_files.fetch(_Auth(), {"id": "C2", "name": "견적서.pdf"}))
+ok("다른 계정이 올린 파일이면 그렇게", "이 구글 계정으로는 볼 수 없는 파일" in m and "404" in m, m)
+kb_files._http = lambda: types.SimpleNamespace(
+    get=lambda url, **k: _R(401) if "googleapis" in url else _R(200, b"<html>", "text/html"))
+m = _first_line(lambda: kb_files.fetch(_Auth(), {"id": "C3", "name": "견적서.pdf"}))
+ok("로그인 만료면 다시 로그인", "로그인이 만료" in m, m)
+m = _first_line(lambda: kb_files.fetch(_Auth(False), {"id": "C3", "name": "견적서.pdf"}))
+ok("로그인 안 됐으면 그렇게", "로그인이 되어 있지 않습니다" in m, m)
+kb_files._http = lambda: types.SimpleNamespace(get=lambda url, **k: _R(200, b"\x89PNGdata"))
+ok("되면 받는다", kb_files.fetch(_Auth(), {"id": "C4", "name": "등록증.png"}).read_bytes() == b"\x89PNGdata")
+
 shutil.rmtree(tmp, ignore_errors=True)
 print()
 if FAIL:
