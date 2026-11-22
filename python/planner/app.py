@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QComboBox, QLineEdit,
 )
 
-from . import config, crashlog, theme, updater
+from . import cabundle, config, crashlog, theme, updater
 from .main_window import MainWindow
 
 # 중복 실행 방지용 로컬 소켓 이름 (한 사용자당 하나만 실행)
@@ -110,6 +110,12 @@ def _startup_theme() -> str:
 
 
 def main() -> int:
+    # 인증서 묶음을 임시 폴더 밖 복사본으로 — 며칠 켜 둔 사이 청소 프로그램이 임시 폴더의
+    # cacert.pem 을 지워 업데이트·구글 연결이 막히던 것(v1.35.1, cabundle)
+    try:
+        cabundle.ensure(config.base_dir() / "certs")
+    except Exception:
+        pass
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
 
