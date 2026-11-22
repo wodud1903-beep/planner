@@ -128,11 +128,24 @@ class PromoTab(QWidget):
     def reset(self) -> None:
         """계정·시트가 바뀌었다 — 처음 상태로(저장본도 그 계정 폴더 것을 다시 본다)."""
         self.raw, self.blocks, self._fresh_at, self._err = None, [], None, ""
+        self.marks = {}
         self._cache_tried = False
         self._rebuild_brands()
         self._paint()
         if self.isVisible():
             self.on_shown()
+
+    def blocks_for_search(self) -> list:
+        """빠른검색 창이 쓸 표 — 아직 안 열어 봤으면 저장본만 읽는다(시트에 묻지 않는다)."""
+        if self.blocks:
+            return self.blocks
+        raw = promo.load_cache(self.sheet_id, self.tab)
+        if raw:
+            try:
+                return promo.parse(raw.get("values") or [], raw.get("merges") or [])
+            except Exception:
+                return []
+        return []
 
     def on_shown(self) -> None:
         """탭을 열었다 — 저장본부터 보여 주고, 오래됐으면(또는 처음) 새로 읽는다."""
@@ -191,14 +204,21 @@ class PromoTab(QWidget):
             self._err = ""
             self._fresh_at = time.monotonic()
             promo.save_cache(sid, tab, raw)
-            self._take(raw)
+            self._take(raw, fresh=True)
         else:
             self._err = err
             self._paint()
 
-    def _take(self, raw: dict) -> None:
+    def _take(self, raw: dict, fresh: bool = False) -> None:
         self.raw = raw
         self.blocks = promo.parse(raw.get("values") or [], raw.get("merges") or [])
+        # 바뀐 곳(v1.35) — 새로 읽었으면 지난 판과 견줘 기록을 고치고, 저장본이면 남긴 기록대로
+        hist = promo.load_marks(self.sheet_id, self.tab)
+        if fresh:
+            hist, self.marks = promo.track(hist, self.blocks, int(time.time() * 1000))
+            promo.save_marks(self.sheet_id, self.tab, hist)
+        else:
+            self.marks = promo.marks_from(hist)
         self._rebuild_brands()
         self._paint()
 
@@ -332,6 +352,14 @@ class PromoTab(QWidget):
             bg_sec = QColor(theme.strong_bg("blue"))
             bg_note = QColor(theme.strong_bg("orange"))
             tones = {"red": QColor(theme.strong("red")), "blue": QColor(theme.strong("blue"))}
+            bg_chg = QColor(theme.c("tomorrow"))          # 바뀐 칸(같은 달 안에서 — v1.35)
+            c_chg_text = QColor(theme.c("row_text"))
+            marks = getattr(self, "marks", {}) or {}
+            keyof = {}
+            for b0, _rs in found:
+                for k0, r0 in zip(promo.row_keys(b0), b0["rows"]):
+                    if k0:
+                        keyof[id(r0)] = k0
 
             def put(i, k, text, font=None, fg=None, bg=None, align=None, tip=""):
                 it = QTableWidgetItem(text)
@@ -353,8 +381,12 @@ class PromoTab(QWidget):
                 if kind == "title":
                     # 제목에 브랜드가 이미 있으면('BENZ · 벤츠 11월 …') 앞에 또 붙이지 않는다
                     named = (promo.brand_of(b["title"]) or ("",))[0] == b["key"]
-                    put(i, 0, b["title"] if named else f"{b['brand']}   {b['title']}".strip(),
-                        big, c_title, bg_title, Qt.AlignLeft | Qt.AlignVCenter)
+                    title = b["title"] if named else f"{b['brand']}   {b['title']}".strip()
+                    chg = promo.change_text(marks.get(b["key"]))
+                    put(i, 0, title + (f"      ✎ {chg}" if chg else ""),
+                        big, c_title, bg_title, Qt.AlignLeft | Qt.AlignVCenter,
+                        tip=("같은 달 안에서 지난 판과 달라진 곳을 노랗게 칠했습니다(달이 바뀌면 표시하지 않습니다)"
+                             if chg else ""))
                     tbl.setSpan(i, 0, 1, ncol)
                 elif kind == "groups":
                     taken = set()
@@ -379,17 +411,27 @@ class PromoTab(QWidget):
                     tbl.setSpan(i, 0, 1, ncol)
                 else:
                     cells = r["cells"]
+                    m = marks.get(b["key"]) or {}
+                    rk = keyof.get(id(r), "")
+                    is_new = bool(rk) and rk in (m.get("new") or [])
+                    chg_cols = set((m.get("changed") or {}).get(rk, [])) if rk else set()
                     for k in range(ncol):
                         t = cells[k] if k < len(cells) else ""
                         tone = promo.tone_of(t) if k else ""
+                        hot = is_new or k in chg_cols
                         if k == 0:
-                            put(i, k, t, bold, c_text, None, Qt.AlignLeft | Qt.AlignVCenter,
-                                tip=f"시트 {r['row']}행")
+                            put(i, k, ("🆕 " if is_new else "") + t, bold, c_text,
+                                bg_chg if is_new else None, Qt.AlignLeft | Qt.AlignVCenter,
+                                tip=f"시트 {r['row']}행" + (" · 이번 달에 새로 생긴 모델" if is_new else ""))
                         elif promo.is_number(t):
-                            put(i, k, t, None, c_text, None, Qt.AlignRight | Qt.AlignVCenter)
+                            put(i, k, t, bold if hot else None, c_chg_text if hot else c_text,
+                                bg_chg if hot else None, Qt.AlignRight | Qt.AlignVCenter,
+                                tip="지난 판과 달라졌습니다" if k in chg_cols else "")
                         else:
-                            put(i, k, t, bold if tone else None, tones.get(tone, c_text), None,
-                                Qt.AlignCenter if len(t) <= 8 else Qt.AlignLeft | Qt.AlignVCenter)
+                            put(i, k, t, bold if (tone or hot) else None,
+                                tones.get(tone, c_chg_text if hot else c_text), bg_chg if hot else None,
+                                Qt.AlignCenter if len(t) <= 8 else Qt.AlignLeft | Qt.AlignVCenter,
+                                tip="지난 판과 달라졌습니다" if k in chg_cols else "")
             self._fit_columns(rows, ncol, bold)
             tbl.resizeRowsToContents()
             self._fit_spans()

@@ -97,7 +97,9 @@ ok("회사 시트(수당연동용 · 인증문자)에 쓰지 않는다", not any
    [(k, t) for k, t, _p in W.writes])
 ok("내 계정 앱 공간에만 쓴다", {t for k, t, _p in W.writes if k == "appdata"} <= {
     "planner_sync.json", "account_settings.json", "kb_edits.json"})
-ok("상태 줄 — 권한이 다 있으면 평소대로", w.lbl_status.text().startswith("구글: 연결됨  ("), w.lbl_status.text())
+ok("상태 줄 — 권한이 다 있으면 평소대로(v1.35: 글자 대신 초록 점 하나)",
+   w.lbl_status.text() == "" and not w.lbl_gdot.isHidden() and "연결됨" in w.lbl_gdot.toolTip(),
+   w.lbl_status.text())
 ok("관리자 전용: 회사 공통 묶음이 없다 · 수당율 단추가 꺼져 있다",
    not config.is_kb_admin(EMAIL) and not config.is_rates_admin(EMAIL))
 ok("이미 로그인된 PC 는 '처음 설정' 을 띄우지 않는다", getattr(w, "_status_dlg", None) is None)

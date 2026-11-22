@@ -13,15 +13,15 @@ import threading
 import webbrowser
 from datetime import date, datetime, time, timedelta
 
-from PySide6.QtCore import QDate, QRect, QSize, Qt, QTime, QTimer, Signal
+from PySide6.QtCore import QDate, QEvent, QRect, QSize, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QFontMetrics, QGuiApplication, QPainter,
     QTextCharFormat)
 from PySide6.QtWidgets import (
     QCalendarWidget, QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
-    QMessageBox, QPushButton, QSizePolicy, QSplitter, QTimeEdit, QVBoxLayout,
-    QWidget,
+    QMessageBox, QPushButton, QSizePolicy, QSplitter, QTableView, QTimeEdit, QToolTip,
+    QVBoxLayout, QWidget,
 )
 
 from . import config, followup, google_client, holiday, searchcombo, theme
@@ -38,11 +38,46 @@ class EventCalendar(QCalendarWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._by_date: dict = {}   # date -> [(timetext, summary), ...]
+        self._cells: dict = {}     # date -> 마지막으로 그린 칸(뷰포트 좌표) — 풍선 도움말용
         self.setGridVisible(True)
         self.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
         self.setHorizontalHeaderFormat(QCalendarWidget.ShortDayNames)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.apply_colors()
+        # 칸이 좁아 일정 이름이 잘리거나 '+N건' 으로 접히면, 마우스를 올렸을 때
+        # 그날 일정을 전부 풍선으로 보여 준다(v1.35). 달력 안의 표(뷰포트)가 받는다.
+        self._view = self.findChild(QTableView)
+        if self._view is not None:
+            self._view.viewport().installEventFilter(self)
+        # 달을 넘기면 지난달 칸 자리는 버린다(같은 자리에 다른 날짜가 그려진다)
+        self.currentPageChanged.connect(lambda _y, _m: self._cells.clear())
+
+    def tip_for(self, d: date) -> str:
+        """그날 일정 전부 — 풍선 도움말 글(없으면 빈 글)."""
+        evs = self._by_date.get(d, [])
+        if not evs:
+            return ""
+        head = f"{d:%m-%d} ({config.kdow(d)}) 일정 {len(evs)}건"
+        lines = [(tm + "  " if tm else "종일  ") + summ for tm, summ in evs]
+        return head + "\n" + "\n".join(lines)
+
+    def date_at(self, pos) -> date | None:
+        for d, r in reversed(list(self._cells.items())):     # 나중에 그린 칸이 이긴다
+            if r.contains(pos):
+                return d
+        return None
+
+    def eventFilter(self, obj, ev):      # noqa: N802
+        if (self._view is not None and obj is self._view.viewport()
+                and ev.type() == QEvent.ToolTip):
+            d = self.date_at(ev.pos())
+            tip = self.tip_for(d) if d else ""
+            if tip:
+                QToolTip.showText(ev.globalPos(), tip, self._view.viewport())
+            else:
+                QToolTip.hideText()
+            return True
+        return super().eventFilter(obj, ev)
 
     def apply_colors(self):
         """맨 윗줄 요일 이름도 칸 안의 날짜와 같은 색·굵기로 맞춘다.
@@ -73,6 +108,8 @@ class EventCalendar(QCalendarWidget):
 
     def paintCell(self, painter, rect, qd):  # noqa: N802
         d = date(qd.year(), qd.month(), qd.day())
+        self._cells.pop(d, None)
+        self._cells[d] = QRect(rect)
         today = date.today()
         in_month = (qd.month() == self.monthShown() and qd.year() == self.yearShown())
         selected = (qd == self.selectedDate())
@@ -164,7 +201,7 @@ class AddEventDialog(QDialog):
         super().__init__(parent)
         self.edit_mode = event is not None
         self.setWindowTitle(("일정 수정 · " if self.edit_mode else "일정 추가 · ")
-                            + day.strftime("%Y-%m-%d (%a)"))
+                            + f"{day:%Y-%m-%d} ({config.kdow(day)})")
         self.setMinimumWidth(380)
         self.day = day
         form = QFormLayout(self)
@@ -611,7 +648,7 @@ class CalendarWindow(QWidget):
         # (한국어 프로그램에 영어 요일이 섞여 보였다).
         # config.DAY_NAMES 는 1=일 … 7=토 이고, isoweekday() 는 월=1 … 일=7 이라
         # %7+1 로 자리를 맞춘다.
-        dow = config.DAY_NAMES[d.isoweekday() % 7 + 1]
+        dow = config.kdow(d)
         day_evs = sorted([e for e in self.events if e.start.date() == d],
                          key=lambda e: e.start)
         self.lbl_day.setText(f"{d:%Y-%m-%d} ({dow}) 일정  {len(day_evs)}건")

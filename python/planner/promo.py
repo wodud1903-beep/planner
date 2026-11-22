@@ -21,7 +21,7 @@ import json
 import re
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config, hangul, net, sheets
 from .google_client import GoogleError
@@ -428,6 +428,208 @@ def load_cache(sheet_id: str, tab: str):
         return None
     return {"values": o["values"], "merges": o.get("merges") or [], "gid": o.get("gid"),
             "at": o.get("at", "")}
+
+
+# ---------------------------------------------------------------------------
+# 바뀐 곳(v1.35 — 지점장이 고른 P1): **같은 달 판끼리만** 견준다
+# ---------------------------------------------------------------------------
+# 회사가 달 중간에 조건을 고치면(11/03 판 → 11/20 판) 바뀐 칸을 노랗게, 새로 생긴 모델은 '신규',
+# 빠진 모델은 이름으로 알린다. 달이 바뀌면(11월 → 12월 프로모션) 표 전체가 새것이라 표시하지 않는다.
+#
+# 브랜드마다 '지금 판' 과 '전 판' 을 들고 있는다. 새로 읽은 표가 지금 판과 같으면 그대로 두어
+# 표시가 계속 남고(다음에 시트가 바뀔 때까지), 다르면 지금 판이 전 판이 되고 새 표가 지금 판이다.
+# 달은 블록 제목('벤츠 11월 프로모션 · 11/03 (화) 기준')에서 읽고, 없으면 받은 때(한국 시각)의 달.
+#
+# ⚠️ web/js/promo.js 가 똑같이 옮겼다 — 같은 입력이면 같은 답(vectors.json 'promo_track').
+_KST = timedelta(hours=9)
+_RE_MONTH = re.compile(r"([0-9]{1,2})\s*월")
+_RE_MD = re.compile(r"([0-9]{1,2})\s*/\s*([0-9]{1,2})")
+
+
+def title_month(title: str) -> int:
+    """'벤츠 11월 프로모션 · 11/03 (화) 기준' → 11. 'N월' 이 없으면 'M/D' 의 M, 그것도 없으면 0."""
+    t = str(title or "")
+    m = _RE_MONTH.search(t)
+    if m and 1 <= int(m.group(1)) <= 12:
+        return int(m.group(1))
+    m = _RE_MD.search(t)
+    if m and 1 <= int(m.group(1)) <= 12:
+        return int(m.group(1))
+    return 0
+
+
+def title_date(title: str) -> str:
+    """제목의 기준일 '11/03' (없으면 '')."""
+    m = _RE_MD.search(str(title or ""))
+    if m and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
+        return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}"
+    return ""
+
+
+def _kst(ms) -> datetime:
+    return datetime(1970, 1, 1) + timedelta(milliseconds=int(ms or 0)) + _KST
+
+
+def _md(ms) -> str:
+    d = _kst(ms)
+    return f"{d.month:02d}/{d.day:02d}"
+
+
+def row_keys(block: dict) -> list:
+    """block['rows'] 와 같은 자리의 열쇠 — 모델 줄은 '구역␟모델␟몇 번째', 나머지는 ''."""
+    seen, out = {}, []
+    for r in block.get("rows") or []:
+        cells = r.get("cells") or [""]
+        if r.get("kind") != "model" or not cells[0]:
+            out.append("")
+            continue
+        base = (r.get("section") or "") + "\x1f" + cells[0]
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        out.append(f"{base}\x1f{n}")
+    return out
+
+
+def snap(block: dict) -> dict:
+    """견주려고 남겨 두는 판 — 제목 · 달 · 기준일 · 열 제목 · 모델 줄."""
+    rows, order = {}, []
+    for k, r in zip(row_keys(block), block.get("rows") or []):
+        if k:
+            rows[k] = [str(c) for c in r.get("cells") or []]
+            order.append(k)
+    t = str(block.get("title") or "")
+    return {"title": t, "month": title_month(t), "date": title_date(t),
+            "headers": [str(h) for h in block.get("headers") or []], "rows": rows, "order": order}
+
+
+def _same_snap(a: dict, b: dict) -> bool:
+    def canon(s):
+        return (s.get("title"), s.get("headers"), s.get("order"),
+                [s.get("rows", {}).get(k) for k in s.get("order") or []])
+    return canon(a) == canon(b)
+
+
+def same_month(prev: dict, prev_at, cur: dict, cur_at) -> bool:
+    a, b = int(prev.get("month") or 0), int(cur.get("month") or 0)
+    if a and b:
+        return a == b
+    pa, ca = _kst(prev_at), _kst(cur_at)
+    return (pa.year, pa.month) == (ca.year, ca.month)
+
+
+def _col_ids(headers: list) -> list:
+    seen, out = {}, []
+    for i, h in enumerate(headers or []):
+        h = str(h or "").strip()
+        if not h:
+            out.append(f"\x1f#{i}")
+            continue
+        n = seen.get(h, 0)
+        seen[h] = n + 1
+        out.append(f"{h}\x1f{n}")
+    return out
+
+
+def diff(prev: dict, cur: dict) -> dict:
+    """전 판 → 지금 판: {changed: {줄 열쇠: [바뀐 칸 번호]}, new: [새 줄 열쇠], gone: [빠진 모델 이름], count}."""
+    pid = {c: j for j, c in enumerate(_col_ids(prev.get("headers")))}
+    cid = _col_ids(cur.get("headers"))
+    prows, crows = prev.get("rows") or {}, cur.get("rows") or {}
+    changed, new = {}, []
+    for k in cur.get("order") or []:
+        cells = crows.get(k) or []
+        if k not in prows:
+            new.append(k)
+            continue
+        old = prows[k]
+        cols = []
+        for i in range(1, len(cells)):
+            j = pid.get(cid[i] if i < len(cid) else f"\x1f#{i}", -1)
+            was = old[j] if 0 <= j < len(old) else ""
+            if str(was).strip() != str(cells[i]).strip():
+                cols.append(i)
+        if cols:
+            changed[k] = cols
+    gone = [(prows.get(k) or [""])[0] for k in prev.get("order") or [] if k not in crows]
+    return {"changed": changed, "new": new, "gone": gone, "count": len(changed) + len(new)}
+
+
+def mark_of(h: dict):
+    """한 브랜드의 기록 → 보여 줄 바뀐 곳(없으면 None). 다른 달 판끼리는 None."""
+    if not isinstance(h, dict):
+        return None
+    prev, cur = h.get("prev"), h.get("cur")
+    if not isinstance(prev, dict) or not isinstance(cur, dict):
+        return None
+    pa, ca = h.get("prev_at") or 0, h.get("cur_at") or 0
+    if not same_month(prev, pa, cur, ca):
+        return None
+    d = diff(prev, cur)
+    if not d["count"] and not d["gone"]:
+        return None
+    a = prev.get("date") or _md(pa)
+    z = cur.get("date") or _md(ca)
+    if a == z:                       # 제목의 기준일은 그대로인데 값이 바뀌었다 — 받은 날로
+        a, z = _md(pa), _md(ca)
+    d["from"], d["to"] = a, z
+    return d
+
+
+def track(history, blocks: list, now_ms: int):
+    """새로 읽은 표 → (새 기록, {브랜드 열쇠: 바뀐 곳 또는 None}).
+
+    기록 = {열쇠: {"cur": 판, "cur_at": ms, "prev": 판 | None, "prev_at": ms}} — 표에서 빠진 브랜드는 버린다."""
+    old = history if isinstance(history, dict) else {}
+    hist, marks = {}, {}
+    for b in blocks or []:
+        s = snap(b)
+        h = old.get(b.get("key"))
+        if not isinstance(h, dict) or not isinstance(h.get("cur"), dict):
+            h = {"cur": s, "cur_at": int(now_ms), "prev": None, "prev_at": 0}
+        elif not _same_snap(h["cur"], s):
+            h = {"cur": s, "cur_at": int(now_ms), "prev": h["cur"], "prev_at": int(h.get("cur_at") or 0)}
+        hist[b.get("key")] = h
+        marks[b.get("key")] = mark_of(h)
+    return hist, marks
+
+
+def marks_from(history) -> dict:
+    """저장해 둔 기록만으로(새로 읽기 전) 보여 줄 바뀐 곳."""
+    return {k: mark_of(h) for k, h in (history or {}).items()} if isinstance(history, dict) else {}
+
+
+def change_text(m) -> str:
+    """'11/03 → 11/20 바뀐 모델 3개 · 빠진 모델: A, B'(없으면 '')."""
+    if not m:
+        return ""
+    bits = [f"{m['from']} → {m['to']} " + (f"바뀐 모델 {m['count']}개" if m["count"] else "바뀜")]
+    gone = m.get("gone") or []
+    if gone:
+        bits.append("빠진 모델: " + ", ".join(gone[:5]) + (f" 외 {len(gone) - 5}개" if len(gone) > 5 else ""))
+    return " · ".join(bits)
+
+
+MARKS_FILE = "promo_marks.json"
+
+
+def load_marks(sheet_id: str, tab: str) -> dict:
+    """이 PC 에 남긴 기록(그 시트·탭 것만)."""
+    try:
+        o = json.loads(config.data_file(MARKS_FILE).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(o, dict) or o.get("sheet_id") != sheet_id or o.get("tab") != tab:
+        return {}
+    h = o.get("hist")
+    return h if isinstance(h, dict) else {}
+
+
+def save_marks(sheet_id: str, tab: str, hist: dict) -> None:
+    try:
+        config.atomic_write(config.data_file(MARKS_FILE),
+                            json.dumps({"sheet_id": sheet_id, "tab": tab, "hist": hist}, ensure_ascii=False))
+    except OSError:
+        pass
 
 
 def sheet_url(sheet_id: str, gid=None) -> str:

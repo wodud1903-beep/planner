@@ -11,6 +11,7 @@
   --accent-text: #4434b8; --primary: #5b4bd6; --on-accent: #fff;
   --bad: #c0392b; --ok: #2e7d32; --warn: #a35f0d;
   --bad-bg: #fce8e5; --warn-bg: #fdf0dc; --violet: #6247d6;
+  --chg-bg: #fff2a8;
   --toast: #252839; --on-toast: #ffffff;
   --shadow: 0 1px 2px rgba(37, 40, 57, .04), 0 6px 18px rgba(37, 40, 57, .06);
   --radius: 16px;
@@ -24,6 +25,7 @@
   --line: #efe2d4; --edge: #e6d5c3; --accent: #a9502a; --accent-bg: #f8dfc8;
   --accent-text: #8e4419; --primary: #a9502a;
   --bad-bg: #fbe3dc; --warn-bg: #fbe6c8; --toast: #4a3b2f;
+  --chg-bg: #fbe9a0;
   --shadow: 0 1px 2px rgba(74, 59, 47, .05), 0 6px 18px rgba(74, 59, 47, .07);
 }
 @media (prefers-color-scheme: dark) {
@@ -33,6 +35,7 @@
     --accent-text: #dcebff; --primary: #2563eb; --on-accent: #fff;
     --bad: #ff5a66; --warn: #ffb55c; --ok: #2bc47d;
     --bad-bg: #40202a; --warn-bg: #402c15; --violet: #a78bfa;
+    --chg-bg: #4d4517;
     --toast: #2a2a2a; --shadow: 0 0 0 1px #262626;
   }
 }
@@ -42,6 +45,7 @@
   --accent-text: #dcebff; --primary: #2563eb; --on-accent: #fff;
   --bad: #ff5a66; --warn: #ffb55c; --ok: #2bc47d;
   --bad-bg: #40202a; --warn-bg: #402c15; --violet: #a78bfa;
+  --chg-bg: #4d4517;
   --toast: #2a2a2a; --shadow: 0 0 0 1px #262626;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -81,9 +85,16 @@ header h1 { font-size: 17px; margin: 0; font-weight: 800; letter-spacing: -.2px;
 }
 .chip:active { filter: brightness(.96); }
 .chip.bad { background: var(--bad-bg); color: var(--bad); }
-/* 계정 — 머리글자 동그라미 + 메일(길면 줄임) */
+/* 계정 — 머리글자 동그라미 + 메일(길면 줄임). 누르면 정보·계정 화면(v1.35 — 아래 메뉴의 [정보] 자리) */
 .who { font-size: 12px; color: var(--sub); max-width: 38vw;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-decoration: none; border-radius: 999px; padding: 2px 8px 2px 2px; }
+.who:hover, .infobtn:hover { background: var(--accent-bg); }
+.who[aria-current="page"] { background: var(--accent-bg); color: var(--accent-text); font-weight: 700; }
+.infobtn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+  border-radius: 50%; color: var(--sub); text-decoration: none; }
+.infobtn[hidden] { display: none; }
+.infobtn[aria-current="page"] { background: var(--accent-bg); color: var(--accent-text); }
 .who::before {
   content: attr(data-initial); display: inline-block; vertical-align: middle;
   width: 28px; height: 28px; line-height: 28px; margin-right: 6px; border-radius: 50%;
@@ -586,6 +597,10 @@ ul.feed .fi.orange::before { background: var(--warn); }
 
 a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 
+/* 자료 즐겨찾기 · 최근 본 자료(v1.35) — 줄 앞 작은 표시 */
+#kblist .mk { display: inline-block; width: 1.3em; color: var(--sub); }
+#kblist .mk.fav { color: var(--warn); }
+
 /* ---- 수입차 프로모션(v1.34.2) — 브랜드마다 카드 한 장, 줄마다 '칸 이름 값' ---- */
 .promopane { max-width: 980px; margin: 0 auto; }
 .promoblk { padding-bottom: 8px; }
@@ -602,5 +617,11 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 .promoblk .pv i { font-style: normal; color: var(--sub); font-size: 12px; margin-right: 4px; }
 .promoblk .pv.red { color: var(--bad); font-weight: 700; }
 .promoblk .pv.blue { color: var(--accent-text); font-weight: 700; }
+/* 바뀐 곳(v1.35) — 같은 달 안에서 지난 판과 달라진 칸 · 새 모델 · 블록 머리의 한 줄 */
+.promoblk .pv.chg { background: var(--chg-bg); color: var(--text); font-weight: 700; border-radius: 6px; padding: 1px 6px; }
+.promoblk .prow.new { background: var(--chg-bg); }
+.promoblk .pnew { font-style: normal; font-size: 11px; font-weight: 700; color: var(--warn); background: var(--warn-bg);
+  border-radius: 8px; padding: 1px 6px; margin-right: 6px; vertical-align: 2px; }
+.promoblk .pchg { margin: -4px 0 8px; font-size: 13px; font-weight: 600; color: var(--warn); }
 .promoblk .pnote { white-space: pre-wrap; font-size: 13px; line-height: 1.55;
   background: var(--warn-bg); border-radius: 10px; border-bottom: 0; margin: 4px 0; padding: 10px 12px; }

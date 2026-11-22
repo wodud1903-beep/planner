@@ -72,6 +72,75 @@ def _promo_vectors():
             out["row_text"].append([b["key"], r["row"], promo.row_text(b, r)])
     return out
 
+def _no_targets(secs):
+    """PC 대시보드만 쓰는 'target'(누르면 갈 고객 줄 — v1.35)은 빼고 견준다. 폰 웹(weekly.js)엔 없다."""
+    return [dict(sec, items=[{k: v for k, v in it.items() if k != "target"} for it in sec.get("items") or []])
+            for sec in secs]
+
+
+def _promo_track_vectors():
+    """바뀐 곳(v1.35 P1) — 같은 시트를 다섯 번 읽는다: 11/03 판 → 11/20 판(벤츠 값 2·신규 1·빠짐 1)
+    → 그대로 한 번 더(표시가 남는다) → 12월 판(달이 바뀜 — 표시 없음) → 12/15 판(12월 안에서 바뀜).
+    아우디는 제목에 달이 없어 받은 때(한국 시각)의 달로 본다."""
+    import copy
+    from datetime import datetime as _dt, timedelta as _td
+    fx = json.loads((ROOT / "web" / "verify" / "fixtures" / "promo.json").read_text(encoding="utf-8"))
+    merges = fx["merges"]
+
+    def at(y, m, d, h=9):
+        return int(((_dt(y, m, d, h) - _td(hours=9)) - _dt(1970, 1, 1)).total_seconds() * 1000)
+
+    def put(v, r, c, val):
+        while len(v) <= r:
+            v.append([])
+        while len(v[r]) <= c:
+            v[r].append("")
+        v[r][c] = val
+
+    def repl(v, rows, old, new):
+        for r in rows:
+            v[r] = [str(x).replace(old, new) for x in v[r]]
+
+    v0 = copy.deepcopy(fx["values"])
+    v1 = copy.deepcopy(v0)
+    put(v1, 5, 2, "91,000,000")          # 벤츠 E300 AMG — 차량가격
+    put(v1, 6, 4, "7,500,000")           # 벤츠 E300 EX — 프로모션
+    for c in range(1, 7):
+        put(v1, 7, c, "")                # 벤츠 GLC300 — 빠짐
+    v1.append(["", "C200 New [27MY]", "60,000,000", "", "2,000,000", "", ""])     # 벤츠 — 새 모델
+    repl(v1, [2], "11/03", "11/20")
+    v3 = copy.deepcopy(v1)
+    repl(v3, [1, 2], "11월", "12월")
+    repl(v3, [2], "11/20", "12/01")
+    repl(v3, [1], "11/05", "12/01")
+    put(v3, 5, 2, "92,000,000")
+    put(v3, 4, 16, "43,000,000")         # 아우디 A3 — 차량가
+    v4 = copy.deepcopy(v3)
+    repl(v4, [2], "12/01", "12/15")
+    put(v4, 4, 4, "1,500,000")           # 벤츠 A220 — 프로모션
+    put(v4, 5, 18, "7,500,000")          # 아우디 Q5 — 현금 할인
+    steps = [(v0, at(2026, 11, 3, 10)), (v1, at(2026, 11, 20)), (v1, at(2026, 11, 21)),
+             (v3, at(2026, 12, 1)), (v4, at(2026, 12, 15))]
+    out, hist = [], {}
+    for v, now in steps:
+        hist, marks = promo.track(hist, promo.parse(v, merges), now)
+        out.append({"values": v, "now": now, "hist": hist, "marks": marks,
+                    "text": {k: promo.change_text(m) for k, m in marks.items()}})
+    return {
+        "merges": merges, "steps": out,
+        "title_month": [[t, promo.title_month(t), promo.title_date(t)] for t in
+                        ["벤츠 11월 프로모션 · 11/03 (화) 기준", "BMW 11월 프로모션 11/05 기준 > 10월 조건에서",
+                         "AUDI", "12/1 기준", "13월 32/40", "", "1월 프로모션", "２월"]],
+        "row_keys": promo.row_keys({"rows": [
+            {"kind": "section", "cells": ["전기차"], "section": ""},
+            {"kind": "model", "cells": ["EQA", "1"], "section": "전기차"},
+            {"kind": "model", "cells": ["EQA", "2"], "section": "전기차"},
+            {"kind": "note", "cells": ["안내"], "section": "전기차"},
+            {"kind": "model", "cells": ["", "x"], "section": ""},
+            {"kind": "model", "cells": ["EQA", "3"], "section": ""}]}),
+    }
+
+
 HANGUL_CASES = [
     ("김상현", ["ㄱㅅㅎ", "김상", "김", "ㄱㅅㅎㅇ", "상현", "", "ㅅㅎ"]),
     ("쏘나타 디 엣지", ["ㅅㄴㅌ", "ㅆㄴㅌ", "쏘나타", "디엣지", "디 엣지", "ㄷㅇㅈ", "쏘 엣"]),
@@ -312,12 +381,12 @@ def main() -> int:
         {"row": cr.row, "total": cr.total, "values": cr.values} for cr in _weekly_rows()]
     for day in WEEKLY_DAYS:
         today = _dt.date.fromisoformat(day)
-        secs = weekly.sections(_weekly_rows(), today)
+        secs = _no_targets(weekly.sections(_weekly_rows(), today))
         out["weekly_sections"].append([day, weekly.title_line(today), secs])
         # 대시보드 '다음 주 요약' — 다음 주 월요일 기준, 출고 예정·계약만
         nmon = weekly.week_range(today + _dt.timedelta(days=7))[0]
         out["weekly_next"].append(
-            [day, weekly.sections(_weekly_rows(), nmon, word="다음 주", week_only=True)])
+            [day, _no_targets(weekly.sections(_weekly_rows(), nmon, word="다음 주", week_only=True))])
         out["weekly_text"].append([day, weekly.to_text(_weekly_rows(), today)])
         # 고객 진행 보드 — 칸·카드(취소 숨김 / 보임)
         for show in (False, True):
@@ -346,6 +415,7 @@ def main() -> int:
         out["parse_rates"].append([rows, _parse_rates(rows)])
 
     out["promo"] = _promo_vectors()
+    out["promo_track"] = _promo_track_vectors()
 
     dest = ROOT / "web" / "verify" / "vectors.json"
     dest.parent.mkdir(parents=True, exist_ok=True)

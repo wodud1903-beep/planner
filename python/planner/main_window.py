@@ -19,8 +19,8 @@ from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta
 from html import escape as html_escape
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
@@ -29,10 +29,11 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    account_settings, alarm_window, autorule_cleanup, backup_dialog, board_view, changelog, config, contacts, crashlog,
+    account_settings, alarm_window, autorule_cleanup, backup_dialog, board, board_view, changelog, chips,
+    config, contacts, crashlog,
     customer_docs, monthly, renewal_view, renewals,
     dashboard, deliver_cal, drive_path, followup,
-    google_client, hotkey, kb, kb_files, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_backup,
+    google_client, hotkey, kb, kb_files, kb_marks, navicons, news, news_dialog, otp, otp_popup, searchcombo, sheet_backup,
     sheet_cache, sheets, sync,
     theme, updater, weekly,
 )
@@ -47,6 +48,8 @@ from .greeting_tab import GreetingTab
 from .kb_tab import KbTab, QuickSearch
 from .promo_tab import PromoTab
 from .livesearch import LiveLineEdit
+from .tablecells import TwoLineDelegate, short_date
+from .switch import Switch, centered as switch_centered
 from .customer_attach import AttachOpener, all_files as customer_files
 from .edit_dialog import EditDialog
 from .google_button import GoogleSignInButton
@@ -140,6 +143,11 @@ Q_SIZE_MAX = 16777215
 
 
 class MainWindow(QMainWindow):
+    # 내 할일 체크박스 → 이만큼 기다렸다가 완료(그 사이 다시 누르면 취소 — v1.35)
+    TODO_DONE_MS = 1500
+    # 대시보드 카드에서 한 묶음에 먼저 보여 줄 줄 수(넘치면 'N건 더 보기' — v1.35)
+    DASH_LIMIT = 5
+
     # 백그라운드 스레드 → UI 마샬링
     sig_tasks_done = Signal(object, str, int)   # (할일목록|None, 오류, 조회시작 epoch)
     sig_events_done = Signal(object, str)
@@ -267,6 +275,7 @@ class MainWindow(QMainWindow):
         self.alarms: list[PcAlarm] = load_list(self.alarm_file, PcAlarm)
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
         self.settings = AppSettings.load(self.cfg_file)
+        kb_marks.set_favs(getattr(self.settings, "kb_favs", []))   # 자료검색 즐겨찾기(계정마다)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
         # 다른 PC 기록(Drive)을 한 번 받았나 — 받기 전엔 팔로업을 만들지 않는다(v1.26.1, 겹침)
         self._pulled_once = False
@@ -278,6 +287,9 @@ class MainWindow(QMainWindow):
         self.last_fetch = datetime.min
         self._really_close = False
         self._range = "all"           # 빠른 필터 기본값: 전체 (week/next/all)
+        self._dash_open_secs: set = set()   # 대시보드 카드에서 펼친 묶음('N건 더 보기')
+        self._dash_hrefs: dict = {}         # 카드 글 속 링크 번호 → 대상
+        self._cust_status = ""              # 고객관리 진행현황 칩('' = 전체)
         self._cal_win = None          # 캘린더 창 참조
         self.account_email = ""
         self._app_icon = make_icon()
@@ -518,8 +530,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ 테마
     def _apply_side_theme(self):
         self.sidebar.apply_theme()      # 메뉴 아이콘을 새 테마 색으로 다시 그린다
-        for t in getattr(self, "dash_tiles", []):
-            t.apply_theme()
         self.refresh_dashboard()        # 카드 글의 색도 테마를 따른다
 
     def apply_theme(self):
@@ -725,6 +735,7 @@ class MainWindow(QMainWindow):
         self.alarms = load_list(self.alarm_file, PcAlarm)
         self.task_alarms = TaskAlarmStore(self.taskalarm_file)
         self.settings = AppSettings.load(self.cfg_file)
+        kb_marks.set_favs(getattr(self.settings, "kb_favs", []))   # 자료검색 즐겨찾기(계정마다)
         self.followup_tracker = followup.FollowupTracker(self.followup_file)
         self._ment_copied = self._load_ment_log()
         self._notes = self._load_notes()
@@ -746,6 +757,8 @@ class MainWindow(QMainWindow):
             self.tab_promo.reset()
         if hasattr(self, "btn_follow_ment"):
             self.btn_follow_ment.setText(followup.button_text(self.settings))
+        if hasattr(self, "tab_greet"):
+            self.tab_greet.set_template_specs(self._ment_specs())   # 계정마다 글이 다르다
         # 설정 파생 UI 반영
         self.chk_autofetch.blockSignals(True)
         self.chk_autofetch.setChecked(self.settings.auto_fetch)
@@ -1139,12 +1152,17 @@ class MainWindow(QMainWindow):
         # 고객별 서류 — 고객관리 바로 옆에 둔다(같은 고객을 두고 오가므로).
         # 폴더가 크면 훑는 데 몇 초 걸리므로, 켤 때가 아니라 탭을 처음 열 때 읽는다.
         self.tab_files = CustomerFilesTab(self.settings, self.gauth)
+        # 고객정보 폴더 ↔ 고객관리 '고객 서류' 잇기(v1.35)
+        self.tab_files.customer_docs = self._docs_for_folder
+        self.tab_files.open_customer_docs = self._open_customer_docs
         self.tabs.addTab(self.tab_files, "고객정보")
         self._files_loaded = False
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tab_greet = GreetingTab()
         self.tab_greet.on_changed = self._touch_sync
+        self.tab_greet.set_template_specs(self._ment_specs())
         self.tabs.addTab(self.tab_greet, "멘트복사")
+        kb_marks.on_favs_changed = self._on_kb_favs
         self.tab_kb = KbTab()
         self.tab_kb.set_auth(self.gauth)        # 첨부(그림·PDF) 올리기·받기
         self.tab_kb.on_changed = self._touch_sync
@@ -1353,6 +1371,13 @@ class MainWindow(QMainWindow):
         self.btn_follow_ment.setToolTip("출고 후 안부 안내멘트를 복사합니다 — 글은 [설정] → [알림·일정] 에서 고칩니다")
         self.btn_follow_ment.clicked.connect(self.copy_follow_ment)
         row.addWidget(self.btn_follow_ment)
+        # 구글이 잘 붙어 있으면 작은 초록 점 하나만(v1.35) — 예전엔 '구글: 연결됨 (설정에서
+        # 로그인/로그아웃)' 글자가 늘 떠 있었다. 문제가 있을 때만 아래 글자로 알린다.
+        self.lbl_gdot = QLabel("●")
+        self.lbl_gdot.setObjectName("gdot")
+        self.lbl_gdot.setToolTip("구글: 연결됨 — 로그인·로그아웃은 [설정] 에서 합니다")
+        self.lbl_gdot.hide()
+        row.addWidget(self.lbl_gdot)
         self.lbl_status = QLabel("")
         row.addWidget(self.lbl_status)
         # 로그인 전에는 여기서 바로 로그인할 수 있게 한다. 예전엔 [설정] 을 열어야
@@ -1380,23 +1405,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.chk_autofetch)
         v.addLayout(row)
 
-        # 바로가기 — 플로우 첫 화면의 앱 아이콘 줄. 탭은 아직 안 만들었으므로 누를 때 찾는다.
-        tiles = QHBoxLayout()
-        tiles.setSpacing(4)
-        self.dash_tiles = []
-        for icon_name, text, go in (
-                ("calendar", "캘린더", lambda: self.open_calendar()),
-                ("people", "고객관리", lambda: self.tabs.setCurrentWidget(self.tab_cust)),
-                ("folder", "고객정보", lambda: self.tabs.setCurrentWidget(self.tab_files)),
-                ("search", "자료검색", lambda: self.tabs.setCurrentWidget(self.tab_kb)),
-                ("chat", "멘트복사", lambda: self.tabs.setCurrentWidget(self.tab_greet)),
-                ("calc", "수당계산기", lambda: self.tabs.setCurrentWidget(self.tab_comm))):
-            t = dashboard.ShortcutTile(icon_name, text)
-            t.clicked.connect(go)
-            tiles.addWidget(t)
-            self.dash_tiles.append(t)
-        tiles.addStretch()
-        v.addLayout(tiles)
+        # 바로가기 아이콘 줄(캘린더·고객관리…)은 없앴다(v1.35) — 왼쪽 메뉴와 똑같아
+        # 같은 단추가 두 벌이었다. 그 자리는 아래 카드들이 쓴다.
 
         # ---- 내 할일 ----
         self.card_todo = dashboard.Card("내 할일")
@@ -1405,21 +1415,26 @@ class MainWindow(QMainWindow):
         self.btn_todo_add.setCursor(Qt.PointingHandCursor)
         self.btn_todo_add.clicked.connect(self.on_todo_add)
         self.card_todo.add_action(self.btn_todo_add)
-        for text, slot in [
-            ("수정", self.on_todo_edit), ("삭제", self.on_todo_del),
-            ("완료", self.on_todo_done), ("메모 복사", self.on_todo_copy),
-        ]:
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            self.card_todo.add_action(b)
-        # 전체 선택/해제
-        self.btn_todo_all = QPushButton("전체선택")
-        self.btn_todo_all.clicked.connect(self._toggle_all_todo_checks)
-        self.card_todo.add_action(self.btn_todo_all)
-        # 맨 왼쪽에 체크박스 열(선택) 추가 → 여러 건 일괄 완료
+        # 머리 줄의 [수정][삭제][완료][메모 복사][전체선택] 은 없앴다(v1.35).
+        # 완료는 줄 앞 체크박스로 — 누르고 잠깐(TODO_DONE_MS) 뒤에 처리하므로, 잘못
+        # 눌렀으면 그 사이 다시 눌러 되돌린다. 나머지는 줄에 마우스를 올리면 뜬다.
+        # 우클릭 메뉴에는 전부 그대로 있다.
         self.tbl_todo = self._make_table(
-            ["선택", "날짜", "시각", "할일", "알람", "메모"], [46, 110, 70, 300, 56, 200],
+            ["완료", "날짜", "시각", "할일", "알람", "메모"], [46, 110, 70, 300, 56, 200],
             stretch_last=False)
+        self.tbl_todo.horizontalHeaderItem(0).setToolTip(
+            "체크하면 완료 — 잘못 눌렀으면 곧바로 다시 눌러 되돌리세요")
+        self._todo_done_soon: dict = {}         # 체크해서 곧 완료할 줄 {키: 제목}
+        self._todo_done_timer = QTimer(self)
+        self._todo_done_timer.setSingleShot(True)
+        self._todo_done_timer.setInterval(self.TODO_DONE_MS)
+        self._todo_done_timer.timeout.connect(self._flush_todo_done)
+        self.tbl_todo.itemChanged.connect(self._on_todo_item_changed)
+        self.todo_acts = dashboard.RowActions(self.tbl_todo, [
+            ("메모 복사", "이 할일의 메모를 복사합니다", lambda: self.on_todo_copy()),
+            ("수정", "이 할일을 고칩니다", lambda: self.on_todo_edit()),
+            ("삭제", "이 할일을 지웁니다", lambda: self.on_todo_del()),
+        ])
         # 카드 폭에 맞춘다 — '할일' 칸이 남는 폭을 받는다(가로 스크롤이 생기지 않게)
         self.tbl_todo.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.tbl_todo.doubleClicked.connect(self._on_todo_dblclick)
@@ -1437,6 +1452,7 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda: self._copy_dash(what))
             c.add_action(btn)
             t = dashboard.text_view()
+            t.anchorClicked.connect(self._on_dash_link)
             c.body.addWidget(t)
             return c, t
 
@@ -1454,10 +1470,11 @@ class MainWindow(QMainWindow):
         self.card_this, self.txt_dash_week = text_card("이번 주 요약", "week")
         self.card_next, self.txt_dash_next = text_card("다음 주 요약", "next")
 
-        for c in (self.card_todo, self.card_brief):
-            c.setMinimumHeight(330)
-        for c in (self.card_sched, self.card_this, self.card_next):
-            c.setMinimumHeight(320)
+        # ⚠️ 표 카드(할일·일정)만 최소 높이를 둔다. 글 카드(브리핑·이번 주·다음 주)에 최소 높이를
+        #    박으면 Qt 가 그 값을 '최소' 로 믿고 글이 더 길어도 카드를 그만큼으로 눌러 아래가 잘렸다(v1.35).
+        #    글 카드는 글 칸(AutoText)이 자란 만큼 카드도 자라고, 화면 전체가 스크롤된다.
+        self.card_todo.setMinimumHeight(330)
+        self.card_sched.setMinimumHeight(320)
         self.dash_grid = dashboard.DashGrid([self.card_todo, self.card_brief],
                                             [self.card_sched, self.card_this, self.card_next])
         v.addWidget(self.dash_grid, 1)
@@ -1475,10 +1492,82 @@ class MainWindow(QMainWindow):
         if t is not None:
             t.start()
 
+    def _dash_fold(self) -> dict:
+        """대시보드 카드 글에 넘길 링크 만들기 — 누른 링크는 _on_dash_link 가 받는다.
+
+        주소에는 번호만 넣고 실제 대상(고객 줄·할일 키·날짜)은 여기 표에 둔다.
+        그릴 때마다 표를 새로 만든다(화면의 글과 표가 늘 짝이 맞는다)."""
+        reg = self._dash_hrefs = {}
+
+        def link(it):
+            k = f"a{len(reg)}"
+            reg[k] = ("open", it.get("target"))
+            return "dash:" + k
+
+        def more(key):
+            k = f"m{len(reg)}"
+            reg[k] = ("fold", key)
+            return "dash:" + k
+        return {"link": link, "more": more, "limit": self.DASH_LIMIT,
+                "expanded": self._dash_open_secs}
+
+    def _on_dash_link(self, url) -> None:
+        """대시보드 카드의 이름 · 'N건 더 보기' 를 눌렀다."""
+        raw = url.toString()
+        if not raw.startswith("dash:"):
+            return
+        kind, what = (getattr(self, "_dash_hrefs", {}) or {}).get(raw[5:], (None, None))
+        if kind == "fold":
+            self._dash_open_secs ^= {what}
+            self._paint_dashboard()
+        elif kind == "open" and what:
+            self.open_dash_target(what)
+
+    def open_dash_target(self, target) -> None:
+        """('cust', 고객줄) → 그 고객 창 · ('todo', 키) → 할일 고치기 · ('cal', 날짜) → 캘린더."""
+        what, arg = target
+        if what == "cust":
+            self.open_customer(arg)
+        elif what == "todo":
+            self._edit_todo_key(arg)
+        elif what == "cal":
+            self.open_calendar(goto=arg)
+
+    def open_customer(self, cr) -> None:
+        """대시보드에서 고객 이름을 눌렀다 — 화면은 그대로 두고 그 고객 창을 연다.
+
+        표가 검색어·진행현황 칩으로 걸러져 그 줄이 안 보이면 거르기를 풀고 찾는다."""
+        if not self._select_customer_row(cr):
+            self._clear_cust_filters()
+            if not self._select_customer_row(cr):
+                self.sig_toast.emit(config.APP_NAME, "그 고객을 고객관리 표에서 찾지 못했습니다.")
+                return
+        self.on_customer_edit()
+
+    def _edit_todo_key(self, key) -> None:
+        """대시보드에서 할일을 눌렀다 — 내 할일 표에서 그 줄을 골라 [수정] 을 연다."""
+        def find():
+            for r in range(self.tbl_todo.rowCount()):
+                it = self.tbl_todo.item(r, 0)
+                if it is not None and it.data(Qt.UserRole) == key:
+                    return r
+            return -1
+        r = find()
+        if r < 0 and self._range != "all":
+            # [표시: 이번주] 처럼 걸러져 안 보이는 할일이면 '전체' 로 넓혀서 찾는다
+            self.cmb_range.setCurrentIndex(self.cmb_range.findData("all"))
+            r = find()
+        if r < 0:
+            self.sig_toast.emit(config.APP_NAME, "그 할일을 내 할일 표에서 찾지 못했습니다.")
+            return
+        self.tbl_todo.selectRow(r)
+        self.on_todo_edit()
+
     def _paint_dashboard(self):
         today = date.today()
+        fold = self._dash_fold()
         try:
-            self.txt_dash_brief.setHtml(self.build_briefing_html(with_head=False))
+            self.txt_dash_brief.setHtml(self.build_briefing_html(with_head=False, **fold))
             n_cal, n_todo = self._brief_today_counts
             self.card_brief.set_count(f"오늘 일정 {n_cal} · 할일 {n_todo}")
         except Exception as e:
@@ -1486,12 +1575,13 @@ class MainWindow(QMainWindow):
         mon, sun = weekly.week_range(today)
         self.card_this.set_count(f"{mon:%m/%d} ~ {sun:%m/%d}")
         if self.sheet_rows:
-            self.txt_dash_week.setHtml(weekly.to_html(self.sheet_rows, today, head=False))
+            self.txt_dash_week.setHtml(weekly.to_html(self.sheet_rows, today, head=False,
+                                                      prefix="w", **fold))
         else:
             self.txt_dash_week.setHtml(self._dash_need_sheet())
         nmon, nsun = weekly.week_range(today + timedelta(days=7))
         self.card_next.set_count(f"{nmon:%m/%d} ~ {nsun:%m/%d}")
-        html = weekly.render_html("", self._next_week_sections())
+        html = weekly.render_html("", self._next_week_sections(), prefix="n", **fold)
         if not self.sheet_rows:
             html += self._dash_need_sheet("출고 예정·계약은 ")
         self.txt_dash_next.setHtml(html)
@@ -1511,7 +1601,8 @@ class MainWindow(QMainWindow):
         secs = [{
             "icon": "📅", "title": "다음 주 일정", "color": "blue",
             "items": [{"lead": self._d_label(ev.start.date()), "text": ev.summary,
-                       "sub": ev.time_text() if ev.has_time else ""} for ev in evs[:20]],
+                       "sub": ev.time_text() if ev.has_time else "",
+                       "target": ("cal", ev.start.date())} for ev in evs[:20]],
             "count": len(evs), "more": max(0, len(evs) - 20),
             "empty": "다음 주 일정이 없습니다",
         }]
@@ -1520,14 +1611,15 @@ class MainWindow(QMainWindow):
             if it.done or it.repeats:
                 continue
             if it.run_date and mon <= it.run_date <= sun:
-                todo.append((it.run_date, it.title))
+                todo.append((it.run_date, it.title, ("local", id(it))))
         for tk in self.visible_gtasks():
             if tk.has_due and tk.due and mon <= tk.due <= sun:
-                todo.append((tk.due, tk.title))
+                todo.append((tk.due, tk.title, ("google", tk.id)))
         todo.sort(key=lambda x: x[0])
         secs.append({
             "icon": "✅", "title": "다음 주 할일", "color": "green",
-            "items": [{"lead": self._d_label(d), "text": t} for d, t in todo[:20]],
+            "items": [{"lead": self._d_label(d), "text": t, "target": ("todo", k)}
+                      for d, t, k in todo[:20]],
             "count": len(todo), "more": max(0, len(todo) - 20),
             "empty": "다음 주가 마감인 할일이 없습니다",
         })
@@ -1563,12 +1655,16 @@ class MainWindow(QMainWindow):
         # 다만 지워 버리지는 않고 **우클릭 메뉴에 남겨** 둔다 — 이력에는 그동안
         # 적어 두신 상담 메모가 들어 있어, 길이 아예 없으면 그 기록에 닿을 수 없다.
         self._cust_write_btns = []
-        for text, slot in [("고객 추가", self.on_customer_add),
-                           ("삭제", self.on_customer_del)]:
-            b = QPushButton(text)
-            b.clicked.connect(slot)
-            row.addWidget(b)
-            self._cust_write_btns.append(b)
+        self.btn_cust_add = QPushButton("고객 추가")
+        self.btn_cust_add.clicked.connect(self.on_customer_add)
+        row.addWidget(self.btn_cust_add)
+        self._cust_write_btns.append(self.btn_cust_add)
+        # [삭제] 는 [고객 추가] 바로 옆에서 떼어 오른쪽 끝(검색칸 뒤)으로 옮겼다(v1.35) —
+        # 고객을 넣으려다 잘못 누르기 쉬운 자리였다. 우클릭 메뉴에도 그대로 있다.
+        self.btn_cust_del = QPushButton("삭제")
+        self.btn_cust_del.setToolTip("고른 고객을 시트에서 지웁니다(우클릭 메뉴에도 있습니다)")
+        self.btn_cust_del.clicked.connect(self.on_customer_del)
+        self._cust_write_btns.append(self.btn_cust_del)
         # 이 계정이 시트를 고칠 수 있나(v1.32): None 모름 · True · False('보기' 로만 공유받음)
         self._sheet_can_edit = None
         self.btn_cust_open = QPushButton("시트 열기")
@@ -1604,6 +1700,8 @@ class MainWindow(QMainWindow):
         self.ed_cust_find.setFixedWidth(220)
         self.ed_cust_find.liveText.connect(lambda _t: self.refresh_customers())
         row.addWidget(self.ed_cust_find)
+        row.addSpacing(16)
+        row.addWidget(self.btn_cust_del)
         v.addLayout(row)
 
         # 상단 발주 현황 (시트 N1:O4) — 켜자마자 제일 먼저 눈에 들어와야 하는 줄이라
@@ -1612,6 +1710,12 @@ class MainWindow(QMainWindow):
         self.lbl_cust_summary.setTextFormat(Qt.RichText)
         self.lbl_cust_summary.hide()
         v.addWidget(self.lbl_cust_summary)
+
+        # 진행현황 칩(v1.35) — '전체 12 · 심사중 2 · 가결 1 …' 눌러서 바로 거른다.
+        # 건수는 검색어로 거른 뒤의 수다(폰 웹 고객 목록과 같은 모양).
+        self.cust_chips = chips.ChipBar()
+        self.cust_chips.picked.connect(self._on_cust_chip)
+        v.addWidget(self.cust_chips)
 
         self.lbl_cust = QLabel("고객관리 시트를 불러오려면 [불러오기]를 누르세요.")
         v.addWidget(self.lbl_cust)
@@ -1630,11 +1734,17 @@ class MainWindow(QMainWindow):
         #   금융사 '우리금융캐피탈' · 차종 '카니발 9인승 하이리무진'
         #   금액 '₩145,800,000' · 날짜 '2026. 12. 31'
         # 잘려도 되는 건 '내용' 뿐이므로, 글씨 크기를 건드리면 여기도 다시 재야 한다.
+        #
+        # v1.35 — 1536 폭(노트북 125%)에서도 한눈에 들어오게: 금융사·차종을 한 칸 두 줄로
+        # 합치고(위 금융사 작게 · 아래 차종), 날짜는 '26.11.14' 로 짧게(전체는 풍선 도움말).
+        # 그래도 모자라면 내용 → 고객명 순으로 줄인다(_fit_cust_columns). 평소 폭에서는
+        # 고객명 236 · 안내멘트 80 · 내용 313 이상 그대로다.
         self.tbl_cust = self._make_table(
-            ["순번", "고객명 / 사업자", "금융사", "차종", "차량가격",
+            ["순번", "고객명 / 사업자", "금융사 · 차종", "차량가격",
              "계약일", "출고일", "진행현황", "수수료", "내용", "안내멘트"],
-            [46, 236, 116, 180, 134, 116, 116, 78, 124, 313, 80],
-            stretch_last=False)
+            list(self.CUST_WIDTHS), stretch_last=False)
+        self.tbl_cust.setItemDelegateForColumn(self.COL_FINMODEL, TwoLineDelegate(self.tbl_cust))
+        self.tbl_cust.setWordWrap(False)
         # 11pt 는 커 보인다 하셔서 한 단계 내린다(기본 글씨와 같은 10pt)
         # 고객관리는 열이 많아 글자를 한 단계 작게 둔다(10pt) — 키우면 열이 잘린다.
         # 대신 한 칸 높이는 넉넉히 해서 눈이 편하게 한다.
@@ -1707,9 +1817,104 @@ class MainWindow(QMainWindow):
         # ⚠️ 상태 칸(콤보)의 신호 안에서 표를 다시 그리면 그 콤보를 지우게 된다 — 한 박자 뒤에
         QTimer.singleShot(0, self._paint_renewals)
 
+    def _on_kb_favs(self, favs: list) -> None:
+        """자료검색 즐겨찾기를 바꿨다 — 설정에 남기고 다른 PC 로도(동기화 묶음)."""
+        self.settings.kb_favs = list(favs)
+        self._save_settings_quiet()
+        self._touch_sync()
+
     def _renew_template(self) -> str:
-        """[멘트 복사] 의 글(재계약 안내)."""
-        return renewals.RENEW_MENT
+        """[멘트 복사] 의 글(재계약 안내) — 멘트복사 탭에서 고친 글, 없으면 기본 글(v1.35)."""
+        return (getattr(self.settings, "renew_ment", "") or "").strip() or renewals.RENEW_MENT
+
+    # ---- 멘트복사 탭 '고객 안내 문구'(v1.35 — M2) ----
+    def _ment_specs(self) -> list:
+        return [
+            {"key": "cust", "title": "고객 안내멘트 (출고 안내)",
+             "hint": "고객마다 시트 R열 수식이 만들어 줍니다 — 글을 바꾸려면 시트의 수식을 고칩니다. "
+                     "고객관리 표의 [복사] 와 같습니다(보냄 표시도 같이).",
+             "text": self._cust_ment_sample,
+             "buttons": [("고객 골라 복사", "고객을 골라 그 고객의 안내멘트를 복사합니다",
+                          lambda _c: self._ment_pick_copy("cust")),
+                         ("시트 열기", "글은 시트 R열 수식에서 고칩니다", lambda _c: self._open_sheet())]},
+            {"key": "follow", "title": followup.button_text(self.settings),
+             "hint": "○○○ 자리에 고객 이름이 들어갑니다. 대시보드 단추 · [설정] → [알림·일정] 의 글과 같습니다.",
+             "text": lambda: (self.settings.follow_ment or "").replace("%s", "○○○"),
+             "buttons": [("고객 골라 복사", "고객을 골라 이름을 채워 복사합니다",
+                          lambda _c: self._ment_pick_copy("follow")),
+                         ("이름 없이 복사", "'고객님, …' 으로 시작하는 글을 복사합니다(대시보드 단추와 같다)",
+                          lambda _c: self.copy_follow_ment()),
+                         ("고치기", "글을 고칩니다", lambda _c: self._ment_edit("follow"))]},
+            {"key": "renew", "title": "재계약 안내멘트",
+             "hint": "{고객} {차종} {금융사} {만기일} 자리를 그 고객 것으로 채워 복사합니다. "
+                     "[고객관리] → [재계약] 의 [멘트 복사] 와 같은 글입니다.",
+             "text": self._renew_template,
+             "buttons": [("고객 골라 복사", "만기일이 있는 고객을 골라 채워 복사합니다",
+                          lambda _c: self._ment_pick_copy("renew")),
+                         ("고치기", "글을 고칩니다", lambda _c: self._ment_edit("renew"))]},
+        ]
+
+    def _cust_ment_sample(self) -> str:
+        for cr in self._visible_sheet_rows():
+            if (cr.ment or "").strip():
+                return cr.ment
+        return "(시트를 불러오면 고객마다 글이 만들어집니다)"
+
+    def _ment_pick_copy(self, kind: str) -> None:
+        from .ment_templates import CustomerPicker
+        rows = [cr for cr in self._visible_sheet_rows() if cr not in self._sheet_pending]
+        exp = {}
+        if kind == "renew":
+            for cr in rows:
+                d = sheets.expiry_date(cr)
+                if d:
+                    exp[id(cr)] = d
+            rows = sorted((cr for cr in rows if id(cr) in exp), key=lambda cr: exp[id(cr)])
+        if not rows:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "고를 고객이 없습니다 — [고객관리] 에서 시트를 불러온 뒤 다시 해 주세요."
+                                    if kind != "renew" else "만기일을 알 수 있는 고객이 없습니다.")
+            return
+
+        def label(cr):
+            bits = [cr.get("customer"), cr.get("finance"), cr.get("model")]
+            if kind == "renew":
+                bits.append(f"만기 {exp[id(cr)]:%Y-%m-%d}")
+            return " · ".join(x for x in bits if x)
+        title = {"cust": "고객 안내멘트 — 고객 고르기", "follow": "출고 안내멘트 — 고객 고르기",
+                 "renew": "재계약 안내멘트 — 고객 고르기"}[kind]
+        cr = CustomerPicker.run(title, rows, label, self)
+        if cr is None:
+            return
+        if kind == "cust":
+            self._copy_customer_ment(cr)
+        elif kind == "follow":
+            text = (self.settings.follow_ment or "").replace("%s", renewals.short_name(cr)).strip()
+            QApplication.clipboard().setText(text)
+            self.sig_toast.emit(config.APP_NAME, f"{renewals.short_name(cr)} 고객님 출고 안내멘트를 복사했습니다.")
+        else:
+            self._on_renew_copy(cr, exp[id(cr)])
+
+    def _ment_edit(self, kind: str) -> None:
+        from .ment_templates import TemplateEditDialog
+        if kind == "follow":
+            got = TemplateEditDialog.run(
+                "출고 안내멘트 고치기", self.settings.follow_ment, config.DEF_FOLLOW_MENT,
+                "%s 자리에 고객 이름이 들어갑니다(이름 없이 복사하면 '고객님, …' 으로 시작).", self)
+            if got is None:
+                return
+            self.settings.follow_ment = got
+        else:
+            got = TemplateEditDialog.run(
+                "재계약 안내멘트 고치기", self._renew_template(), renewals.RENEW_MENT,
+                "{고객} {차종} {금융사} {만기일} {계약일} {출고일} 자리에 그 고객 것이 들어갑니다.", self)
+            if got is None:
+                return
+            self.settings.renew_ment = "" if got == renewals.RENEW_MENT.strip() else got
+        self._save_settings_quiet()
+        self._touch_sync()
+        self.tab_greet.templates.refresh()
+        self.sig_toast.emit(config.APP_NAME, "안내 글을 저장했습니다.")
 
     def _on_renew_copy(self, cr, d):
         QApplication.clipboard().setText(renewals.ment(cr, d, self._renew_template()))
@@ -1975,15 +2180,20 @@ class MainWindow(QMainWindow):
         tone = self.STATUS_TONES.get((status or "").strip())
         return theme.row_tint(tone) if tone else ""
 
-    # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
-    COL_STATUS = 7
-    COL_FEE = 8
-    COL_NOTE = 9
+    # 고객표 열(v1.35 — 금융사·차종을 한 칸으로 합쳤다)
+    CUST_WIDTHS = (46, 236, 180, 134, 88, 88, 78, 124, 313, 80)
+    COL_NAME = 1
+    COL_FINMODEL = 2
+    COL_STATUS = 6
+    COL_FEE = 7
+    COL_NOTE = 8
     # 금액 열은 오른쪽 정렬 (차량가격·수수료)
-    MONEY_COLS = (4, 8)
+    MONEY_COLS = (3, 7)
     # 짧은 값이라 가운데로 모아야 읽기 좋은 열 (순번·계약일·출고일·진행현황)
-    CENTER_COLS = (0, 5, 6, 7)
-    COL_MENT_BTN = 10
+    CENTER_COLS = (0, 4, 5, 6)
+    DATE_COLS = (4, 5)
+    # 고객표에서 버튼이 들어가는 열 (더블클릭으로 창을 열면 안 되는 자리)
+    COL_MENT_BTN = 9
 
     def _ment_key(self, cr) -> str:
         """안내멘트 복사 이력 키.
@@ -2458,7 +2668,55 @@ class MainWindow(QMainWindow):
         """전역 단축키 → 빠른검색 창."""
         if getattr(self, "_kb_quick", None) is None:
             self._kb_quick = QuickSearch(self)
+            self._kb_quick.extra_find = self._quick_extra
         self._kb_quick.popup()
+
+    QUICK_EXTRA_MAX = 5
+
+    def _quick_extra(self, q: str) -> list:
+        """빠른검색 창 — 고객 · 프로모션에서도 찾는다(v1.35, K4). 각각 5건까지."""
+        from . import hangul, promo
+        q = (q or "").strip()
+        if not q:
+            return []
+        out = []
+        n = 0
+        for cr in self._visible_sheet_rows():
+            hay = " ".join(x for x in (cr.get("customer"), cr.get("model"), cr.get("finance")) if x)
+            if not hay or not hangul.matches(hay, q):
+                continue
+            out.append({"kind": "cust", "label": f"👤 {cr.get('customer')}",
+                        "sub": " · ".join(x for x in (cr.get("finance"), cr.get("model"), cr.get("status")) if x),
+                        "run": (lambda c=cr: self._quick_open_customer(c))})
+            n += 1
+            if n >= self.QUICK_EXTRA_MAX:
+                break
+        blocks = self.tab_promo.blocks_for_search() if hasattr(self, "tab_promo") else []
+        n = 0
+        for b, rows in promo.search(blocks, q, ""):
+            for r in rows:
+                if r.get("kind") != "model":
+                    continue
+                text = promo.row_text(b, r)
+                out.append({"kind": "promo", "label": f"🚗 {b.get('brand', '')} {r['cells'][0]}",
+                            "sub": text[len(r['cells'][0]):].lstrip(" ·")[:80],
+                            "run": (lambda t=text: self._quick_copy_promo(t))})
+                n += 1
+                if n >= self.QUICK_EXTRA_MAX:
+                    break
+            if n >= self.QUICK_EXTRA_MAX:
+                break
+        return out
+
+    def _quick_open_customer(self, cr) -> None:
+        self.showNormal() if self.isMinimized() else None
+        self.raise_()
+        self.activateWindow()
+        self.open_customer(cr)
+
+    def _quick_copy_promo(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
+        self.sig_toast.emit(config.APP_NAME, "프로모션 줄을 복사했습니다 — 카톡 창에서 Ctrl+V")
 
     def _on_sheet_files(self, files: dict, epoch: int):
         """서류 첨부(V열)가 뒤늦게 도착 — 행마다 채운다(표는 그대로 — 보이는 칸이 아니다)."""
@@ -2466,6 +2724,61 @@ class MainWindow(QMainWindow):
             return
         for cr in self.sheet_rows:
             cr.files_cell = files.get(cr.row, "")
+
+    # ---- 고객정보 폴더 ↔ 고객 서류(v1.35) ----
+    def _docs_for_folder(self, folder: str):
+        """고객정보 탭에서 고른 폴더 이름의 고객 — (이름, 그 고객이 올려 둔 서류) 또는 None."""
+        found = self._rows_named(folder)
+        if not found:
+            from . import customer_files as cust_folders
+            pieces = cust_folders.name_pieces(folder)
+            found = [cr for cr in self._visible_sheet_rows()
+                     if any(pc and pc in folder for pc in
+                            cust_folders.name_pieces(cr.get("customer") or ""))
+                     and any(len(pc) >= 2 for pc in pieces)]
+        for cr in found:
+            atts = customer_files(cr)
+            if atts:
+                return (cr.get("customer") or folder).strip(), atts
+        return None
+
+    def _open_customer_docs(self, att: dict, atts: list) -> None:
+        if not hasattr(self, "_cust_opener"):
+            self._cust_opener = AttachOpener(self, lambda: self.gauth)
+        self._cust_opener.open(att, atts)
+
+    def open_customer_folder(self, name: str, parent=None) -> None:
+        """고객 창의 [📁 고객정보 폴더] — 그 고객 폴더를 탐색기(PC 폴더) 또는 드라이브(웹)로 연다.
+
+        먼저 고객정보 탭이 훑어 둔 목록에서 찾고, 없으면 창고 바로 밑만 읽어서 찾는다
+        (고객 폴더는 대개 거기 있다). 못 찾으면 그렇다고 알린다."""
+        from . import customer_files as cust_folders
+        parent = parent or self
+        src, why = cust_folders.pick_source(self.settings, self.gauth)
+        if src is None:
+            QMessageBox.information(parent, config.APP_NAME, "고객정보 폴더를 열 수 없습니다.\n\n" + why)
+            return
+        pool = self.tab_files.indexed_nodes() if hasattr(self, "tab_files") else []
+        node = cust_folders.find_customer_folder(pool, name)
+        if node is None:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                top = src.children(src.root_node())
+            except Exception:
+                top = []
+            finally:
+                QApplication.restoreOverrideCursor()
+            node = cust_folders.find_customer_folder(top, name)
+        if node is None:
+            QMessageBox.information(
+                parent, config.APP_NAME,
+                f"고객정보에서 '{name}' 폴더를 찾지 못했습니다.\n"
+                "[고객정보] 탭에서 폴더를 만들거나, 폴더 이름을 고객명과 맞춰 주세요.")
+            return
+        if src.kind == "local":
+            QDesktopServices.openUrl(QUrl.fromLocalFile(node.key))
+        else:
+            QDesktopServices.openUrl(QUrl(f"https://drive.google.com/drive/folders/{node.key}"))
 
     def show_customer_files(self, cr) -> None:
         """오른쪽 단추 [📎 첨부 서류 보기] — 그 고객의 서류를 크게(← → 로 넘기기)."""
@@ -2583,10 +2896,15 @@ class MainWindow(QMainWindow):
         acc = theme.c("accent")
         fee = f"₩{st['cur_fee']:,}" if st["cur_fee"] else "₩0"
         big = "font-size:16px;font-weight:bold;"
-        bits = [f"<span style='color:{sub};'>이번달 출고</span>&nbsp;"
-                f"<span style='color:{acc};{big}'>{st['cur_cnt']}건</span>",
-                f"<span style='color:{sub};'>수수료</span>&nbsp;"
-                f"<span style='color:{acc};{big}'>{fee}</span>"]
+        # 시트 요약(N1:O4)에 '이번달출고' 가 있으면 그 숫자를 믿고 여기서는 빼 둔다 —
+        # 두 번 나오면(시트 값 · 앱이 센 값) 둘이 다를 때 어느 쪽이 맞는지 헷갈렸다.
+        sheet_has_month = any("".join(str(lb or "").split()) == "이번달출고"
+                              for lb, _v in (summary or []))
+        bits = [] if sheet_has_month else [
+            f"<span style='color:{sub};'>이번달 출고</span>&nbsp;"
+            f"<span style='color:{acc};{big}'>{st['cur_cnt']}건</span>"]
+        bits.append(f"<span style='color:{sub};'>수수료</span>&nbsp;"
+                    f"<span style='color:{acc};{big}'>{fee}</span>")
         if st["prev_cnt"] or st["prev_fee"]:
             diff = st["cur_fee"] - st["prev_fee"]
             pct = (diff / st["prev_fee"] * 100) if st["prev_fee"] else 0
@@ -2627,12 +2945,19 @@ class MainWindow(QMainWindow):
         rows = self._visible_sheet_rows()
         shown = 0
         shown_rows = []
+        hits = []
         for cr in rows:
             if q:
                 hay = " ".join([cr.get("customer"), cr.get("model"),
                                 cr.get("finance")]).lower()
                 if q not in hay:
                     continue
+            hits.append(cr)
+        self._paint_cust_chips(hits)
+        want = self._cust_status
+        for cr in hits:
+            if want and (cr.get("status") or "").strip() != want:
+                continue
             shown_rows.append(cr)
             r = self.tbl_cust.rowCount()
             self.tbl_cust.insertRow(r)
@@ -2642,11 +2967,12 @@ class MainWindow(QMainWindow):
             price = sheets.fmt_money(cr.get("price"))
             # 내용은 여러 줄일 수 있다 — 표에서는 한 줄로 이어 붙인다
             note = " ".join((cr.get("note") or "").split())
+            fin, model = (cr.get("finance") or "").strip(), (cr.get("model") or "").strip()
             vals = [cr.seq if not pend else "…",
                     ("[등록중] " if pend else "") + cr.get("customer"),
-                    cr.get("finance"), cr.get("model"),
+                    "\n".join(x for x in (fin, model) if x) if (fin and model) else (fin or model),
                     (f"₩{price}" if price else ""),
-                    cr.get("contract_date"), cr.get("deliver_date"), status,
+                    short_date(cr.get("contract_date")), short_date(cr.get("deliver_date")), status,
                     (f"₩{fee}" if fee else ""), note]
             for c, val in enumerate(vals):
                 item = QTableWidgetItem(val)
@@ -2657,6 +2983,12 @@ class MainWindow(QMainWindow):
                     item.setTextAlignment(Qt.AlignCenter)
                 if c == self.COL_NOTE and note:
                     item.setToolTip(cr.get("note"))   # 잘린 부분은 툴팁으로
+                elif c == self.COL_FINMODEL:
+                    item.setData(TwoLineDelegate.TOP, fin if (fin and model) else "")
+                    item.setToolTip(" · ".join(x for x in (fin, model) if x))
+                elif c in self.DATE_COLS and val:
+                    item.setToolTip((cr.get("contract_date") if c == self.DATE_COLS[0]
+                                     else cr.get("deliver_date")) or "")
                 self.tbl_cust.setItem(r, c, item)
             # 진행현황: 출고=파랑 / 발주=초록 / 취소=빨강 / 진행보류=회색 — **줄 전체**
             row_bg = self.status_row_color(status)
@@ -2703,10 +3035,12 @@ class MainWindow(QMainWindow):
             self.board.set_rows(self._cust_shown)
         if hasattr(self, "renew") and self.cust_stack.currentWidget() is self.renew:
             self._paint_renewals()
+        if hasattr(self, "tab_greet"):
+            self.tab_greet.templates.refresh()     # 고객 안내멘트 미리보기(시트에서 온 글)
         total = len(rows)
         cached = getattr(self, "_sheet_cached_at", "") if not self._sheet_loaded else ""
         self.lbl_cust.setText(
-            f"고객 {total}건" + (f" · 검색 {shown}건" if q else "")
+            f"고객 {total}건" + (f" · 보이는 것 {shown}건" if (q or want) else "")
             + f"   (시트: {self.settings.sheet_name})"
             + (f"   · 저장해 둔 목록({cached}) — "
                + getattr(self, "_sheet_cache_note", "새로 불러오는 중…") if cached else ""))
@@ -2714,6 +3048,39 @@ class MainWindow(QMainWindow):
     # '내용' 열은 창 폭에 따라 늘었다 줄었다 한다. 이보다 좁아지면 아무 글자도
     # 안 보여 차라리 가로 스크롤이 낫다.
     NOTE_MIN_W = 70
+    # 좁은 화면에서 내용을 이만큼 남기고, 그래도 모자라면 고객명을 NAME_MIN_W 까지 줄인다(v1.35)
+    NOTE_SOFT_W = 200
+    NAME_MIN_W = 170
+
+    # ---- 진행현황 칩(v1.35) ----
+    def _paint_cust_chips(self, hits: list) -> None:
+        if not hasattr(self, "cust_chips"):
+            return
+        counts: dict = {}
+        for cr in hits:
+            st = (cr.get("status") or "").strip()
+            if st:
+                counts[st] = counts.get(st, 0) + 1
+        # 보드와 같은 차례(상담 → 심사 → 가결 → 발주 → 출고 대기 → 출고 → 보류 → 취소), 같으면 많은 것부터
+        order = sorted(counts, key=lambda st: (board.stage(st), -counts[st], st))
+        if self._cust_status and self._cust_status not in counts:
+            order.append(self._cust_status)      # 고른 칩은 0건이 돼도 남겨 둔다(풀 수 있게)
+        self.cust_chips.set_items([(st, st, counts.get(st, 0)) for st in order])
+        self.cust_chips.set_current(self._cust_status)
+        self.cust_chips.setVisible(bool(self.sheet_rows) or bool(self._sheet_pending))
+
+    def _on_cust_chip(self, key: str) -> None:
+        self._cust_status = key
+        self.refresh_customers()
+
+    def _clear_cust_filters(self) -> None:
+        """검색어·진행현황 칩을 풀어 고객이 다 보이게(대시보드에서 고객을 눌렀을 때)."""
+        if hasattr(self, "ed_cust_find") and self.ed_cust_find.live_text():
+            self.ed_cust_find.blockSignals(True)
+            self.ed_cust_find.setText("")
+            self.ed_cust_find.blockSignals(False)
+        self._cust_status = ""
+        self.refresh_customers()
 
     def _fit_cust_columns(self):
         """남거나 모자라는 폭을 '내용' 열이 받아 낸다.
@@ -2726,11 +3093,17 @@ class MainWindow(QMainWindow):
             return          # 폭을 바꾸면 스크롤바가 생겼다 사라지며 다시 불린다
         self._fitting_cols = True
         try:
-            col = self.COL_NOTE
+            col, name = self.COL_NOTE, self.COL_NAME
             vp = self.tbl_cust.viewport().width()
             others = sum(self.tbl_cust.columnWidth(i)
-                         for i in range(self.tbl_cust.columnCount()) if i != col)
-            self.tbl_cust.setColumnWidth(col, max(self.NOTE_MIN_W, vp - others))
+                         for i in range(self.tbl_cust.columnCount()) if i not in (col, name))
+            room = vp - others                     # 고객명 + 내용 이 나눠 쓸 폭
+            name_w = self.CUST_WIDTHS[name]
+            if room < name_w + self.NOTE_SOFT_W:
+                # 좁은 화면(v1.35) — 내용을 NOTE_SOFT_W 까지 줄였는데도 모자라면 고객명도 줄인다
+                name_w = max(self.NAME_MIN_W, room - self.NOTE_SOFT_W)
+            self.tbl_cust.setColumnWidth(name, name_w)
+            self.tbl_cust.setColumnWidth(col, max(self.NOTE_MIN_W, room - name_w))
         except Exception:
             pass
         finally:
@@ -2762,7 +3135,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, config.APP_NAME,
                                     "시트의 머리글(순번/고객명…) 줄을 아직 모릅니다. [불러오기] 를 다시 눌러 주세요.")
             return
-        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self, files=[], auth=self.gauth)
+        res = CustomerDialog.run("고객 등록", {}, self.sheet_choices, "", self, files=[], auth=self.gauth,
+                                 open_folder=self.open_customer_folder)
         if res is None:
             return
         vals, fres, _cleared = res
@@ -2824,7 +3198,8 @@ class MainWindow(QMainWindow):
             return
         res = CustomerDialog.run(f"고객 수정 · {cr.get('customer')}",
                                  cr.values, self.sheet_choices, cr.ment, self,
-                                 files=cr.files(), auth=self.gauth)
+                                 files=cr.files(), auth=self.gauth,
+                                 open_folder=self.open_customer_folder)
         if res is None:
             return
         if not self._sheet_writable():       # 보기 전용 — 열어 보기만 되고 저장은 안 된다
@@ -3223,8 +3598,9 @@ class MainWindow(QMainWindow):
             row.addWidget(b)
         row.addStretch()
         v.addLayout(row)
+        # v1.35 — '사용' 은 ON/OFF 글자 대신 스위치, '다음 울림' 칸을 더하고 가까운 순으로
         self.tbl_alarm = self._make_table(
-            ["사용", "이름", "요일", "시각", "메모"], [50, 200, 120, 80, 480])
+            ["사용", "다음 울림", "이름", "요일", "시각", "메모"], [64, 150, 200, 120, 80, 420])
         self.tbl_alarm.doubleClicked.connect(lambda _i: self.on_alarm_edit())
         v.addWidget(self.tbl_alarm)
         return w
@@ -3295,12 +3671,17 @@ class MainWindow(QMainWindow):
                     + "\n\n[설정] → [Google 로그아웃] 후 다시 로그인하면서 '모두 선택' 에 체크해 주세요.")
                 self.lbl_status.setStyleSheet(f"color:{theme.strong('orange')};")
             else:
-                self.lbl_status.setText("구글: 연결됨  (설정에서 로그인/로그아웃)")
+                # 잘 붙어 있으면 글자 대신 작은 초록 점(마우스를 올리면 설명) — v1.35
+                self.lbl_status.setText("")
                 self.lbl_status.setToolTip("")
-                self.lbl_status.setStyleSheet(f"color:{theme.c('status_ok')};")
+                self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
+                self.lbl_gdot.show()
+            if miss:
+                self.lbl_gdot.hide()
             self.btn_google.hide()
         else:
             # 단추가 바로 옆에 있으므로 '설정으로 가라'는 안내는 필요 없다
+            self.lbl_gdot.hide()
             self.lbl_status.setText("구글: 로그인 필요")
             self.lbl_status.setStyleSheet(f"color:{theme.c('status_bad')};")
             self.btn_google.set_busy(False)
@@ -3464,6 +3845,8 @@ class MainWindow(QMainWindow):
                 self.tab_promo.set_where(self.settings.promo_sheet, self.settings.promo_tab)
             if hasattr(self, "btn_follow_ment"):
                 self.btn_follow_ment.setText(followup.button_text(self.settings))
+            if hasattr(self, "tab_greet"):
+                self.tab_greet.set_template_specs(self._ment_specs())   # 설정에서 글·개월을 바꿨을 수 있다
         self.update_google_status()
         # 로그인/로그아웃이 있었으면 데이터 갱신
         if dlg.tasks_changed or (was_connected != self.gauth.is_connected()):
@@ -4236,7 +4619,7 @@ class MainWindow(QMainWindow):
                 continue
             r = self.tbl_week.rowCount()
             self.tbl_week.insertRow(r)
-            vals = [ev.start.strftime("%m-%d(%a)"), ev.time_text(), "일정", ev.summary]
+            vals = [f"{ev.start:%m-%d}({config.kdow(ev.start)})", ev.time_text(), "일정", ev.summary]
             for c, val in enumerate(vals):
                 self.tbl_week.setItem(r, c, QTableWidgetItem(val))
             self.week_dates.append(d)
@@ -4273,6 +4656,18 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 할일 뷰
     def refresh_todo(self):
+        # 다시 그리는 동안 체크박스 신호가 '완료' 로 오해되지 않게 막는다
+        self.tbl_todo.blockSignals(True)
+        try:
+            self._refresh_todo_rows()
+        finally:
+            self.tbl_todo.blockSignals(False)
+        acts = getattr(self, "todo_acts", None)
+        if acts is not None:
+            acts.hover_at(self.tbl_todo.viewport().mapFromGlobal(QCursor.pos()))
+        self.refresh_dashboard()
+
+    def _refresh_todo_rows(self):
         self.tbl_todo.setRowCount(0)
         self.todo_dates = []
         today = date.today()
@@ -4323,16 +4718,16 @@ class MainWindow(QMainWindow):
                 ment = it.ment.replace("\n", " ")[:60]
                 vals = [it.days_text(),
                         it.run_time.strftime("%H:%M") if it.has_time else "-",
-                        title, "ON" if it.alarm else "", ment]
+                        title, "🔔" if it.alarm else "", ment]
                 self.todo_dates.append(it.run_date)
                 key = ("local", id(it))
             else:
                 tk: google_client.GoogleTask = obj
                 # 등록 중인 행은 아직 저장된 알람이 없으니 대화상자 값으로 보여준다
                 a = self.task_alarms.find(tk.id) or self._pending_alarm_for(tk.id)
-                day = tk.due.strftime("%m-%d(%a)") if (tk.has_due and tk.due) else "기한없음"
+                day = f"{tk.due:%m-%d}({config.kdow(tk.due)})" if (tk.has_due and tk.due) else "기한없음"
                 tm = a.run_time.strftime("%H:%M") if (a and a.alarm) else "-"
-                on = "ON" if (a and a.alarm) else ""
+                on = "🔔" if (a and a.alarm) else ""
                 if a and a.ment.strip():
                     ment = a.ment.replace("\n", " ")[:60]
                 else:
@@ -4344,14 +4739,22 @@ class MainWindow(QMainWindow):
             # 0열: 체크박스(선택) — 키를 여기에 저장
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            chk.setCheckState(Qt.Unchecked)
+            soon = key in self._todo_done_soon
+            chk.setCheckState(Qt.Checked if soon else Qt.Unchecked)
             chk.setTextAlignment(Qt.AlignCenter)
             chk.setData(Qt.UserRole, key)
+            chk.setToolTip("체크하면 완료")
             self.tbl_todo.setItem(r, 0, chk)
             # 1열부터 데이터
             for c, val in enumerate(vals):
-                self.tbl_todo.setItem(r, c + 1, QTableWidgetItem(val))
+                cell = QTableWidgetItem(val)
+                if c == 3 and val:
+                    cell.setTextAlignment(Qt.AlignCenter)
+                    cell.setToolTip("알람이 켜져 있습니다")
+                self.tbl_todo.setItem(r, c + 1, cell)
             self._colorize_row(self.tbl_todo, r, self.todo_dates[-1])
+            if soon:
+                self._strike_todo_row(r, True)
             # 전송 중인 행은 흐리게 → '아직 처리 중'임이 눈에 보이게
             if is_google and self._is_pending_id(obj.id):
                 fg = QColor(theme.c("subtext"))
@@ -4359,7 +4762,6 @@ class MainWindow(QMainWindow):
                     cell = self.tbl_todo.item(r, c)
                     if cell is not None:
                         cell.setForeground(fg)
-        self.refresh_dashboard()
 
     def _warn_if_filtered(self, due, has_due: bool) -> None:
         """추가한 항목이 현재 [표시] 필터 밖이면 목록에 안 보이므로 알려준다."""
@@ -4501,28 +4903,53 @@ class MainWindow(QMainWindow):
         save_list(self.todo_file, self.todos)
         self.refresh_todo()
 
-    # ---- 체크박스 선택 헬퍼 ----
-    def _checked_todo_keys(self) -> list:
-        keys = []
-        for r in range(self.tbl_todo.rowCount()):
-            it = self.tbl_todo.item(r, 0)
-            if it and it.checkState() == Qt.Checked:
-                k = it.data(Qt.UserRole)
-                if k:
-                    keys.append(k)
-        return keys
+    # ---- 체크박스 = 완료 (v1.35) ----
+    # 체크하면 그 줄에 줄을 긋고 TODO_DONE_MS 뒤에 완료한다. 그 사이 다시 누르면 취소.
+    # 여러 줄을 연달아 체크하면 마지막 체크부터 다시 기다렸다가 한 번에 처리한다.
+    def _strike_todo_row(self, r: int, on: bool) -> None:
+        for c in range(1, self.tbl_todo.columnCount()):
+            cell = self.tbl_todo.item(r, c)
+            if cell is None:
+                continue
+            f = cell.font()
+            f.setStrikeOut(on)
+            cell.setFont(f)
+            if on:
+                cell.setForeground(QColor(theme.c("subtext")))
 
-    def _toggle_all_todo_checks(self):
-        rows = self.tbl_todo.rowCount()
-        any_unchecked = any(
-            self.tbl_todo.item(r, 0) and self.tbl_todo.item(r, 0).checkState() != Qt.Checked
-            for r in range(rows))
-        new = Qt.Checked if any_unchecked else Qt.Unchecked
-        for r in range(rows):
-            it = self.tbl_todo.item(r, 0)
-            if it:
-                it.setCheckState(new)
-        self.btn_todo_all.setText("전체해제" if any_unchecked else "전체선택")
+    def _on_todo_item_changed(self, item) -> None:
+        if item is None or item.column() != 0:
+            return
+        key = item.data(Qt.UserRole)
+        if not key:
+            return
+        r = item.row()
+        self.tbl_todo.blockSignals(True)
+        try:
+            if item.checkState() == Qt.Checked:
+                if self._is_pending_id(key[1]) if key[0] == "google" else False:
+                    item.setCheckState(Qt.Unchecked)
+                    self.sig_toast.emit(config.APP_NAME, "구글에 등록 중입니다. 잠시 후 완료하세요.")
+                    return
+                cell = self.tbl_todo.item(r, 3)
+                self._todo_done_soon[key] = cell.text() if cell else ""
+                self._strike_todo_row(r, True)
+                self._todo_done_timer.start()
+            else:
+                self._todo_done_soon.pop(key, None)
+                self._strike_todo_row(r, False)
+                self._colorize_row(self.tbl_todo, r, self.todo_dates[r]
+                                   if 0 <= r < len(self.todo_dates) else None)
+                if not self._todo_done_soon:
+                    self._todo_done_timer.stop()
+        finally:
+            self.tbl_todo.blockSignals(False)
+
+    def _flush_todo_done(self) -> None:
+        keys = list(self._todo_done_soon)
+        self._todo_done_soon.clear()
+        if keys:
+            self._complete_todo_keys(keys)
 
     def _on_todo_dblclick(self, index):
         # 체크박스 열 더블클릭은 편집 대신 무시(체크 토글은 단일 클릭)
@@ -4548,20 +4975,15 @@ class MainWindow(QMainWindow):
         menu.exec(self.tbl_todo.viewport().mapToGlobal(pos))
 
     def on_todo_done(self):
-        """체크된(없으면 현재 선택된) 할일을 완료 처리하고 목록에서 제거."""
-        keys = self._checked_todo_keys()
-        if not keys:
-            k = self._sel_todo_key()
-            if k:
-                keys = [k]
-        if not keys:
-            QMessageBox.information(self, config.APP_NAME, "완료할 할일을 체크하거나 선택하세요.")
+        """고른 줄(우클릭 메뉴 [완료])을 완료 처리하고 목록에서 뺀다."""
+        k = self._sel_todo_key()
+        if not k:
+            QMessageBox.information(self, config.APP_NAME, "완료할 할일을 고르세요.")
             return
-        if len(keys) > 1 and QMessageBox.question(
-                self, config.APP_NAME,
-                f"체크한 {len(keys)}건을 완료 처리할까요?") != QMessageBox.Yes:
-            return
+        self._complete_todo_keys([k])
 
+    def _complete_todo_keys(self, keys: list) -> None:
+        """할일 여러 건 완료 — 로컬은 목록에서 빼고(반복은 다음 차례로), 구글은 완료 표시."""
         local_ids = {k[1] for k in keys if k[0] == "local"}
         google_items = [k[1] for k in keys if k[0] == "google"]
 
@@ -4649,18 +5071,50 @@ class MainWindow(QMainWindow):
         self.refresh_todo()
 
     # ------------------------------------------------------------ PC 알람
+    @staticmethod
+    def next_fire_text(at, now) -> str:
+        """'오늘 12:00' · '내일 09:00' · '11-24(월) 09:00'."""
+        if at is None:
+            return ""
+        d = at.date()
+        if d == now.date():
+            day = "오늘"
+        elif d == now.date() + timedelta(days=1):
+            day = "내일"
+        else:
+            day = f"{d:%m-%d}({config.kdow(d)})"
+        return f"{day} {at:%H:%M}"
+
     def refresh_alarm(self):
         self.tbl_alarm.setRowCount(0)
-        for al in self.alarms:
+        now = datetime.now()
+        # 가까운 순 — 켜진 것(다음 울림 순) 먼저, 꺼진 것·요일 없는 것은 아래
+        order = sorted(self.alarms, key=lambda al: (al.next_fire(now) is None,
+                                                    al.next_fire(now) or datetime.max))
+        for al in order:
             r = self.tbl_alarm.rowCount()
             self.tbl_alarm.insertRow(r)
-            vals = ["ON" if al.enabled else "OFF", al.title, al.days_text(),
-                    al.run_time.strftime("%H:%M"), al.ment.replace("\n", " ")[:80]]
+            nxt = al.next_fire(now)
+            vals = ["", self.next_fire_text(nxt, now) or ("꺼짐" if not al.enabled else "요일 없음"),
+                    al.title, al.days_text(), al.run_time.strftime("%H:%M"),
+                    al.ment.replace("\n", " ")[:80]]
             for c, val in enumerate(vals):
                 item = QTableWidgetItem(val)
                 if c == 0:
                     item.setData(Qt.UserRole, id(al))
+                if c == 1 and nxt is None:
+                    item.setForeground(QColor(theme.c("subtext")))
                 self.tbl_alarm.setItem(r, c, item)
+            sw = Switch(al.enabled)
+            sw.setToolTip("켜면 정한 요일·시각에 알람이 울립니다")
+            sw.toggled.connect(lambda on, a=al: self._toggle_alarm(a, on))
+            self.tbl_alarm.setCellWidget(r, 0, switch_centered(sw))
+
+    def _toggle_alarm(self, al, on: bool) -> None:
+        al.enabled = bool(on)
+        save_list(self.alarm_file, self.alarms)
+        # ⚠️ 스위치 신호 안에서 표를 다시 그리면 그 스위치를 지우게 된다 — 한 박자 뒤에
+        QTimer.singleShot(0, self.refresh_alarm)
 
     def _sel_alarm(self) -> PcAlarm | None:
         r = self.tbl_alarm.currentRow()
@@ -4767,6 +5221,7 @@ class MainWindow(QMainWindow):
             self._today_shown = today
             self._paint_today()
             self.refresh_dashboard()        # 오늘·이번 주·다음 주가 바뀐다
+            self.refresh_alarm()            # '내일 09:00' → '오늘 09:00'(다음 울림)
         self._paint_page_title()            # 인사말은 시간대 따라(바뀔 때만 다시 쓴다)
         if self.last_backup != today and self._tick_backup_ok():
             self._backup(manual=False)
@@ -4856,7 +5311,7 @@ class MainWindow(QMainWindow):
         secs = []
 
         # ---- 오늘 일정 ----
-        items = [{"lead": ev.time_text(), "text": ev.summary}
+        items = [{"lead": ev.time_text(), "text": ev.summary, "target": ("cal", today)}
                  for ev in self.cal_events if ev.start.date() == today]
         cnt_cal = len(items)
         secs.append({"icon": "📅", "title": "오늘 일정", "color": "blue",
@@ -4866,10 +5321,12 @@ class MainWindow(QMainWindow):
         items = []
         for it in self.todos:
             if not it.done and it.run_date == today:
-                items.append({"lead": it.run_time.strftime("%H:%M"), "text": it.title})
+                items.append({"lead": it.run_time.strftime("%H:%M"), "text": it.title,
+                              "target": ("todo", ("local", id(it)))})
         for tk in self.visible_gtasks():
             if tk.has_due and tk.due == today:
-                items.append({"lead": "", "text": tk.title})
+                items.append({"lead": "", "text": tk.title,
+                              "target": ("todo", ("google", tk.id))})
         cnt_todo = len(items)
         secs.append({"icon": "✅", "title": "오늘 할일", "color": "green",
                      "items": items, "empty": "오늘 할일이 없습니다"})
@@ -4881,7 +5338,7 @@ class MainWindow(QMainWindow):
             for cr, d, dday in due:
                 tag = "오늘 출고" if dday == 0 else f"출고 {dday}일차"
                 items.append({"lead": tag, "text": cr.get("customer"),
-                              "sub": d.strftime("%m-%d")})
+                              "sub": d.strftime("%m-%d"), "target": ("cust", cr)})
             secs.append({"icon": "💬", "title": "안내멘트 미발송", "color": "red",
                          "items": items,
                          "hint": "[고객관리] 탭에서 [복사] 를 눌러 안내멘트를 보내세요."})
@@ -4894,7 +5351,7 @@ class MainWindow(QMainWindow):
                 tag = (f"D-{left}" if left > 0 else
                        ("오늘 만기" if left == 0 else f"{-left}일 지남"))
                 items.append({"lead": tag, "text": cr.get("customer"),
-                              "sub": f"{d:%Y-%m-%d}"})
+                              "sub": f"{d:%Y-%m-%d}", "target": ("cust", cr)})
             more = len(exp) - 12
             secs.append({"icon": "🔔", "title": "만기 재계약", "color": "violet",
                          "items": items, "count": len(exp),
@@ -4910,7 +5367,8 @@ class MainWindow(QMainWindow):
                 items.append({"lead": f"{total - len(left)}/{total}",
                               "text": cr.get("customer"),
                               "sub": " · ".join(left[:3])
-                                     + (f" 외 {len(left) - 3}" if len(left) > 3 else "")})
+                                     + (f" 외 {len(left) - 3}" if len(left) > 3 else ""),
+                              "target": ("cust", cr)})
             more = len(short) - 12
             secs.append({"icon": "📄", "title": "서류 미비", "color": "orange",
                          "items": items, "count": len(short),
@@ -4944,19 +5402,21 @@ class MainWindow(QMainWindow):
         wk_todo = []
         for it in self.todos:
             if not it.done and it.run_date and today <= it.run_date < week_end:
-                wk_todo.append((it.run_date, it.run_time.strftime("%H:%M"), it.title))
+                wk_todo.append((it.run_date, it.run_time.strftime("%H:%M"), it.title,
+                                ("local", id(it))))
         for tk in self.visible_gtasks():
             if tk.has_due and tk.due and today <= tk.due < week_end:
-                wk_todo.append((tk.due, "", tk.title))
+                wk_todo.append((tk.due, "", tk.title, ("google", tk.id)))
         wk_todo.sort(key=lambda x: (x[0], x[1]))
 
         items = []
         for e in wk_cal[:12]:
             items.append({"lead": self._d_label(e.start.date()),
-                          "text": e.summary, "sub": e.time_text(), "kind": "일정"})
-        for d, tm, title in wk_todo[:12]:
+                          "text": e.summary, "sub": e.time_text(), "kind": "일정",
+                          "target": ("cal", e.start.date())})
+        for d, tm, title, key in wk_todo[:12]:
             items.append({"lead": self._d_label(d), "text": title,
-                          "sub": tm, "kind": "할일"})
+                          "sub": tm, "kind": "할일", "target": ("todo", key)})
         secs.append({"icon": "🗓", "title": "이번주 요약", "color": "gray",
                      "items": items, "count": len(wk_cal) + len(wk_todo),
                      "note": f"일정 {len(wk_cal)}건 / 할일 {len(wk_todo)}건",
@@ -4996,8 +5456,13 @@ class MainWindow(QMainWindow):
         return "\n".join(lines)
 
     # ---- 색·크기·이모지를 입힌 화면용 ----
-    def build_briefing_html(self, with_head: bool = True) -> str:
-        """with_head=False 면 맨 위 날짜·건수 줄을 뺀다(대시보드 카드는 머리 줄에 쓴다)."""
+    def build_briefing_html(self, with_head: bool = True, link=None, more=None,
+                            limit: int = 0, expanded=None) -> str:
+        """with_head=False 면 맨 위 날짜·건수 줄을 뺀다(대시보드 카드는 머리 줄에 쓴다).
+
+        link · more · limit · expanded — 대시보드 카드에서만(v1.35): 이름을 누르면 그
+        고객 창·일정으로, 긴 묶음은 'N건 더 보기' 로 접는다(weekly.render_html 과 같다).
+        """
         secs = self._briefing_sections()
         cnt_cal, cnt_todo = self._brief_today_counts
         d = date.today()
@@ -5032,19 +5497,27 @@ class MainWindow(QMainWindow):
             if not s["items"]:
                 out.append(f"<p style='margin:2px 0 6px 12px;font-size:13px;color:{sub_c};'>"
                            f"{esc(s.get('empty', '없음'))}</p>")
-            for it in s["items"]:
+            key = f"b:{s['title']}"
+            shown, folded, opened = weekly.fold_items(s, limit if more else 0, expanded, key)
+            for it in shown:
                 lead = (it.get("lead") or "").strip()
                 sub = (it.get("sub") or "").strip()
                 head = (f"<span style='background-color:{bg};color:{col};font-weight:bold;'>"
                         f"&nbsp;{esc(lead)}&nbsp;</span>&nbsp;" if lead else "")
                 tail = (f" <span style='color:{sub_c};font-size:12px;'>{esc(sub)}</span>"
                         if sub else "")
+                name = weekly.link_html(it, f"<b style='color:{txt};'>{esc(it['text'])}</b>",
+                                        link, txt)
                 out.append(
                     f"<p style='margin:3px 0 3px 12px;font-size:14px;color:{txt};'>"
-                    f"{head}<b>{esc(it['text'])}</b>{tail}</p>")
-            if s.get("more"):
+                    f"{head}{name}{tail}</p>")
+            if folded:
+                out.append(weekly.fold_html(more(key), folded, False, sub_c))
+            if s.get("more") and not folded:
                 out.append(f"<p style='margin:2px 0 4px 12px;font-size:12px;color:{sub_c};'>"
                            f"… 외 {s['more']}건</p>")
+            if opened:
+                out.append(weekly.fold_html(more(key), 0, True, sub_c))
             if s.get("hint"):
                 out.append(
                     f"<p style='margin:6px 0 8px 12px;font-size:13px;color:{col};'>"

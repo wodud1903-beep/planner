@@ -80,6 +80,8 @@ class Fake:
     def __init__(self, auth):
         self.gauth = auth
         self.lbl_status = QLabel("")
+        self.lbl_gdot = QLabel("●")         # v1.35 — 잘 붙어 있으면 글자 대신 초록 점
+        self.lbl_gdot.hide()
         self.btn_google = Btn()
 
 
@@ -94,7 +96,8 @@ BOX.clear()
 f = Fake(auth_with(ALL))
 ok("다 받았으면 아무 말 없다", MainWindow._warn_missing_scopes(f) is False and BOX == [])
 MainWindow.update_google_status(f)
-ok("상태 줄은 평소대로", f.lbl_status.text().startswith("구글: 연결됨  (") and f.lbl_status.toolTip() == "")
+ok("상태 줄은 평소대로(v1.35: 글자 없이 초록 점)", f.lbl_status.text() == "" and not f.lbl_gdot.isHidden()
+   and f.lbl_status.toolTip() == "")
 src = inspect.getsource(MainWindow._on_google_login_done)
 ok("로그인이 끝나면 확인한다", "self._warn_missing_scopes()" in src)
 

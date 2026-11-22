@@ -203,15 +203,10 @@ pos = [w.dash_grid._grid.getItemPosition(w.dash_grid._grid.indexOf(c)) for c in 
 ok("위: 할일(2칸)·브리핑 / 아래: 일정·이번 주·다음 주",
    pos == [(0, 0, 1, 2), (0, 2, 1, 1), (1, 0, 1, 1), (1, 1, 1, 1), (1, 2, 1, 1)], pos)
 
-print("\n[7] 바로가기 — 누르면 그 화면")
-names = [t.text() for t in w.dash_tiles]
-ok("바로가기 6개", names == ["캘린더", "고객관리", "고객정보", "자료검색", "멘트복사", "수당계산기"], names)
-w.dash_tiles[3].click()
-pump()
-ok("자료검색으로", w.tabs.currentWidget() is w.tab_kb)
-w.dash_tiles[1].click()
-pump()
-ok("고객관리로", w.tabs.currentWidget() is w.tab_cust)
+print("\n[7] 바로가기 아이콘 줄은 없앴다(v1.35 — 왼쪽 메뉴와 같은 단추가 두 벌이었다)")
+from PySide6.QtWidgets import QToolButton as _QTB  # noqa: E402
+tiles = [t for t in w.tab_main.findChildren(_QTB) if t.objectName() == "dashtile"]
+ok("대시보드에 바로가기 칸이 없다", not tiles and not hasattr(w, "dash_tiles"), len(tiles))
 w.tabs.setCurrentWidget(w.tab_main)
 
 print("\n[8] 옛 메뉴 순서('일정 / 할일')도 대시보드로 이어진다")

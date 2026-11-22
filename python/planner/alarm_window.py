@@ -16,7 +16,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QLabel, QMenu, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from . import config, theme
@@ -32,6 +32,21 @@ _TOP = 20               # 화면 위에서 띄우는 거리
 _GAP = 10               # 쌓을 때 창 사이
 _CASCADE = 30           # 아래가 모자랄 때 계단식으로 비키는 거리
 _EDGE = 8               # 화면 가장자리에서 최소한 띄우는 거리
+
+# 다시 알림(v1.35) — (메뉴 글자, 분 또는 'morning')
+MORNING_HOUR = 9
+SNOOZE_CHOICES = [("5분 뒤", 5), ("10분 뒤", 10), ("30분 뒤", 30),
+                  (f"내일 아침 {MORNING_HOUR}시", "morning")]
+
+
+def snooze_seconds(minutes, now=None) -> int:
+    """다시 띄울 때까지 몇 초 — 'morning' 이면 내일 아침 MORNING_HOUR 시까지."""
+    from datetime import datetime, timedelta
+    if minutes == "morning":
+        now = now or datetime.now()
+        at = datetime.combine(now.date() + timedelta(days=1), datetime.min.time()).replace(hour=MORNING_HOUR)
+        return max(60, int((at - now).total_seconds()))
+    return max(1, int(minutes)) * 60
 
 
 def _pick_screen():
@@ -155,8 +170,14 @@ class AlarmWindow(QWidget):
         btns.setSpacing(10)
         self.btn_copy = QPushButton("메모 복사")
         self.btn_copy.clicked.connect(self._copy)
-        self.btn_snooze = QPushButton("5분 뒤 다시")
-        self.btn_snooze.clicked.connect(self._snooze)
+        # 다시 알림(v1.35) — 예전엔 '5분 뒤 다시' 하나뿐이었다. 눌러서 5분·10분·30분·내일 아침 중에 고른다.
+        self.btn_snooze = QPushButton("다시 알림 ▾")
+        self.btn_snooze.setToolTip("잠깐 숨겼다가 다시 띄웁니다(프로그램을 켜 둔 동안)")
+        self.snooze_menu = QMenu(self.btn_snooze)
+        for label, mins in SNOOZE_CHOICES:
+            act = self.snooze_menu.addAction(label)
+            act.triggered.connect(lambda _c=False, m=mins: self._snooze(m))
+        self.btn_snooze.setMenu(self.snooze_menu)
         self.btn_ok = QPushButton("확인")
         self.btn_ok.clicked.connect(self._dismiss)
         # 눌러서 바로 열어 보는 단추
@@ -292,9 +313,10 @@ class AlarmWindow(QWidget):
         except Exception:
             self.btn_copy.setText("복사 실패")
 
-    def _snooze(self):
+    def _snooze(self, minutes=5):
+        """minutes 분 뒤 다시 — 'morning' 이면 내일 아침 MORNING_HOUR 시."""
         self._timer.stop()
-        self._snooze_left = 5 * 60
+        self._snooze_left = snooze_seconds(minutes)
         self._snooze_timer.start(1000)
         self.hide()
 

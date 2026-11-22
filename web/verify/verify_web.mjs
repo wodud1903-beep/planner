@@ -111,7 +111,10 @@ let p = await page(ctx);
 const reqs = [];
 p.on("request", (r) => reqs.push(r.url()));
 await p.goto(s.url, { waitUntil: "networkidle" });
-ok("탭 일곱 개가 보인다(v1.34.2 — 수입차 프로모션)", (await p.locator("nav.tabs a").count()) === 7);
+ok("탭 여섯 개가 보인다(v1.35 — [정보] 는 오른쪽 위 단추로)", (await p.locator("nav.tabs a").count()) === 6);
+ok("아래 메뉴에 [정보] 가 없다", (await p.locator('nav.tabs a[data-tab="/about"]').count()) === 0);
+ok("로그인 전 — 오른쪽 위 (i) 단추가 정보 화면으로", (await p.locator("#infobtn").getAttribute("href")) === "#/about"
+   && await p.locator("#infobtn").isVisible());
 ok("주소만 치면 일정 화면이다",
    (await p.locator('nav.tabs a[data-tab="/agenda"][aria-current="page"]').count()) === 1,
    await p.evaluate(() => location.hash));
@@ -124,7 +127,7 @@ ok("불러온 파일이 전부 200 이다",
    statuses.every((x) => x === 200), statuses.filter((x) => x !== 200).join(","));
 
 console.log("\n[4] 로그인 없이도 화면이 산다");
-await p.click('nav.tabs a[data-tab="/about"]');
+await p.click("#infobtn");
 await p.waitForTimeout(400);
 ok("정보 화면이 열린다", (await p.locator("#clog").count()) === 1);
 await p.waitForFunction(() => document.querySelector("#clog details"), null, { timeout: 4000 })
@@ -432,7 +435,7 @@ await ctx.setOffline(true);
 await p.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
 await p.waitForTimeout(600);
 ok("오프라인에서 화면이 그려진다",
-   (await p.locator("nav.tabs a").count()) === 7);
+   (await p.locator("nav.tabs a").count()) === 6);
 await ctx.setOffline(false);
 
 console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌려 본다");
@@ -603,7 +606,7 @@ console.log("\n[9] 고객관리 — 가짜 시트를 물려 화면 전체를 돌
   ok("시트를 못 읽어도 캐시로 목록이 뜬다",
      (await p4.locator("#clist button.row").count()) === 3);
   ok("시트를 못 읽어도 빈 화면이 되지 않는다",
-     (await p4.locator("nav.tabs a").count()) === 7);
+     (await p4.locator("nav.tabs a").count()) === 6);
   await ctx3.close();
 }
 
@@ -2770,6 +2773,103 @@ console.log("\n[29] v1.34.2 — 수입차 프로모션(읽기 전용) · 좁은 
   ok("메뉴의 '프로모션' 이 골라져 있다",
      (await pp.locator('nav.tabs a[aria-current="page"]').getAttribute("data-tab")) === "/promo");
   await ctxP.close();
+}
+
+console.log("\n[30] v1.35 — 폰 목록이 화면을 다 쓴다 · 메뉴 여섯 칸 · 자료 즐겨찾기 · 프로모션 바뀐 곳");
+{
+  const FX = JSON.parse(readFileSync(join(WEB, "verify", "fixtures", "promo.json"), "utf-8"));
+  const VT = JSON.parse(readFileSync(join(WEB, "verify", "vectors.json"), "utf-8")).promo_track;
+  const PID = "1W8maHjHzkyEf2QgAPi5agvHp08OLYRvMa-A9TPRl6-M";
+  const ctxV = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await seed(ctxV, { account: "me@example.com" });
+  await ctxV.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+  });
+  await ctxV.route("**/accounts.google.com/**", (r) => r.abort());
+  await ctxV.route("**/oauth2/v3/userinfo", (r) => r.fulfill({ json: { email: "me@example.com" } }));
+  await ctxV.route("**/www.googleapis.com/**", (r) => r.fulfill({ json: { files: [], items: [] } }));
+  let promoStep = 0;
+  await ctxV.route("**/sheets.googleapis.com/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes(PID) && u.includes("/values/")) return r.fulfill({ json: { values: VT.steps[promoStep].values } });
+    if (u.includes(PID)) {
+      return r.fulfill({ json: { sheets: [{ properties: { title: "수입차 프로모션", sheetId: 1350310028 },
+        merges: FX.merges.map(([a, b, c, d]) => ({ startRowIndex: a, endRowIndex: b,
+                                                    startColumnIndex: c, endColumnIndex: d })) }] } });
+    }
+    if (u.includes("업무자료") && u.includes("A1:F")) {
+      return r.fulfill({ json: { values: [["카테고리", "금융사", "제목", "태그", "본문", "체크리스트"],
+        ["심사서류", "", "개인 심사서류", "", "1. 신분증", ""],
+        ["캐피탈", "현대", "현대캐피탈", "", "1577", ""],
+        ["캐피탈", "KB", "KB캐피탈", "", "1588", ""]] } });
+    }
+    return r.fulfill({ json: { values: [] } });
+  });
+  const pv = await page(ctxV);
+  // ---- B3 폰 목록 반쪽
+  await pv.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pv.waitForSelector("#kblist button.row", { timeout: 10000 });
+  const lw = await pv.evaluate(() => [document.querySelector("#kbsplit > .left").getBoundingClientRect().width,
+                                      document.querySelector("#kbsplit").getBoundingClientRect().width]);
+  ok("폰(412px) 자료 목록이 화면 폭을 다 쓴다(예전 220px 로 반쪽)", lw[0] >= lw[1] - 2 && lw[0] > 360, lw.join(" / "));
+  await pv.setViewportSize({ width: 900, height: 900 });
+  await pv.waitForTimeout(300);
+  const lw2 = await pv.evaluate(() => parseFloat(document.querySelector("#kbsplit > .left").style.width) || 0);
+  ok("펼친 화면에서는 목록 너비가 다시 정해진다(끌어서 조절)", lw2 >= 220, lw2);
+  await pv.setViewportSize({ width: 412, height: 900 });
+  await pv.waitForTimeout(300);
+  const lw3 = await pv.evaluate(() => document.querySelector("#kbsplit > .left").getBoundingClientRect().width);
+  ok("다시 접으면 또 화면 폭을 다 쓴다", lw3 > 360, lw3);
+  // ---- W1 [정보] 는 오른쪽 위 계정 단추
+  ok("메뉴 여섯 칸", (await pv.locator("nav.tabs a").count()) === 6);
+  ok("로그인하면 계정 단추가 정보 화면으로", (await pv.locator("#whochip").getAttribute("href")) === "#/about"
+     && await pv.locator("#whochip").isVisible() && await pv.locator("#infobtn").isHidden());
+  // ---- W2 자료 즐겨찾기 · 최근 본 자료
+  const rows = async () => pv.locator("#kblist button.row .t").allTextContents();
+  const first = (await rows()).map((t) => t.trim());
+  const idxOf = (list, t) => list.findIndex((x) => x.endsWith(t));
+  await pv.locator("#kblist button.row").nth(idxOf(first, "KB캐피탈")).click();
+  await pv.waitForSelector("#kbfav");
+  await pv.click("#kbfav");
+  await pv.waitForFunction(() => document.querySelector("#kbfav").textContent.startsWith("★"), null, { timeout: 3000 })
+    .catch(() => {});
+  ok("☆ → ★ 즐겨찾기", (await pv.locator("#kbfav").textContent()).startsWith("★"));
+  await pv.click("#kbback");
+  await pv.waitForTimeout(200);
+  await pv.locator("#kblist button.row").nth(idxOf((await rows()).map((t) => t.trim()), "현대캐피탈")).click();
+  await pv.waitForTimeout(200);
+  await pv.click("#kbback");
+  await pv.waitForTimeout(300);
+  const after = (await rows()).map((t) => t.trim());
+  ok("검색어 없이 보면 즐겨찾기 → 최근 본 것 → 나머지", after[0] === "★KB캐피탈" && after[1] === "🕘현대캐피탈",
+     after.join(" | "));
+  // ---- P1 프로모션 바뀐 곳(같은 달 판끼리만)
+  await pv.goto(s.url + "#/promo", { waitUntil: "networkidle" });
+  await pv.waitForSelector("#promolist .prow", { timeout: 10000 });
+  ok("처음 읽으면 바뀐 곳 표시 없음", (await pv.locator("#promolist .pv.chg, #promolist .pchg").count()) === 0);
+  promoStep = 1;
+  await pv.evaluate(async () => { const m = await import("./js/ui/promo.js"); await m.load({ refresh: true }); });
+  await pv.waitForSelector("#promolist .pchg", { timeout: 5000 }).catch(() => {});
+  const chgLine = await pv.locator("#promolist .pchg").allTextContents();
+  ok("11/20 판 — 벤츠 카드에 '11/03 → 11/20 바뀐 모델 3개 · 빠진 모델'", chgLine.length === 1
+     && chgLine[0].includes("11/03 → 11/20 바뀐 모델 3개") && chgLine[0].includes("GLC300"), chgLine.join(" | "));
+  const hot = await pv.locator("#promolist .pv.chg").allTextContents();
+  ok("바뀐 칸만 노랗게(차량가격 91,000,000 · 프로모션 7,500,000)", hot.length === 2
+     && hot.some((t) => t.includes("91,000,000")) && hot.some((t) => t.includes("7,500,000")), hot.join(" | "));
+  ok("새 모델은 '신규'", (await pv.locator("#promolist .prow.new .pnew").count()) === 1
+     && (await pv.locator("#promolist .prow.new .pm").textContent()).includes("C200 New"));
+  await pv.reload({ waitUntil: "networkidle" });
+  await pv.waitForSelector("#promolist .prow", { timeout: 10000 });
+  ok("다시 열어도(저장본·같은 판) 표시가 남는다", (await pv.locator("#promolist .pchg").count()) === 1);
+  promoStep = 3;
+  await pv.evaluate(async () => { const m = await import("./js/ui/promo.js"); await m.load({ refresh: true }); });
+  await pv.waitForTimeout(400);
+  const after12 = await pv.locator("#promolist .promoblk h3").allTextContents();
+  ok("12월 판 — 벤츠·BMW 는 달이 바뀌어 표시 없음",
+     (await pv.locator("#promolist .promoblk").nth(0).locator(".pchg, .pv.chg").count()) === 0
+     && (await pv.locator("#promolist .promoblk").nth(1).locator(".pchg, .pv.chg").count()) === 0, after12.join(" | "));
+  await ctxV.close();
 }
 
 console.log("\n[8] 폴드 — 접었다 펴기");

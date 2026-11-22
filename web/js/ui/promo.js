@@ -22,6 +22,13 @@ let _q = "";
 let _brand = "";
 let _timer = 0;
 let _shown = [];        // 화면의 줄 → [블록, 줄]
+let _marks = {};        // 바뀐 곳(v1.35) — {브랜드 열쇠: {changed, new, gone, count, from, to} | null}
+
+// 바뀐 곳 기록(같은 달 판끼리만 — promo.track). 이 기기에 둔다(시트·탭이 같을 때만 쓴다).
+async function loadHist(w) {
+  const o = await store.get("data", "promoMarks");
+  return o && o.sid === w.sid && o.tab === w.tab && o.hist && typeof o.hist === "object" ? o.hist : {};
+}
 
 const here = () => !!$("#promolist");
 
@@ -47,8 +54,9 @@ export async function load({ refresh = true } = {}) {
   const same = _where && _where.sid === w.sid && _where.tab === w.tab;
   _where = w;
   const c = await store.get("data", "promo");
-  if (c && c.sid === w.sid && c.tab === w.tab) { if (!same || !_blocks.length) take(c); }
-  else { _blocks = []; _gid = null; _at = 0; _fresh = 0; }
+  if (c && c.sid === w.sid && c.tab === w.tab) {
+    if (!same || !_blocks.length) { take(c); _marks = promo.marksFrom(await loadHist(w)); }
+  } else { _blocks = []; _gid = null; _at = 0; _fresh = 0; _marks = {}; }
   if (!refresh) { _err = ""; paint(); return; }
   if (_busy) return;
   _busy = true;
@@ -58,6 +66,9 @@ export async function load({ refresh = true } = {}) {
     take(got);
     _fresh = Date.now();
     _err = "";
+    const [hist, marks] = promo.track(await loadHist(w), _blocks, Date.now());
+    _marks = marks;
+    await store.put("data", "promoMarks", { sid: w.sid, tab: w.tab, hist });
     await store.put("data", "promo", { sid: w.sid, tab: w.tab, values: got.values, merges: got.merges,
                                        gid: got.gid, at: got.at });
   } catch (e) {
@@ -113,13 +124,15 @@ function paintBrands(counts) {
   }
 }
 
-function cellHtml(b, r) {
+function cellHtml(b, r, chg) {
   const parts = [];
   for (let k = 1; k < r.cells.length; k++) {
     const v = r.cells[k];
     if (!v) continue;
     const tone = promo.toneOf(v);
-    parts.push(`<span class="pv${tone ? " " + tone : ""}"><i>${esc(b.headers[k] || "")}</i>${esc(v)}</span>`);
+    const hot = chg && chg.includes(k);
+    parts.push(`<span class="pv${tone ? " " + tone : ""}${hot ? " chg" : ""}"${hot ? ' title="지난 판과 달라졌습니다"' : ""}>`
+      + `<i>${esc(b.headers[k] || "")}</i>${esc(v)}</span>`);
   }
   return parts.join("");
 }
@@ -154,18 +167,28 @@ function paint() {
     const title = b.title ? (named ? b.title : `${b.brand} · ${b.title}`) : b.brand;
     const groups = b.groups.map(([k0, w, t]) =>
       `${esc(t)}: ${esc(b.headers.slice(k0, k0 + w).filter(Boolean).join("·"))}`).join(" &nbsp;|&nbsp; ");
+    // 바뀐 곳(v1.35) — 같은 달 안에서 지난 판과 달라진 칸 · 새 모델
+    const m = _marks[b.key] || null;
+    const keyOf = new Map();
+    promo.rowKeys(b).forEach((k, j) => { if (k) keyOf.set(b.rows[j], k); });
     let body = "";
     for (const r of rows) {
       const i = _shown.push([b, r]) - 1;
       if (r.kind === "section") body += `<h4 class="psec">${esc(r.cells[0])}</h4>`;
       else if (r.kind === "note") body += `<button class="pnote" data-i="${i}">${esc(r.cells[0])}</button>`;
       else {
-        body += `<button class="prow" data-i="${i}" title="시트 ${r.row}행 — 누르면 복사">`
-          + `<b class="pm">${esc(r.cells[0] || "—")}</b><span class="pvs">${cellHtml(b, r)}</span></button>`;
+        const k = keyOf.get(r) || "";
+        const isNew = !!(m && k && m.new.includes(k));
+        const chg = m && k ? m.changed[k] : null;
+        body += `<button class="prow${isNew ? " new" : ""}" data-i="${i}" title="시트 ${r.row}행 — 누르면 복사">`
+          + `<b class="pm">${isNew ? '<em class="pnew">신규</em>' : ""}${esc(r.cells[0] || "—")}</b>`
+          + `<span class="pvs">${cellHtml(b, r, chg)}</span></button>`;
       }
     }
+    const chgLine = promo.changeText(m);
     out.push(`<section class="card promoblk">
       <div class="cardhead"><h3 class="cardtitle">${icon("car", 18)}${esc(title)}</h3></div>
+      ${chgLine ? `<p class="pchg" title="같은 달 안에서 지난 판과 달라진 곳을 노랗게 칠했습니다(달이 바뀌면 표시하지 않습니다)">✎ ${esc(chgLine)}</p>` : ""}
       ${groups ? `<p class="pgroups">${groups}</p>` : ""}
       ${body}</section>`);
   }

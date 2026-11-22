@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, greetings, theme
+from .ment_templates import TemplateSection
 
 # 파랑 = 상담후, 청록 = 부재중, 초록 = 복사됨.
 # 색을 여기 박아 두면 흰 글자가 안 읽힌다 — 예전 값은 부재중 3.74:1,
@@ -300,6 +301,9 @@ class GreetingTab(QWidget):
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(10)
         wrap.addLayout(self.grid)
+        # 고객 안내 문구(v1.35) — 출고 안내 · 출고 1개월 · 재계약 멘트도 여기서 보고·고치고·복사
+        self.templates = TemplateSection()
+        wrap.addWidget(self.templates)
         wrap.addStretch(1)
         self.scroll.setWidget(inner)
         v.addWidget(self.scroll, 1)
@@ -309,6 +313,10 @@ class GreetingTab(QWidget):
 
         self.reload()
         self.apply_theme()
+
+    def set_template_specs(self, specs: list) -> None:
+        """아래 '고객 안내 문구' 카드들(main_window 가 무엇을 할지 넣어 준다)."""
+        self.templates.set_specs(specs)
 
     # ---- 데이터 ----
     def reload(self) -> None:
@@ -367,5 +375,7 @@ class GreetingTab(QWidget):
             f"color:{theme.c('text')};font-size:17px;font-weight:bold;")
         self.lbl_hint.setStyleSheet(f"color:{theme.c('subtext')};")
         self.lbl_status.setStyleSheet(f"color:{theme.c('subtext')};")
+        if hasattr(self, "templates"):
+            self.templates.apply_theme()
         for c in self.cards:
             c.apply_theme()

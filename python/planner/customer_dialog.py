@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, QSize
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QFormLayout, QFrame, QHBoxLayout,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QTextEdit,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -64,6 +64,22 @@ class MoneyEdit(QLineEdit):
         return sheets.digits_only(self.text())
 
 
+class _GrowText(QTextEdit):
+    """글 칸 — 기본 키를 최소 키로(남는 높이는 받아 쓴다).
+
+    QTextEdit 은 기본 키(약 190px)를 고집한다. 두 칸 배치(v1.35)의 오른쪽에 계약조건·내용·서류를
+    쌓으면 그 키 때문에 창보다 길어져 스크롤이 생겼다. 키는 최소만 알리고, 창에 남는 높이가 있으면
+    늘어난다(세로 Expanding)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def sizeHint(self):                 # noqa: N802 — Qt 이름 그대로
+        sh = super().sizeHint()
+        return QSize(sh.width(), max(self.minimumHeight(), 40))
+
+
 class CustomerDialog(QDialog):
     #  key            라벨            위젯종류
     LAYOUT = [
@@ -101,11 +117,25 @@ class CustomerDialog(QDialog):
     # 이 창은 하루에도 여러 번 채워 넣는 화면이라 글자를 앱 기본(10pt)보다 키운다
     FONT_PT = 12
 
+    # 두 칸 배치(v1.35) — 예전엔 한 줄로 길게 늘어서 스크롤해야 서류·내용에 닿았다.
+    # 왼쪽은 숫자·날짜·고르기(짧은 칸), 오른쪽은 길게 쓰는 칸과 서류.
+    RIGHT_TOP_KEYS = ("channel", "kind")         # 오른쪽 위 — 짧은 고르기 두 칸(왼쪽 키를 줄여 한 화면에)
+    RIGHT_KEYS = ("terms", "note", "doc")
+    TEXT_MIN_H = {"terms": 60, "note": 96}     # 남는 높이는 이 두 칸이 나눠 받는다
+    SIZE = (1180, 790)              # 1536×864(노트북 125%) 화면에서도 스크롤 없이 — 화면이 작으면 그만큼 줄인다
+
     def __init__(self, caption: str, values: dict, choices: dict,
-                 ment: str = "", parent=None, files: list | None = None, auth=None):
+                 ment: str = "", parent=None, files: list | None = None, auth=None,
+                 open_folder=None):
         super().__init__(parent)
         self.setWindowTitle(caption)
-        self.resize(680, 820)
+        w, h = self.SIZE
+        scr = QGuiApplication.primaryScreen()
+        if scr is not None:
+            av = scr.availableGeometry()
+            w, h = min(w, av.width() - 40), min(h, av.height() - 50)
+        self.resize(w, h)
+        self._open_folder = open_folder
         # 라벨·입력칸·드롭다운을 한꺼번에 키운다(창 전체에 걸어 두면 스크롤 안쪽
         # 위젯까지 따라온다). 단추는 기본 크기를 그대로 둔다.
         self.setStyleSheet(
@@ -124,9 +154,22 @@ class CustomerDialog(QDialog):
         inner = QWidget()
         inner.setObjectName("dlgbody")
         inner.setAttribute(Qt.WA_StyledBackground, True)
-        form = QFormLayout(inner)
+        cols = QHBoxLayout(inner)
+        cols.setSpacing(18)
+        left_form = QFormLayout()
+        right = QVBoxLayout()
+        right_top = QFormLayout()
+        right_form = QFormLayout()
+        right_form.setRowWrapPolicy(QFormLayout.WrapAllRows)   # 긴 칸은 이름 위 · 칸 아래(넓게)
+        right_form.setVerticalSpacing(4)
+        right.addLayout(right_top)
+        right.addLayout(right_form)
+        cols.addLayout(left_form, 10)
+        cols.addLayout(right, 11)
 
         for key, label, kind in self.LAYOUT:
+            form = (right_form if key in self.RIGHT_KEYS
+                    else right_top if key in self.RIGHT_TOP_KEYS else left_form)
             cur = (values or {}).get(key, "")
             if kind == "combo":
                 w = QComboBox()
@@ -192,8 +235,8 @@ class CustomerDialog(QDialog):
                     self.inc_box.applied.connect(self._apply_incentive)
                     form.addRow("", self.inc_box)
             elif kind == "text":
-                w = QTextEdit()
-                w.setMinimumHeight(64)
+                w = _GrowText()
+                w.setMinimumHeight(self.TEXT_MIN_H.get(key, 64))
                 w.setPlainText(cur)
                 # Tab 으로 다음 입력창으로 넘어가게 (기본은 Tab 문자가 입력됨)
                 w.setTabChangesFocus(True)
@@ -226,6 +269,13 @@ class CustomerDialog(QDialog):
         self.btn_copy_ment.clicked.connect(self._copy_ment)
         self.btn_copy_ment.setEnabled(bool(self._ment.strip()))
         mrow.addWidget(self.btn_copy_ment)
+        # 이 고객의 '고객정보' 폴더(v1.35) — 탐색기(또는 드라이브)로 연다. 거기서 파일을
+        # 이 창의 '첨부 서류' 칸으로 끌어 놓으면 된다.
+        self.btn_folder = QPushButton("📁 고객정보 폴더")
+        self.btn_folder.setToolTip("이 고객의 고객정보 폴더를 엽니다 — 파일을 '첨부 서류' 칸으로 끌어 놓을 수 있습니다")
+        self.btn_folder.clicked.connect(self._on_folder)
+        self.btn_folder.setVisible(open_folder is not None)
+        mrow.addWidget(self.btn_folder)
         self.lbl_ment = QLabel(
             self._ment.strip().splitlines()[0][:48] + " …" if self._ment.strip()
             else "(저장 후 시트에서 자동 생성됩니다)")
@@ -249,6 +299,14 @@ class CustomerDialog(QDialog):
         w, _kind = self.widgets.get("incentive", (None, ""))
         if w is not None:
             w.setText(sheets.fmt_money(amount))
+
+    def _on_folder(self):
+        name = self.values().get("customer", "").strip()
+        if not name:
+            QMessageBox.information(self, config.APP_NAME, "고객명을 먼저 적어 주세요.")
+            return
+        if self._open_folder is not None:
+            self._open_folder(name, self)
 
     def _copy_ment(self):
         QGuiApplication.clipboard().setText(self._ment)
@@ -298,9 +356,10 @@ class CustomerDialog(QDialog):
 
     @classmethod
     def run(cls, caption: str, values: dict, choices: dict, ment: str = "",
-            parent=None, files: list | None = None, auth=None):
+            parent=None, files: list | None = None, auth=None, open_folder=None):
         """반환: (값 dict, 서류 결과 dict, S열 그림 뺌 여부) 또는 None(취소)."""
-        d = cls(caption, values, choices, ment, parent, files=files, auth=auth)
+        d = cls(caption, values, choices, ment, parent, files=files, auth=auth,
+                open_folder=open_folder)
         if d.exec() != QDialog.Accepted:
             return None
         return d.values(), d.files_result(), d.doc_cleared()

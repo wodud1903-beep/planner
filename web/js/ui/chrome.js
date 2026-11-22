@@ -6,8 +6,9 @@ import { html, render, $, raw, esc } from "./dom.js";
 import { icon } from "./icons.js";
 import * as auth from "../auth.js";
 
-// 일곱 칸이다(v1.34.2 — 수입차 프로모션). 좁은 폰(~360px)에서 한 칸이 51px 남짓이라 글자는 짧게(app.css 가 줄인다).
-// ⚠️ 주소(#/agenda)는 그대로 둔다 — 홈 화면 아이콘·북마크가 그 주소를 들고 있다.
+// 여섯 칸이다(v1.35). 프로모션이 늘며 일곱 칸이 되자 글씨가 작아져서, [정보] 는 오른쪽 위
+// 계정 단추(머리글자 동그라미)로 옮겼다 — 누르면 정보·계정 화면(#/about).
+// ⚠️ 주소(#/agenda · #/about)는 그대로 둔다 — 홈 화면 아이콘·북마크가 그 주소를 들고 있다.
 const TABS = [
   ["/agenda", "grid", "홈"],
   ["/docs", "folder", "서류"],
@@ -15,7 +16,6 @@ const TABS = [
   ["/calc", "calc", "수당"],
   ["/promo", "car", "프로모션"],
   ["/kb", "search", "자료"],
-  ["/about", "info", "정보"],
 ];
 
 export function shell() {
@@ -24,7 +24,8 @@ export function shell() {
       <span class="brand">${raw(icon("logo", 22, "logo"))}<h1>일정관리기</h1></span>
       <span class="grow"></span>
       <button class="chip" id="statechip" hidden></button>
-      <span class="who" id="whochip" hidden></span>
+      <a class="who" id="whochip" href="#/about" title="정보 · 계정(테마 · 알림 · 변경 이력)" hidden></a>
+      <a class="infobtn" id="infobtn" href="#/about" title="정보" aria-label="정보">${raw(icon("info", 20))}</a>
     </header>
     <main id="body"></main>
     <nav class="tabs">
@@ -40,6 +41,13 @@ export function markTab(path) {
     const p = a.dataset.tab;
     if (path === p || path.startsWith(p + "/")) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
+  }
+  // 정보 화면은 아래 메뉴가 아니라 오른쪽 위 계정 단추가 그 자리다
+  for (const id of ["#whochip", "#infobtn"]) {
+    const el = $(id);
+    if (!el) continue;
+    if (path === "/about") el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
   }
 }
 
@@ -66,6 +74,8 @@ export function paintState() {
     who.textContent = m;
     who.dataset.initial = m ? m[0].toUpperCase() : "";
     who.hidden = !m;
+    const info = $("#infobtn");
+    if (info) info.hidden = !!m;          // 로그인 전에는 계정 대신 (i) 단추로 정보 화면에
   }
   const el = $("#statechip");
   if (!el) return;

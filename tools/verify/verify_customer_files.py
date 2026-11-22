@@ -154,9 +154,10 @@ heads = [t.horizontalHeaderItem(i).text() for i in range(t.columnCount())]
 ok("견적서 칸이 없다 · 안내멘트가 맨 끝", "견적서" not in heads and heads[-1] == "안내멘트", heads)
 _note = t.columnWidth(heads.index("내용"))
 _others = sum(t.columnWidth(i) for i in range(t.columnCount()) if heads[i] != "내용")
-ok("'내용' 이 남는 폭을 다 받는다(다른 칸 합이 1284 → 1226 — 견적서 칸 58 만큼 더 넓다) · 기본 313",
-   abs(_note + _others - t.viewport().width()) <= 2 and _others == 1226
-   and "[46, 236, 116, 180, 134, 116, 116, 78, 124, 313, 80]" in (_ROOT / "python/planner/main_window.py").read_text(encoding="utf-8"),
+# v1.35 — 금융사·차종을 한 칸(두 줄)으로, 날짜를 짧게 해 다른 칸 합이 1226 → 1054 로 줄었다
+ok("'내용' 이 남는 폭을 다 받는다(다른 칸 합 1054 — 금융사·차종 한 칸 · 짧은 날짜) · 기본 313",
+   abs(_note + _others - t.viewport().width()) <= 2 and _others == 1054
+   and "CUST_WIDTHS = (46, 236, 180, 134, 88, 88, 78, 124, 313, 80)" in (_ROOT / "python/planner/main_window.py").read_text(encoding="utf-8"),
    (_note, _others, t.viewport().width()))
 ok("버튼은 안내멘트 칸에만", all(t.cellWidget(r, c) is None for r in range(t.rowCount())
                              for c in range(t.columnCount()) if c != w.COL_MENT_BTN))
