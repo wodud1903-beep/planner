@@ -152,6 +152,19 @@ m = _first_line(lambda: kb_files.fetch(_Auth(), {"id": "C3", "name": "견적서.
 ok("로그인 만료면 다시 로그인", "로그인이 만료" in m, m)
 m = _first_line(lambda: kb_files.fetch(_Auth(False), {"id": "C3", "name": "견적서.pdf"}))
 ok("로그인 안 됐으면 그렇게", "로그인이 되어 있지 않습니다" in m, m)
+
+class _R403(_R):
+    def json(self):
+        return {"error": {"code": 403, "message": "Request had insufficient authentication scopes.",
+                          "errors": [{"reason": "insufficientPermissions"}],
+                          "details": [{"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}
+
+
+kb_files._http = lambda: types.SimpleNamespace(
+    get=lambda url, **k: _R403(403) if "googleapis" in url else _R(200, b"<html>", "text/html"))
+m = _first_line(lambda: kb_files.fetch(_Auth(), {"id": "C5", "name": "계약확인서.png"}))
+ok("권한(드라이브 파일)이 빠진 403 은 '다시 로그인 · 모두 체크' 로(다른 계정과 가른다)",
+   "권한이 빠졌습니다" in m and "다른 계정" not in m, m)
 kb_files._http = lambda: types.SimpleNamespace(get=lambda url, **k: _R(200, b"\x89PNGdata"))
 ok("되면 받는다", kb_files.fetch(_Auth(), {"id": "C4", "name": "등록증.png"}).read_bytes() == b"\x89PNGdata")
 

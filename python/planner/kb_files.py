@@ -219,9 +219,21 @@ def upload(auth, data: bytes, name: str, public: bool, folder_name: str = FOLDER
     return att
 
 
-def _why_http(code: int) -> str:
+def _why_http(code: int, resp=None) -> str:
     if code == 401:
         return "구글 로그인이 만료됐습니다 — [설정] 에서 다시 로그인해 주세요"
+    if code == 403 and resp is not None:
+        # 로그인에 '첨부 올리기(드라이브 파일)' 권한이 빠졌을 때도 403 이다 — 다른 계정 파일과 가른다(v1.35.5)
+        try:
+            err = (resp.json() or {}).get("error") or {}
+            txt = " ".join([str(err.get("message") or "")]
+                           + [str(x.get("reason") or "") for x in (err.get("errors") or []) if isinstance(x, dict)]
+                           + [str(x.get("reason") or "") for x in (err.get("details") or []) if isinstance(x, dict)])
+        except Exception:
+            txt = ""
+        if "insufficient" in txt.lower() or "SCOPE" in txt:
+            return ("구글 로그인에 '첨부 올리기(드라이브 파일)' 권한이 빠졌습니다 — [설정] 에서 다시 로그인하며 "
+                    "모든 항목에 체크해 주세요")
     if code in (403, 404):
         return ("이 구글 계정으로는 볼 수 없는 파일입니다(다른 계정으로 올렸거나 지워졌습니다) "
                 f"(HTTP {code})")
@@ -253,7 +265,7 @@ def fetch(auth, att: dict) -> Path:
             if r.status_code == 200 and r.content:
                 data = r.content
             else:
-                why.append(_why_http(r.status_code))
+                why.append(_why_http(r.status_code, r))
         except Exception as e:
             why.append(_why_exc(e))
     else:
@@ -269,6 +281,11 @@ def fetch(auth, att: dict) -> Path:
         except Exception as e:
             why.append(_why_exc(e))
     if data is None:
+        try:                                   # 다음에 까닭을 볼 수 있게 기록(파일 번호 앞부분만 — 이름은 적지 않는다)
+            from . import crashlog
+            crashlog.note(f"첨부 받기 실패 {fid[:6]}… — " + " / ".join(why))
+        except Exception:
+            pass
         # 연결 자체가 안 된 까닭(인증서·네트워크)이 있으면 그것이 먼저 — 로그인 안내보다 정확하다
         reason = next((w for w in why if w.startswith(("보안 인증서", "연결 오류"))),
                       why[0] if why else "인터넷 연결을 확인해 주세요")
