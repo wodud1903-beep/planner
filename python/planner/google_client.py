@@ -854,6 +854,54 @@ def drive_write(auth: GoogleAuth, name: str, content: str) -> str:
     return fid
 
 
+
+# ---- 앱 전용 공간의 그림 파일(명함 사진 — v1.36, bizcard) ----
+def drive_find_meta(auth: GoogleAuth, name: str) -> Optional[dict]:
+    """appDataFolder 의 name 파일 → {id, md5Checksum, modifiedTime, size} (없으면 None)."""
+    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
+        "spaces": "appDataFolder",
+        "q": f"name='{name}'",
+        "fields": "files(id,name,modifiedTime,md5Checksum,size)",
+    })
+    if r.status_code != 200:
+        raise _drive_fail("Drive 조회 실패", r)
+    files = r.json().get("files", [])
+    return files[0] if files else None
+
+
+def drive_read_bytes(auth: GoogleAuth, file_id: str) -> bytes:
+    r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
+                     timeout=60, params={"alt": "media"})
+    if r.status_code != 200:
+        raise _drive_fail("Drive 다운로드 실패", r)
+    return r.content
+
+
+def drive_write_bytes(auth: GoogleAuth, name: str, data: bytes, mime: str) -> str:
+    """appDataFolder 에 name 파일(그림 등)을 만들거나 갈아 끼운다 → file_id."""
+    meta = drive_find_meta(auth, name)
+    fid = meta["id"] if meta else None
+    if fid is None:
+        r = _http().post(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+                          json={"name": name, "parents": ["appDataFolder"], "mimeType": mime})
+        if r.status_code not in (200, 201):
+            raise _drive_fail("Drive 파일 생성 실패", r)
+        fid = r.json()["id"]
+    hdr = auth._headers()
+    hdr["Content-Type"] = mime
+    up = _http().patch(f"{config.DRIVE_UPLOAD_URL}/{fid}", headers=hdr, timeout=60,
+                        params={"uploadType": "media"}, data=data)
+    if up.status_code not in (200, 201):
+        raise _drive_fail("Drive 업로드 실패", up)
+    return fid
+
+
+def drive_delete(auth: GoogleAuth, file_id: str) -> None:
+    """앱 전용 공간의 파일을 지운다(없으면 그냥 넘어간다)."""
+    r = _http().delete(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(), timeout=20)
+    if r.status_code not in (200, 204, 404):
+        raise _drive_fail("Drive 삭제 실패", r)
+
 # ---------------------------------------------------------------------------
 # 드라이브 '내 드라이브' 조회 ('고객정보' 탭)
 #

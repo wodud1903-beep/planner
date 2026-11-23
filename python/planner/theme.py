@@ -246,8 +246,9 @@ def row_tint(name: str) -> str:
 # 빨강·보라는 넣지 않았다. 두 조건(흰 글자 4.5 / 어두운 패널과 3.0)을 같이
 # 만족하는 폭이 4.50 언저리로 아주 좁아, 조금만 손봐도 깨진다. 지금 쓰는 곳도
 # 없다. 필요해지면 그때 그 화면의 바탕에 맞춰 고르는 편이 안전하다.
-_FILL = {"blue": "#2563EB", "teal": "#0F766E", "green": "#15803D"}
-_FILL_HOVER = {"blue": "#1D4ED8", "teal": "#0B6E66", "green": "#146B33"}
+# amber 는 멘트복사 [명함복사](v1.36) — 흰 글자 5.0:1 · 어두운 패널과도 3:1 넘게.
+_FILL = {"blue": "#2563EB", "teal": "#0F766E", "green": "#15803D", "amber": "#B45309"}
+_FILL_HOVER = {"blue": "#1D4ED8", "teal": "#0B6E66", "green": "#146B33", "amber": "#9A4708"}
 
 
 def fill(name: str) -> str:

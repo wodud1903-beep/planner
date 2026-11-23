@@ -45,6 +45,7 @@ from .commission_tab import CommissionTab
 from .customer_files_tab import CustomerFilesTab
 from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
+from . import bizcard
 from .kb_tab import KbTab, QuickSearch
 from .promo_tab import PromoTab
 from .livesearch import LiveLineEdit
@@ -636,6 +637,8 @@ class MainWindow(QMainWindow):
         self._auto_load_sheet()
         self.fetch_rates_async()      # 공유 수당율(전용 시트)도 함께 받아온다
         self.fetch_kb_async()         # 공유 업무자료도 같은 시트에서 받아온다
+        if hasattr(self, "bizcard"):
+            self.bizcard.sync_async(self.gauth)   # 명함 사진 — 다른 PC 에서 바꾼 것 받기 · 못 올린 것 올리기
         # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
         self._backup(manual=False)
 
@@ -743,6 +746,8 @@ class MainWindow(QMainWindow):
         self._renewals = renewals.load()
         if hasattr(self, "tab_greet"):
             self.tab_greet.reload()      # 계정이 바뀌면 그 계정의 문구로
+        if hasattr(self, "bizcard"):
+            self.bizcard.load_local()    # 계정이 바뀌면 그 계정의 명함 사진으로
         if hasattr(self, "tab_kb"):
             self.tab_kb.set_account(getattr(self, "account_email", ""))
             self.tab_kb.reload()
@@ -1160,6 +1165,10 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tab_greet = GreetingTab()
         self.tab_greet.on_changed = self._touch_sync
+        # 명함 사진(v1.36) — 켜자마자 이 PC 사본을 메모리로(누르면 바로 복사), 계정 확인 뒤 계정 것과 맞춘다
+        self.bizcard = bizcard.BizCard(self)
+        self.bizcard.load_local()
+        self.tab_greet.set_bizcard(self.bizcard, lambda: self.gauth)
         self.tab_greet.set_template_specs(self._ment_specs())
         self.tabs.addTab(self.tab_greet, "멘트복사")
         kb_marks.on_favs_changed = self._on_kb_favs
