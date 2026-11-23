@@ -637,8 +637,6 @@ class MainWindow(QMainWindow):
         self._auto_load_sheet()
         self.fetch_rates_async()      # 공유 수당율(전용 시트)도 함께 받아온다
         self.fetch_kb_async()         # 공유 업무자료도 같은 시트에서 받아온다
-        if hasattr(self, "bizcard"):
-            self.bizcard.sync_async(self.gauth)   # 명함 사진 — 다른 PC 에서 바꾼 것 받기 · 못 올린 것 올리기
         # 계정 폴더가 정해진 뒤에야 '그 사람의' 데이터를 백업할 수 있다
         self._backup(manual=False)
 
@@ -718,6 +716,9 @@ class MainWindow(QMainWindow):
         # 설정 창 안에서 로그인하며 고친 것(그 계정 폴더로 옮겨 담는다) → 구글 계정에 저장된 시트·서류 폴더
         self._apply_carry()
         self._adopt_account_settings()
+        if hasattr(self, "bizcard"):
+            # 명함 사진(채널마다) — 동기화로 채널 목록까지 받은 뒤에 맞춘다: 다른 PC 에서 바꾼 것 받기 · 못 올린 것 올리기
+            self.bizcard.sync_async(self.gauth, [it.get("name", "") for it in getattr(self.tab_greet, "items", [])])
         # 자동 규칙을 없앴다(v1.28) — 그것이 만든, 아직 안 한 할일을 거둔다(받은 뒤라 덮어쓰지 않는다)
         QTimer.singleShot(0, self._cleanup_auto_rule_todos)
         # 받기 전에 시트를 먼저 다 읽었으면 그때 미뤄 둔 월 마감을 지금(v1.27)
@@ -1165,8 +1166,8 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tab_greet = GreetingTab()
         self.tab_greet.on_changed = self._touch_sync
-        # 명함 사진(v1.36) — 켜자마자 이 PC 사본을 메모리로(누르면 바로 복사), 계정 확인 뒤 계정 것과 맞춘다
-        self.bizcard = bizcard.BizCard(self)
+        # 명함 사진(v1.36 · 채널마다 v1.36.1) — 켜자마자 이 PC 사본을 메모리로(누르면 바로 복사), 계정 확인 뒤 계정 것과 맞춘다
+        self.bizcard = bizcard.BizCards(self)
         self.bizcard.load_local()
         self.tab_greet.set_bizcard(self.bizcard, lambda: self.gauth)
         self.tab_greet.set_template_specs(self._ment_specs())

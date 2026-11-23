@@ -1,8 +1,8 @@
-"""멘트복사 [명함복사](v1.36) — 올려 둔 명함 사진을 클립보드에.
+"""멘트복사 [명함복사] — 채널(캐피탈)마다 다른 명함 사진을 클립보드에(v1.36 · 채널마다 v1.36.1).
 
 지점장: "각 캐피탈 단추에 명함 복사 — 상담후·부재중·명함복사 세 개. 미리 올려 둔 명함 사진을 클립보드에.
-항상 딜레이 없이 바로 복사되도록 켜지면 먼저 불러와 두고. 구글 로그인 뒤 명함을 안 올렸으면 단추는 꺼 두고,
-올려야만 켜지게."
+항상 딜레이 없이 바로 복사되도록 켜지면 먼저 불러와 두고. 명함을 안 올렸으면 단추는 꺼 두고, 올려야만 켜지게."
+다시: "각각 명함을 다르게 쓰고 싶다 — 지금은 1개만 올리면 전체가 켜진다. 단추마다 다른 명함을."
 """
 import pathlib as _pl
 _ROOT = _pl.Path(__file__).resolve().parents[2]
@@ -34,7 +34,7 @@ def ok(name, cond, extra=""):
 
 
 # ---- 가짜 계정 앱 전용 공간 ----
-STORE = {}          # name → bytes
+STORE = {}          # 파일 이름 → bytes
 CALLS = []
 
 
@@ -78,114 +78,131 @@ class _Auth:
 AUTH = _Auth()
 
 
-def wait_idle(card, sec=3.0):
+def wait_idle(cards, sec=3.0):
     end = time.time() + sec
     while time.time() < end:
         app.processEvents()
-        if not card._busy:
+        if not cards._busy:
             app.processEvents()
             return True
         time.sleep(0.02)
     return False
 
 
-def img(w=900, h=500, color="#2563EB"):
+def img(color="#2563EB", w=900, h=500):
     im = QImage(w, h, QImage.Format_RGB32)
     im.fill(QColor(color))
     return im
 
 
+def clip_color():
+    md = QGuiApplication.clipboard().mimeData()
+    if md is None or not md.hasImage():
+        return None
+    return QImage(md.imageData()).pixelColor(5, 5).name().upper()
+
+
 config.set_account("me@example.com")
+QMessageBox.information = staticmethod(lambda *a, **k: None)
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
 
-print("[1] 명함을 안 올렸으면 [명함복사] 는 꺼져 있다")
-card = bizcard.BizCard()
-card.load_local()
+print("[1] 명함을 안 올렸으면 채널마다 [명함복사] 꺼짐 · 카드마다 [명함 올리기]")
+cards = bizcard.BizCards()
+cards.load_local()
 tab = greeting_tab.GreetingTab()
-tab.set_bizcard(card, lambda: AUTH)
-ok("채널 카드마다 세 단추(상담후 · 부재중 · 명함복사)", tab.cards and all(
+tab.set_bizcard(cards, lambda: AUTH)
+names = [c.name for c in tab.cards]
+ok("채널 카드마다 세 단추(상담후 · 부재중 · 명함복사)", len(tab.cards) >= 3 and all(
     [c.btn_after.text(), c.btn_miss.text(), c.btn_card.text()] == ["상담후", "부재중", "명함복사"] for c in tab.cards))
-ok("명함이 없으면 모두 꺼짐", all(not c.btn_card.isEnabled() for c in tab.cards))
-ok("꺼진 단추에 무엇을 하라는지", greeting_tab.CARD_OFF_TIP in tab.cards[0].btn_card.toolTip())
-ok("위 단추는 '명함 사진 올리기'", tab.btn_bizcard.text() == "명함 사진 올리기")
-ok("주황색(amber) 채움", "#B45309" in tab.cards[0].btn_card.styleSheet())
+ok("모두 꺼짐", all(not c.btn_card.isEnabled() for c in tab.cards))
+ok("카드마다 [명함 올리기]", all(c.btn_cardset.text() == "명함 올리기" for c in tab.cards))
+ok("위의 '전체 한 장' 단추는 없다", not hasattr(tab, "btn_bizcard"))
 
-print("[2] 로그인 전에는 올리지 않는다")
-told = []
-QMessageBox.information = staticmethod(lambda *a, **k: told.append(a[2] if len(a) > 2 else ""))
-dlg = greeting_tab.BizCardDialog(card, lambda: _Auth(False))
-dlg._put(img())
-ok("로그인 안내", told and "로그인" in told[-1])
-ok("명함은 그대로 없음", not card.has())
+print("[2] 한 채널에 올리면 그 채널만 켜진다")
+A, B, C = tab.cards[0], tab.cards[1], tab.cards[2]
+greeting_tab.BizCardDialog(cards, lambda: AUTH, name=A.name)._put(img("#2563EB"))
+ok(f"'{A.name}' 만 켜짐", A.btn_card.isEnabled() and not B.btn_card.isEnabled() and not C.btn_card.isEnabled(),
+   [c.btn_card.isEnabled() for c in tab.cards])
+ok(f"'{A.name}' 머리 단추 '명함 ✓'", A.btn_cardset.text() == "명함 ✓" and B.btn_cardset.text() == "명함 올리기")
+greeting_tab.BizCardDialog(cards, lambda: AUTH, name=B.name)._put(img("#15803D"))
+ok(f"'{B.name}' 에 다른 명함 — 둘 다 켜짐, 나머지는 꺼짐",
+   A.btn_card.isEnabled() and B.btn_card.isEnabled() and not C.btn_card.isEnabled())
 
-print("[3] 올리면 — 단추가 켜지고, 이 PC 사본 · 계정에 올린다")
-dlg = greeting_tab.BizCardDialog(card, lambda: AUTH)
-dlg._put(img(3200, 1800))
-ok("바로 켜진다", all(c.btn_card.isEnabled() for c in tab.cards))
-ok("위 단추 '명함 사진 ✓'", tab.btn_bizcard.text() == "명함 사진 ✓")
-ok("이 PC 사본", (config.data_dir() / "bizcard.png").is_file())
-ok("긴 변 1600 으로 줄여 둔다", max(card.image().width(), card.image().height()) == 1600,
-   (card.image().width(), card.image().height()))
-ok("계정(앱 전용 공간)에 올린다", wait_idle(card) and "bizcard.png" in STORE)
-ok("올린 것 = 이 PC 사본", STORE.get("bizcard.png") == (config.data_dir() / "bizcard.png").read_bytes())
+print("[3] 누르면 그 채널의 명함이 클립보드에")
+A.btn_card.click()
+ok(f"'{A.name}' → 파란 명함", clip_color() == "#2563EB", clip_color())
+B.btn_card.click()
+ok(f"'{B.name}' → 초록 명함", clip_color() == "#15803D", clip_color())
+ok("단추 '복사됨 ✓'", B.btn_card.text() == "복사됨 ✓")
+ok("로그인 전엔 올리지 않는다", (lambda d: (d._put(img("#000000")), not cards.has(C.name))[1])(
+    greeting_tab.BizCardDialog(cards, lambda: _Auth(False), name=C.name)))
 
-print("[4] 누르면 바로 클립보드에 그림")
-QGuiApplication.clipboard().clear()
-tab.cards[0].btn_card.click()
-md = QGuiApplication.clipboard().mimeData()
-ok("클립보드에 그림", md is not None and md.hasImage() and not QImage(md.imageData()).isNull())
-ok("PNG 로도(카톡·다른 프로그램)", md is not None and md.hasFormat("image/png"))
-ok("단추가 '복사됨 ✓'", tab.cards[0].btn_card.text() == "복사됨 ✓")
-ok("아래 줄 안내", "명함 사진 복사됨" in tab.lbl_status.text())
+print("[4] 계정(앱 전용 공간)에 채널마다 따로 올린다")
+ok("두 장", wait_idle(cards) and sorted(STORE) == sorted([bizcard.remote_name(bizcard.key_of(A.name)),
+                                                          bizcard.remote_name(bizcard.key_of(B.name))]), sorted(STORE))
+ok("긴 변 1600 으로", (lambda c: (c.set_image(C.name, img("#B45309", 3200, 1800), AUTH),
+                                  max(c.image(C.name).width(), c.image(C.name).height()) == 1600)[1])(cards))
+wait_idle(cards)
 
 print("[5] 다시 켜면 — 통신 없이 바로(먼저 불러와 둔다)")
 CALLS.clear()
-card2 = bizcard.BizCard()
+cards2 = bizcard.BizCards()
 t0 = time.perf_counter()
-card2.load_local()
+cards2.load_local()
 ms = (time.perf_counter() - t0) * 1000
-ok("이 PC 사본만으로 바로 있다", card2.has() and not CALLS, f"{ms:.1f}ms · 통신 {len(CALLS)}")
-QGuiApplication.clipboard().clear()
+ok("채널마다 이 PC 사본만으로 바로", cards2.has(A.name) and cards2.has(B.name) and cards2.has(C.name) and not CALLS,
+   f"{ms:.1f}ms · 통신 {len(CALLS)}")
 t0 = time.perf_counter()
-ok("복사도 바로", card2.copy() and QGuiApplication.clipboard().mimeData().hasImage(),
-   f"{(time.perf_counter() - t0) * 1000:.1f}ms")
+ok("복사도 바로", cards2.copy(A.name) and clip_color() == "#2563EB", f"{(time.perf_counter() - t0) * 1000:.1f}ms")
 src = (_ROOT / "python/planner/main_window.py").read_text(encoding="utf-8")
-ok("켤 때 · 계정이 바뀔 때 이 PC 사본부터 읽는다", src.count("self.bizcard.load_local()") == 2)
-ok("계정 확인 뒤 계정 것과 맞춘다", "self.bizcard.sync_async(self.gauth)" in src)
+ok("켤 때 · 계정이 바뀔 때 이 PC 사본부터", src.count("self.bizcard.load_local()") == 2)
+ok("동기화 뒤 채널 이름으로 계정과 맞춘다", "self.bizcard.sync_async(self.gauth, [" in src)
 
-print("[6] 다른 PC 에서 바꿨으면 받아 온다")
-other = bizcard.to_png(img(800, 450, "#15803D"))
-STORE["bizcard.png"] = other
-card2.sync_async(AUTH)
-ok("받아서 바꾼다", wait_idle(card2) and card2.image().pixelColor(5, 5) == QColor("#15803D"))
-ok("이 PC 사본도", (config.data_dir() / "bizcard.png").read_bytes() == other)
+print("[6] 다른 PC 에서 바꾼 것 · 뺀 것 · 새로 올린 것")
+kA, kB, kC = (bizcard.key_of(c.name) for c in (A, B, C))
+STORE[bizcard.remote_name(kA)] = bizcard.to_png(img("#7C3AED"))         # A 를 바꿨다
+STORE.pop(bizcard.remote_name(kB))                                      # B 를 뺐다
+D = tab.cards[3]
+STORE[bizcard.remote_name(bizcard.key_of(D.name))] = bizcard.to_png(img("#0F766E"))   # D 에 새로
+tab.set_bizcard(cards2, lambda: AUTH)
+cards2.sync_async(AUTH, names)
+ok("다 받는다", wait_idle(cards2))
+ok(f"'{A.name}' 바뀐 것", cards2.image(A.name) is not None and cards2.image(A.name).pixelColor(5, 5) == QColor("#7C3AED"))
+ok(f"'{B.name}' 빠짐 · 단추 꺼짐", not cards2.has(B.name) and not tab.cards[1].btn_card.isEnabled())
+ok(f"'{D.name}' 새로 · 단추 켜짐", cards2.has(D.name) and tab.cards[3].btn_card.isEnabled())
+ok(f"'{C.name}' 그대로", cards2.has(C.name))
 
-print("[7] 다른 PC 에서 뺐으면 이 PC 도 뺀다")
-STORE.pop("bizcard.png")
-tab.set_bizcard(card2, lambda: AUTH)
-card2.sync_async(AUTH)
-ok("빠진다", wait_idle(card2) and not card2.has() and not (config.data_dir() / "bizcard.png").exists())
-ok("단추도 꺼진다", all(not c.btn_card.isEnabled() for c in tab.cards))
-
-print("[8] 계정에 못 올린 것은 다음에 올린다 · 빼면 계정 것도 지운다")
+print("[7] 빼기 · 못 올린 것은 다음에")
+greeting_tab.BizCardDialog(cards2, lambda: AUTH, name=C.name)._remove()
+ok(f"'{C.name}' 빼면 계정 것도", wait_idle(cards2) and bizcard.remote_name(kC) not in STORE and not cards2.has(C.name))
 google_client.drive_write_bytes = lambda *a, **k: (_ for _ in ()).throw(google_client.GoogleError("x"))
-card2.set_image(img(), AUTH)
-wait_idle(card2)
-ok("못 올렸다 — 이 PC 에는 있다", card2.has() and "bizcard.png" not in STORE)
+cards2.set_image(B.name, img("#15803D"), AUTH)
+wait_idle(cards2)
+ok("못 올렸다 — 이 PC 에는 있다", cards2.has(B.name) and bizcard.remote_name(kB) not in STORE)
 google_client.drive_write_bytes = _write
-card2.sync_async(AUTH)
-ok("다음에 맞출 때 올린다", wait_idle(card2) and "bizcard.png" in STORE)
-QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
-greeting_tab.BizCardDialog(card2, lambda: AUTH)._remove()
-ok("빼면 계정 것도 지운다", wait_idle(card2) and "bizcard.png" not in STORE and not card2.has())
+cards2.sync_async(AUTH, names)
+ok("다음에 맞출 때 올린다", wait_idle(cards2) and bizcard.remote_name(kB) in STORE)
+
+print("[8] 채널 이름을 바꾸면 명함도 따라간다")
+old_name = tab.cards[0].name
+tab.items[0]["name"] = old_name
+got = [dict(it, _orig=it["name"]) for it in tab.items]
+got[0]["name"] = old_name + " 본점"
+greeting_tab.GreetingEditDialog.run = classmethod(lambda cls, items, parent=None: got)
+greeting_tab.greetings.save = lambda items: None
+tab._edit()
+ok("새 이름으로 옮긴다", cards2.has(old_name + " 본점") and not cards2.has(old_name))
+ok("새 이름 카드의 단추가 켜짐", tab.cards[0].name == old_name + " 본점" and tab.cards[0].btn_card.isEnabled())
+ok("저장한 문구에 _orig 가 남지 않는다", all("_orig" not in it for it in tab.items))
+wait_idle(cards2)
+ok("계정에서도 옮긴다", bizcard.remote_name(bizcard.key_of(old_name + " 본점")) in STORE
+   and bizcard.remote_name(bizcard.key_of(old_name)) not in STORE)
 
 print("[9] 계정마다 따로")
-STORE["bizcard.png"] = other
 config.set_account("other@example.com")
-card3 = bizcard.BizCard()
-card3.load_local()
-ok("다른 계정 폴더에는 명함이 없다(받기 전)", not card3.has())
-card3.sync_async(AUTH)
-ok("그 계정 것을 받는다", wait_idle(card3) and card3.has())
+cards3 = bizcard.BizCards()
+cards3.load_local()
+ok("다른 계정 폴더에는 명함이 없다(받기 전)", not any(cards3.has(n) for n in names))
 
 print()
 print(f"{len(FAIL)}건 실패" if FAIL else "전부 통과", flush=True)
