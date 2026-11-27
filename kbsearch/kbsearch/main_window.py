@@ -29,7 +29,10 @@ from PySide6.QtWidgets import (
 )
 
 from . import config, hotkey, kb, kb_files, otp, otp_popup, sheets_kb, switch, sync, theme, updater
+from . import google_auth
 from .google_auth import GoogleAuth, LoginCancelled
+from .kakao_macro_view import KakaoMacroWindow
+from . import members
 from .icon import make_icon
 from .kb_view import KbEditDialog, KbView, MeInfoDialog, QuickSearch
 from .settings import Settings
@@ -42,6 +45,23 @@ def _file_ids(items: list) -> dict:
     return {f.get("id"): f for it in (items or []) for f in (it.get("files") or [])
             if f.get("id")}
 
+
+
+class _AppDataIO:
+    """내 구글 계정 앱 전용 공간의 글 파일 — 카톡 매크로 설정 · 문구(kakao_macro.json, 일정관리기와 같은 파일)."""
+
+    def __init__(self, auth):
+        self.auth = auth
+
+    def find(self, name: str):
+        return google_auth.appdata_find(self.auth, name)
+
+    def read(self, fid: str) -> str:
+        return google_auth.appdata_read(self.auth, fid)
+
+    def write(self, name: str, text: str) -> None:
+        # ⚠️ appdata_write 는 id 가 없으면 새 파일을 만든다 — 찾아서 넘긴다(같은 이름이 둘 생기지 않게)
+        google_auth.appdata_write(self.auth, name, text, google_auth.appdata_find(self.auth, name))
 
 class MainWindow(QMainWindow):
     sig_login = Signal(str, str)             # (이메일, 오류)
@@ -60,6 +80,7 @@ class MainWindow(QMainWindow):
         self.gauth = GoogleAuth(config.data_file("google_token.json"))
         self._really_quit = False
         self._busy = False                  # 동기화 중
+        self._macro = None                  # 카톡 매크로 창(처음 누를 때 만든다)
         self._editing = False               # 자료 편집 창이 떠 있다
         self._login_cancel = None           # 로그인 중이면 threading.Event
         self._upd_checking = False
@@ -172,6 +193,12 @@ class MainWindow(QMainWindow):
                                  "일정관리기와 같은 스프레드시트·같은 메모를 씁니다.")
         self.btn_sync.clicked.connect(self.sync_clicked)
         tb.addWidget(self.btn_sync)
+        # 카톡 매크로 — A1Auto(kmacro)를 그대로 옮겼다. 일정관리기 '카톡 매크로' 와 같은 화면 · 같은 발송 기록
+        self.btn_macro = QPushButton("카톡 매크로")
+        self.btn_macro.setToolTip("카카오톡 친구 목록을 차례로 돌며 같은 메시지 · 이미지를 보냅니다(A1Auto).\n"
+                                  "자주 쓰는 문구 · 발송 간격은 내 구글 계정에 저장돼 일정관리기와 같이 씁니다.")
+        self.btn_macro.clicked.connect(self.open_macro)
+        tb.addWidget(self.btn_macro)
         self.btn_settings = QPushButton("설정")
         self.btn_settings.clicked.connect(self.open_settings)
         tb.addWidget(self.btn_settings)
@@ -211,6 +238,8 @@ class MainWindow(QMainWindow):
             f"QPushButton {{ border:none; background:transparent; color:{theme.c('accent')};"
             f" text-decoration: underline; padding:0 4px; }}")
         self.view.apply_theme()
+        if self._macro is not None:
+            self._macro.view.apply_theme()
         self._quick = None          # 빠른검색 창은 다음에 새 색으로 다시 만든다
         self.refresh_account()
 
@@ -231,6 +260,8 @@ class MainWindow(QMainWindow):
         last = self._when(meta.get("last_sync"))
         shared = self._shared_state(meta)
         if self.gauth.is_connected():
+            # 회원 목록 — 이 계정이 업무자료검색을 쓴다고 서버에 알린다(하루 한 번 · 조용히)
+            members.report_async(self.gauth, self.gauth.email, "kb", config.APP_VERSION)
             who = self.gauth.email or "구글 계정"
             role = " (관리자)" if config.is_admin(who) else ""
             self.lbl_account.setText(
@@ -339,7 +370,7 @@ class MainWindow(QMainWindow):
         if not switch.is_off(state):
             return
         # 편집 창처럼 다른 창이 떠 있으면 고치던 것을 잃지 않게 잠시 미룬다(업데이트와 같다)
-        if QApplication.activeModalWidget() is not None or self._busy:
+        if QApplication.activeModalWidget() is not None or self._busy or self._macro_busy():
             QTimer.singleShot(60 * 1000, self.check_switch)
             return
         msg = switch.off_message(state)
@@ -355,6 +386,7 @@ class MainWindow(QMainWindow):
         m = QMenu()
         m.addAction("열기", self.show_window)
         self.act_quick = m.addAction("빠른검색", self.open_quick)
+        m.addAction("카톡 매크로", self.open_macro)
         m.addSeparator()
         self.act_sync = m.addAction("동기화", self.sync_clicked)
         m.addAction("설정", self.open_settings)
@@ -418,6 +450,12 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def _shutdown(self) -> None:
+        # 카톡 매크로 — A1Auto 를 끌 때처럼 클립보드 되돌리기 · 발송 기록 저장 · 로그 파일(도는 중이면 멈춘다)
+        if self._macro is not None:
+            try:
+                self._macro.view.shutdown()
+            except Exception:
+                pass
         try:
             self.hotkeys.release()
         except Exception:
@@ -531,9 +569,41 @@ class MainWindow(QMainWindow):
         for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
             if not otp.claim(it):
                 continue                     # 이 PC 의 일정관리기가 방금 띄웠다 — 두 번 띄우지 않는다(kb-v1.9.0)
-            if copy:
+            # 카톡 매크로가 도는 중이면 클립보드는 건드리지 않는다(붙여넣을 메시지가 바뀌지 않게) — 번호만 띄운다
+            put = copy and not self._macro_busy()
+            if put:
                 QApplication.clipboard().setText(it["code"])
-            otp_popup.show(it, copied=copy)
+            otp_popup.show(it, copied=put)
+
+    # ------------------------------------------------------------ 카톡 매크로
+    def open_macro(self) -> None:
+        """[카톡 매크로] — A1Auto 창처럼 따로 뜬다(닫으면 A1Auto 를 끈 것과 같다 — 멈춤 · 로그 저장)."""
+        if self._macro is None:
+            self._macro = KakaoMacroWindow(tray=self.tray, io_getter=self._macro_io, icon=self._icon,
+                                           need_login=self._macro_login_msg)
+        w = self._macro
+        if w.isMinimized():
+            w.showNormal()
+        w.show()
+        w.raise_()
+        w.activateWindow()
+        w.view.sync()                 # 발송 간격 · 자주 쓰는 문구를 내 구글 계정과 맞춘다
+
+    def _macro_io(self):
+        """맞출 곳 — 로그인돼 있을 때만(아니면 이 PC 사본으로)."""
+        email = (getattr(self.gauth, "email", "") or "").strip().lower()
+        if not (self.gauth.is_connected() and email):
+            return None, ""
+        return _AppDataIO(self.gauth), email
+
+    def _macro_login_msg(self) -> str:
+        """매크로는 구글 로그인을 해야 시작한다(지점장). 로그인했으면 ""."""
+        if self.gauth.is_connected() and (getattr(self.gauth, "email", "") or ""):
+            return ""
+        return "카톡 매크로는 구글 로그인을 해야 쓸 수 있습니다.\n위 [동기화] 를 눌러 로그인한 뒤 다시 눌러 주세요."
+
+    def _macro_busy(self) -> bool:
+        return self._macro is not None and self._macro.view.busy()
 
     # ------------------------------------------------------------ 설정
     def open_settings(self) -> None:
@@ -808,6 +878,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, config.APP_NAME, "동기화하지 못했습니다.\n\n" + err)
             return
         self._pulled_at = time.monotonic()      # 방금 공통 자료도 받았다
+        if self._macro is not None:
+            self._macro.view.sync()               # 카톡 매크로 발송 간격 · 자주 쓰는 문구도
         self._set_msg("동기화 완료 — " + res.summary(), "ok")
         extra = [x for x in [res.shared_note] + list(res.notes) if x]
         if extra:
@@ -829,8 +901,10 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 업데이트
     def _busy_now(self) -> bool:
-        """지금 쓰는 중인가 — 편집 창(모달)·빠른검색이 떠 있거나, 창이 보이는데 PC 를 막 만졌다."""
+        """지금 쓰는 중인가 — 편집 창(모달)·빠른검색이 떠 있거나, 창이 보이는데 PC 를 막 만졌다 · 카톡 매크로가 보내는 중."""
         if QApplication.activeModalWidget() is not None:
+            return True
+        if self._macro_busy():
             return True
         if self._quick is not None and self._quick.isVisible():
             return True

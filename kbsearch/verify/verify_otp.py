@@ -197,6 +197,9 @@ class Fake:
         self.sig_otp = Sig()
         self.msgs = []
 
+    def _macro_busy(self):
+        return False                 # 카톡 매크로가 안 도는 중
+
     def _set_msg(self, text, kind=""):
         self.msgs.append((text, kind))
 
