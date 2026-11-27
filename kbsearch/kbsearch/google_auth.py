@@ -302,6 +302,19 @@ def appdata_find(auth: GoogleAuth, name: str) -> Optional[str]:
     return files[0]["id"] if files else None
 
 
+def appdata_meta(auth: GoogleAuth, name: str) -> Optional[dict]:
+    """이름으로 찾은 파일 → {id, md5Checksum, modifiedTime}. 없으면 None, 조회가 안 되면 GoogleError."""
+    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
+        "spaces": "appDataFolder",
+        "q": f"name='{name}'",
+        "fields": "files(id,name,modifiedTime,md5Checksum)",
+    })
+    if r.status_code != 200:
+        raise GoogleError(f"드라이브 조회 실패 (HTTP {r.status_code})")
+    files = (r.json() or {}).get("files", [])
+    return files[0] if files else None
+
+
 def appdata_read(auth: GoogleAuth, file_id: str) -> str:
     r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
                     timeout=30, params={"alt": "media"})

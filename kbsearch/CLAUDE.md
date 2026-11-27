@@ -20,3 +20,6 @@
   고쳐지면 `kbsearch/kbsearch/` 의 사본에도 옮긴다(README 의 '그대로 복사' 목록).
 - 업데이트는 건너뛸 수 없다 — 잘못 나간 판은 모든 PC 에 깔린다. 검사가 빨가면 내지 않는다.
 - 릴리스는 `make_latest: false` 를 지킨다(일정관리기 업데이트가 latest 를 본다).
+- 카톡 매크로(`kakao_win` · `kakao_macro` · `kakao_history` · `kakao_macro_view`)는 일정관리기와 같은 파일이다.
+  고칠 때마다 `kakao_macro.CHANGE_LOG` 맨 위에 한 절(날짜 · 판 · 다섯 줄 안쪽)을 더한다 — 매크로 도구 → 수정로그에
+  그대로 보인다(지점장: "수정로그는 앞으로 너가 직접 업데이트해서 올려줘").

@@ -69,7 +69,7 @@ v = m.view
 ok("A1Auto 화면 그대로(전송방식 · 시작/중지 · 카드 · 로그 · 도구 메뉴)",
    [r.text() for r in v.rb_modes] == ["텍스트", "이미지", "이미지+텍스트"]
    and v.btn_start.text() == "매크로 시작 (INSERT)" and v.btn_stop.text() == "매크로 중지 (DELETE)"
-   and [a.text() for a in v.btn_tools.menu().actions()] == ["자주 쓰는 문구", "환경설정", "수정로그"])
+   and [a.text() for a in v.btn_tools.menu().actions()] == ["자주 쓰는 문구", "발송 기록", "환경설정", "수정로그"])
 ok("앱 트레이를 함께 쓴다(끝나면 풍선 알림)", v.tray is w.tray)
 ok("창이 열려 있으면 Insert · Delete 를 본다", v.armed())
 m.showMinimized()
@@ -109,6 +109,9 @@ google_auth.appdata_write = lambda auth, name, text, fid=None: calls.append(("wr
 io.write(km.REMOTE_NAME, "{}")
 ok("쓸 때 먼저 찾아서 그 파일을 고친다(같은 이름이 둘 생기지 않게)", calls == [("find", km.REMOTE_NAME),
                                                                   ("write", km.REMOTE_NAME, "FID9")], calls)
+google_auth.appdata_meta = lambda auth, name: {"id": "FID7", "md5Checksum": "abc"} if name == "kakao_history.json" else None
+ok("발송 기록 — 판(md5)을 먼저 물어 그대로면 받지 않는다(kb-v1.11)", io.meta("kakao_history.json") == ("FID7", "abc")
+   and io.meta("없음.json") == (None, ""))
 w.gauth.is_connected = lambda: False
 
 print("[4] 도는 동안 — 인증번호는 띄우기만 · 자동 업데이트 · 끄기 신호는 미룬다")
@@ -134,7 +137,7 @@ ok("클립보드 · 발송 기록 · 로그(view.shutdown)", done == [1])
 
 print("[6] 일정관리기 사본과 같은 파일")
 planner = _HERE.parents[1] / "python" / "planner"
-for f in ("kakao_win.py", "kakao_macro.py", "kakao_macro_view.py", "members.py"):
+for f in ("kakao_win.py", "kakao_macro.py", "kakao_history.py", "kakao_macro_view.py", "members.py"):
     mine = (_HERE.parent / "kbsearch" / f).read_text(encoding="utf-8")
     theirs = planner / f
     if theirs.is_file():

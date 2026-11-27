@@ -24,7 +24,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QEnterEvent, QGuiApplication  # noqa: E402
-from PySide6.QtWidgets import QApplication, QGroupBox, QLabel  # noqa: E402
+from PySide6.QtWidgets import QApplication, QGroupBox  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
 
