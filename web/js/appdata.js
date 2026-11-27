@@ -218,6 +218,40 @@ export async function saveSettings(patch) {
 // 시각 모양은 PC 와 같게: "2026-11-01T05:12:33Z" (글자로 크기를 견준다).
 const stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
+/** PC 묶음 안 파일 여럿(JSON) — 묶음은 한 번만 받는다. {이름: 값|null}. */
+export async function readPcFiles(names) {
+  const b = await readJson(PC_FILE);
+  const out = {};
+  for (const name of names) {
+    const txt = b && b.files && b.files[name];
+    let v = null;
+    if (txt) { try { v = JSON.parse(txt); } catch (e) { v = null; } }
+    out[name] = v;
+  }
+  return out;
+}
+
+/** 앱 전용 공간에서 이름이 prefix 로 시작하는 파일들 → {이름: {id, md5, mod}} (명함 사진 bizcard_*.png 등). */
+export async function listApp(prefix) {
+  const r = await call(`${FILES}?spaces=appDataFolder&pageSize=1000`
+    + `&q=${encodeURIComponent(`name contains '${prefix}'`)}`
+    + `&fields=${encodeURIComponent("files(id,name,md5Checksum,modifiedTime)")}`);
+  if (!r) return {};
+  const j = await r.json();
+  const out = {};
+  for (const f of j.files || []) {
+    const n = String(f.name || "");
+    if (n.startsWith(prefix)) out[n] = { id: f.id, md5: f.md5Checksum || "", mod: f.modifiedTime || "" };
+  }
+  return out;
+}
+
+/** 앱 전용 공간의 파일 하나를 통째로(Blob) — 명함 사진. 없으면 null. */
+export async function readAppBlob(id) {
+  const r = await call(`${FILES}/${id}?alt=media`);
+  return r ? await r.blob() : null;
+}
+
 /** PC 묶음 안 파일 하나(JSON). 없으면 null. */
 export async function readPcFile(name) {
   const b = await readJson(PC_FILE);

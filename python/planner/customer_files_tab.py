@@ -18,15 +18,18 @@ import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QBuffer, QEvent, Qt, QTimer, Signal
+from pathlib import Path
+
+from PySide6.QtCore import QBuffer, QEvent, QStandardPaths, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
-    QCursor, QDrag, QGuiApplication, QKeySequence)
+    QCursor, QDesktopServices, QDrag, QGuiApplication, QKeySequence)
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
-    QInputDialog, QLabel, QMenu, QMessageBox, QPushButton,
+    QAbstractItemView, QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
+    QInputDialog, QLabel, QMenu, QMessageBox, QProgressDialog, QPushButton,
     QSplitter, QStyle, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from . import config, customer_files, file_ops, theme
+from . import config, customer_files, file_ops, pdf_merge, theme
+from .pdf_merge_dialog import MergeOrderDialog
 from .clipfiles import file_mime as _clip_file_mime
 from .livesearch import LiveLineEdit
 from .file_preview import FilePreview
@@ -357,6 +360,13 @@ class CustomerFilesTab(QWidget):
         self.btn_reload = QPushButton("새로고침")
         self.btn_reload.clicked.connect(self.reload)
         top.addWidget(self.btn_reload)
+        # PDF 병합(v1.37) — 고른 그림 · PDF 를 차례를 정해 PDF 한 개로(pdf_merge · pdf_merge_dialog)
+        self.btn_merge = QPushButton("PDF 병합")
+        self.btn_merge.setToolTip("고른 그림(jpg · png …) · PDF 를 차례를 정해 PDF 한 개로 합칩니다\n"
+                                  "Ctrl · Shift 를 누른 채 누르면 여럿 고를 수 있습니다")
+        self.btn_merge.setEnabled(False)
+        self.btn_merge.clicked.connect(self.merge_selected)
+        top.addWidget(self.btn_merge)
         v.addLayout(top)
 
         # ---- 검색 ----
@@ -1053,6 +1063,7 @@ class CustomerFilesTab(QWidget):
             self.open_customer_docs(att, atts)
 
     def _on_select(self):
+        self.btn_merge.setEnabled(bool(self._merge_nodes()))
         n = self._current()
         self.btn_open.setEnabled(bool(n) and not n.is_dir
                                  and self.source is not None
@@ -1488,6 +1499,10 @@ class CustomerFilesTab(QWidget):
             a = m.addAction(f"복사{tail}  (Ctrl+C)")
             a.setToolTip("카카오톡 대화창에서 Ctrl+V 로 붙여 넣을 수 있습니다")
             a.triggered.connect(self.copy_selected)
+            mergeable = self._merge_nodes()
+            if mergeable:
+                a = m.addAction(f"PDF 로 합치기  ({len(mergeable)}개)")
+                a.triggered.connect(self.merge_selected)
             m.addSeparator()
         if n is not None:
             a = m.addAction("이름 바꾸기")
@@ -1507,6 +1522,153 @@ class CustomerFilesTab(QWidget):
         m.addSeparator()
         m.addAction("드라이브 주소 복사").triggered.connect(self.copy_drive_url)
         m.exec(self.tbl.viewport().mapToGlobal(pos))
+
+    # ------------------------------------------------------------ PDF 병합(v1.37)
+    def _merge_nodes(self) -> list:
+        """고른 것 중 합칠 수 있는 파일(그림 · PDF) — 화면에 보이는 차례 그대로."""
+        if self.source is None:
+            return []
+        return [n for n in self._selected() if not n.is_dir and pdf_merge.can_merge(n.name)]
+
+    def merge_selected(self):
+        """[PDF 병합] — 고른 그림 · PDF 를 차례를 정해 PDF 한 개로.
+
+        지점장(F3): "jpg, pdf 등의 파일들을 다중선택 후 pdf 병합 버튼 — 단, 병합할 때 파일의 순서를 지정할 수 있게."
+        드라이브를 인터넷으로 읽는 중이면 미리보기처럼 받아 와서 합친다(그때는 '다운로드' 폴더에 저장)."""
+        nodes = self._merge_nodes()
+        if not nodes:
+            QMessageBox.information(self, config.APP_NAME,
+                                    "합칠 그림(jpg · png …)이나 PDF 를 골라 주세요.\n"
+                                    "Ctrl · Shift 를 누른 채 누르면 여럿 고를 수 있습니다.")
+            return
+        items, failed = self._read_for_merge(nodes)
+        if failed:
+            QMessageBox.warning(self, config.APP_NAME, "읽지 못한 파일이 있습니다:\n\n" + "\n".join(failed[:10]))
+            if not items:
+                return
+        dlg = MergeOrderDialog(items, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        order = dlg.items()
+        if not order:
+            return
+        target = pdf_merge.unique_path(self._merge_folder(nodes),
+                                       pdf_merge.suggest_name(self._merge_base_name(nodes)))
+        fn, _f = QFileDialog.getSaveFileName(self, "합친 PDF 저장", str(target), "PDF (*.pdf)")
+        if not fn:
+            return
+        if not fn.lower().endswith(".pdf"):
+            fn += ".pdf"
+        prog = QProgressDialog("PDF 로 합치는 중…", "", 0, len(order), self)
+        prog.setCancelButton(None)
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(400)
+
+        def step(i, n):
+            prog.setValue(i)
+            QApplication.processEvents()
+
+        try:
+            data, pages = pdf_merge.merge(order, progress=step)
+        except pdf_merge.MergeError as e:
+            prog.close()
+            QMessageBox.warning(self, config.APP_NAME, f"합치지 못했습니다:\n{e}")
+            return
+        except Exception as e:
+            prog.close()
+            QMessageBox.warning(self, config.APP_NAME, f"합치지 못했습니다:\n{type(e).__name__}: {e}")
+            return
+        prog.close()
+        try:
+            Path(fn).write_bytes(data)
+        except OSError as e:
+            QMessageBox.warning(self, config.APP_NAME, f"저장하지 못했습니다:\n{e}")
+            return
+        if self._can_edit() and self._cur_dir() and os.path.normcase(os.path.dirname(os.path.abspath(fn))) \
+                == os.path.normcase(os.path.abspath(self._cur_dir())):
+            self._after_change("", [])          # 지금 보는 폴더에 저장했다 — 목록에 바로 보이게
+        self.last_merged = fn
+        what = self._ask_after_merge(fn, pages)
+        if what == "open":
+            self._reveal(fn)
+        elif what == "copy":
+            QApplication.clipboard().setMimeData(file_mime([fn]))
+            self._toast(f"{os.path.basename(fn)} — 복사했습니다. 카카오톡에서 Ctrl+V 로 붙여 넣으세요.")
+
+    def _read_for_merge(self, nodes: list) -> tuple:
+        """고른 파일의 내용 → ([(이름, 바이트)], [못 읽은 것]). 드라이브면 받아 온다(뒤에서 — 화면은 돈다)."""
+        src = self.source
+        got = [None] * len(nodes)
+        failed = []
+        done = threading.Event()
+
+        def worker():
+            for i, n in enumerate(nodes):
+                try:
+                    got[i] = (n.name, src.read_bytes(n))
+                except Exception as e:
+                    failed.append(f"{n.name} — {e}")
+            done.set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        prog = QProgressDialog("파일을 읽는 중…", "", 0, 0, self)
+        prog.setCancelButton(None)
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(400)
+        while not done.wait(0.03):
+            QApplication.processEvents()
+        prog.close()
+        return [g for g in got if g is not None], failed
+
+    def _merge_folder(self, nodes: list) -> str:
+        """저장할 곳 — 고른 파일이 한 폴더에 있으면 그 폴더, 아니면 지금 폴더. 인터넷으로 읽는 중이면 '다운로드'."""
+        if self._can_edit():
+            dirs = {os.path.dirname(self.source.local_path(n) or "") for n in nodes}
+            dirs.discard("")
+            if len(dirs) == 1:
+                return dirs.pop()
+            if self._cur_dir():
+                return self._cur_dir()
+        d = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation) \
+            or QStandardPaths.writableLocation(QStandardPaths.DesktopLocation) or os.path.expanduser("~")
+        return d
+
+    def _merge_base_name(self, nodes: list) -> str:
+        """파일 이름 앞부분 — 고른 파일들의 폴더 이름(고객 이름 폴더). 섞였으면 지금 보는 폴더 이름."""
+        names = set()
+        for n in nodes:
+            if self._can_edit():
+                names.add(os.path.basename(os.path.dirname(self.source.local_path(n) or "")))
+            else:
+                names.add((n.folder or "").replace("\\", "/").rstrip("/").split("/")[-1])
+        names.discard("")
+        if len(names) == 1:
+            return names.pop()
+        return self.path[-1].name if self.path else "서류"
+
+    def _ask_after_merge(self, fn: str, pages: int) -> str:
+        """다 만들었다 — [폴더 열기] · [카톡으로 복사] · [닫기] → 'open' · 'copy' · ''."""
+        box = QMessageBox(self)
+        box.setWindowTitle(config.APP_NAME)
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"PDF 로 합쳤습니다 — {pages}쪽\n\n{fn}")
+        b_open = box.addButton("폴더 열기", QMessageBox.ActionRole)
+        b_copy = box.addButton("카톡으로 복사", QMessageBox.ActionRole)
+        box.addButton("닫기", QMessageBox.RejectRole)
+        box.exec()
+        c = box.clickedButton()
+        return "open" if c is b_open else "copy" if c is b_copy else ""
+
+    @staticmethod
+    def _reveal(fn: str):
+        """탐색기에서 그 파일을 골라 둔 채로 폴더를 연다."""
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(fn)])   # noqa: S603, S607
+                return
+        except Exception:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(fn)))
 
     # ------------------------------------------------------------ 테마
     def apply_theme(self):

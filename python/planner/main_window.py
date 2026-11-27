@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 from html import escape as html_escape
 
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QGuiApplication
+from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
@@ -45,7 +45,9 @@ from .commission_tab import CommissionTab
 from .customer_files_tab import CustomerFilesTab
 from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
-from . import bizcard
+from . import bizcard, members
+from .members_dialog import MembersDialog
+from .kakao_macro_view import KakaoMacroView
 from .kb_tab import KbTab, QuickSearch
 from .promo_tab import PromoTab
 from .livesearch import LiveLineEdit
@@ -60,6 +62,24 @@ from .models import (
 )
 from .settings_dialog import SettingsDialog
 from .sidebar import Sidebar
+from . import sidebar as sidebar_mod
+
+
+class _AppDataIO:
+    """내 구글 계정 앱 전용 공간(appDataFolder)의 글 파일 — 카톡 매크로 설정 · 문구(kakao_macro.json, v1.37)."""
+
+    def __init__(self, auth):
+        self.auth = auth
+
+    def find(self, name: str):
+        return google_client.drive_find(self.auth, name)
+
+    def read(self, fid: str) -> str:
+        return google_client.drive_read_bytes(self.auth, fid).decode("utf-8", errors="replace")
+
+    def write(self, name: str, text: str) -> None:
+        google_client.drive_write(self.auth, name, text)
+
 
 # ---------------------------------------------------------------------------
 # 낙관적 UI (즉시 반영)
@@ -331,6 +351,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self._app_icon)
         self._build_ui()
         self._build_tray()
+        self.tab_macro.tray = self.tray      # 카톡 매크로 — 끝나면 풍선 알림 · 도는 동안 풍선말에 진행
 
         self.sig_tasks_done.connect(self._on_tasks_done)
         self.sig_events_done.connect(self._on_events_done)
@@ -560,6 +581,8 @@ class MainWindow(QMainWindow):
             self.tab_kb.apply_theme()
         if hasattr(self, "tab_promo"):
             self.tab_promo.apply_theme()
+        if hasattr(self, "tab_macro"):
+            self.tab_macro.apply_theme()
         # 캘린더 창이 열려 있으면 그 창의 배경·글자색도 함께 갱신
         if self._cal_win is not None:
             try:
@@ -617,6 +640,10 @@ class MainWindow(QMainWindow):
         self._acct_tries = 0
         self._account_verified = True
         self.account_email = email
+        # 회원 목록(v1.37) — 이 계정이 일정관리기를 쓴다고 서버에 알린다(하루 한 번 · 조용히). 관리자면 [회원 목록]
+        members.report_async(self.gauth, email, "planner", config.APP_VERSION)
+        self.sidebar.btn_members.setVisible(config.is_rates_admin(email))
+        self.tab_macro._paint_where()
         config.set_account(email)
         config.remember_account(email)
         self._provisional_account = email
@@ -719,6 +746,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "bizcard"):
             # 명함 사진(채널마다) — 동기화로 채널 목록까지 받은 뒤에 맞춘다: 다른 PC 에서 바꾼 것 받기 · 못 올린 것 올리기
             self.bizcard.sync_async(self.gauth, [it.get("name", "") for it in getattr(self.tab_greet, "items", [])])
+        if hasattr(self, "tab_macro"):
+            self.tab_macro.sync()        # 카톡 매크로 발송 간격 · 자주 쓰는 문구(계정 ↔ 이 PC)
         # 자동 규칙을 없앴다(v1.28) — 그것이 만든, 아직 안 한 할일을 거둔다(받은 뒤라 덮어쓰지 않는다)
         QTimer.singleShot(0, self._cleanup_auto_rule_todos)
         # 받기 전에 시트를 먼저 다 읽었으면 그때 미뤄 둔 월 마감을 지금(v1.27)
@@ -919,6 +948,8 @@ class MainWindow(QMainWindow):
             return
         if QApplication.activeModalWidget() is not None:
             return                              # 고객 수정·설정 같은 창이 떠 있다 — 다음에
+        if hasattr(self, "tab_macro") and self.tab_macro.busy():
+            return                              # 카톡 매크로가 보내는 중 — 끝나면(1분 뒤 다시 본다)
         if self.isVisible() and not self.isMinimized():
             idle = updater.idle_seconds()
             if idle is None or idle < self.UPDATE_IDLE_SEC:
@@ -1115,6 +1146,7 @@ class MainWindow(QMainWindow):
         self.chk_startup.toggled.connect(lambda on: _set_startup(on))
         self.btn_settings = self.sidebar.btn_settings
         self.btn_settings.clicked.connect(self.on_settings_click)
+        self.sidebar.btn_members.clicked.connect(self.open_members)
         self.btn_calendar = self.sidebar.btn_calendar
         # ⚠️ 람다로 감싼다 — 단추는 눌림 여부(False)를 넘겨, open_calendar 가 그걸 '갈 날짜' 로
         #    받아 오류가 났다(v1.22.1 기록: 'bool' object has no attribute 'year').
@@ -1188,6 +1220,12 @@ class MainWindow(QMainWindow):
         self.tab_comm = CommissionTab()
         self.tabs.addTab(self.tab_comm, "수당계산기")
         self.tabs.addTab(self._build_alarm_tab(), "PC 알람")
+        # 카톡 매크로(v1.37) — A1Auto(kmacro)를 그대로 옮겼다. 발송 간격 · 자주 쓰는 문구는 내 구글 계정
+        # (앱 전용 공간 kakao_macro.json)에 두고 계정이 확인되면 맞춘다. Insert · Delete 는 이 메뉴가 지금 화면일 때만.
+        self.tab_macro = KakaoMacroView(io_getter=self._macro_io,
+                                        armed=lambda: self.tabs.currentWidget() is self.tab_macro,
+                                        need_login=self._macro_login_msg)
+        self.tabs.addTab(self.tab_macro, "카톡 매크로")
         # 쪽 제목줄이 이름을 크게 보여 주므로 화면 안의 작은 제목('💬 멘트 복사' 등)은
         # 숨긴다 — 같은 이름이 두 번 나와 어수선했다. 설명·[편집] 단추는 그대로.
         for t in (self.tab_greet, self.tab_kb):
@@ -1205,6 +1243,24 @@ class MainWindow(QMainWindow):
         self.sidebar.collapsedChanged.connect(self._on_side_collapsed)
         self._sync_nav()
         self._on_page_changed(self.tabs.currentIndex())
+        self._build_page_shortcuts()
+
+    def _build_page_shortcuts(self):
+        """Ctrl+1 ~ Ctrl+9 — 메뉴 순서대로 화면을 옮긴다(v1.37).
+
+        지점장: "앱이 최상단에 켜져 있을 때 순서에 맞게 컨트롤+1, 컨트롤+2 … 로 화면 전환, 메뉴 우측에 작은 글씨로".
+        창 단축키라 이 창이 앞에 있을 때만 먹는다(고객 수정 같은 창이 떠 있으면 안 먹는다).
+        메뉴 줄 = 탭 번호라 메뉴를 끌어 순서를 바꾸면 단축키도 그 순서를 따른다."""
+        self._page_keys = []
+        for n in range(1, sidebar_mod.SHORTCUT_MAX + 1):
+            sc = QShortcut(QKeySequence(f"Ctrl+{n}"), self)
+            sc.setContext(Qt.WindowShortcut)
+            sc.activated.connect(lambda i=n - 1: self._goto_page(i))
+            self._page_keys.append(sc)
+
+    def _goto_page(self, i: int):
+        if 0 <= i < self.tabs.count():
+            self.tabs.setCurrentIndex(i)
 
     def _pad_pages(self):
         """화면마다 흰 카드 한 장 + 고른 안쪽 여백. 대시보드는 카드 여러 장이라 바탕 그대로."""
@@ -1329,6 +1385,26 @@ class MainWindow(QMainWindow):
             self.tab_files.reload()
         if hasattr(self, "tab_promo") and self.tabs.widget(idx) is self.tab_promo:
             self.tab_promo.on_shown()
+
+    def _macro_login_msg(self) -> str:
+        """매크로는 구글 로그인을 해야 시작한다(v1.37 지점장). 로그인했으면 ""."""
+        if self.gauth.is_connected():
+            return ""
+        return ("카톡 매크로는 구글 로그인을 해야 쓸 수 있습니다.\n"
+                "대시보드 위의 구글 로그인 단추나 [설정] 에서 로그인한 뒤 다시 눌러 주세요.")
+
+    def open_members(self):
+        """[회원 목록] — 관리자만(서버도 관리자인지 다시 확인한다)."""
+        if not config.is_rates_admin(getattr(self, "account_email", "")):
+            return
+        d = MembersDialog(self.gauth, self)
+        d.exec()
+
+    def _macro_io(self):
+        """카톡 매크로 설정 · 문구를 맞출 곳 — 계정이 확인된 뒤에만(다른 계정 것을 덮지 않게). 아니면 (None, "")."""
+        if not (getattr(self, "_account_verified", False) and self.gauth.is_connected()):
+            return None, ""
+        return _AppDataIO(self.gauth), config.current_account()
 
     def _build_main_tab(self) -> QWidget:
         """대시보드 — 플로우 첫 화면처럼 흰 카드를 늘어놓는다(v1.23, dashboard.py).
@@ -4080,9 +4156,11 @@ class MainWindow(QMainWindow):
         for it in reversed(items or []):     # 위가 최신 — 오래된 것부터 띄워 새 것이 맨 아래·클립보드에
             if not otp.claim(it):
                 continue                     # 이 PC 의 업무자료검색이 방금 띄웠다 — 두 번 띄우지 않는다(v1.32)
-            if copy:
+            # 카톡 매크로가 도는 중이면 클립보드는 건드리지 않는다(붙여넣을 메시지가 바뀌지 않게) — 번호만 띄운다
+            put = copy and not (hasattr(self, "tab_macro") and self.tab_macro.busy())
+            if put:
                 QApplication.clipboard().setText(it["code"])
-            otp_popup.show(it, copied=copy)
+            otp_popup.show(it, copied=put)
         self._maybe_clean_otp()
 
     def _maybe_clean_otp(self):
@@ -5861,6 +5939,9 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _shutdown(self):
+        # 카톡 매크로 — A1Auto 를 끌 때처럼 클립보드 되돌리기 · 발송 기록 저장 · 로그 파일(도는 중이면 멈춘다)
+        if hasattr(self, "tab_macro"):
+            self.tab_macro.shutdown()
         self.timer.stop()
         # 창 크기를 바꾸자마자 끄면 저장 타이머(600ms)가 못 돌고 끝난다.
         # 그러면 방금 맞춘 폭이 다음에 켤 때 사라진다 — 여기서 마저 적어 둔다.

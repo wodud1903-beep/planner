@@ -760,3 +760,17 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
   .split.kbv > .right > .kbright { margin: 10px; padding: 18px 16px 28px; }
   .kbright .dhead h2 { font-size: 19px; }
 }
+
+/* ---- 멘트 · 명함 보내기(v1.37) — PC [멘트복사] 와 같은 색(상담후 파랑 · 부재중 청록 · 명함 호박) ---- */
+.mentnote { margin: 0 0 6px; }
+.mentrow { display: flex; flex-direction: column; gap: 8px; padding: 12px 2px; border-bottom: 1px solid var(--edge); }
+.mentrow:last-child { border-bottom: 0; }
+.mentname { font-size: 15px; }
+.mentbtns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mentbtn { min-height: var(--tap); border: 0; border-radius: 12px; color: #fff; font: inherit; font-weight: 700;
+  font-size: 15px; cursor: pointer; }
+.mentbtn.after { background: #2563eb; }
+.mentbtn.miss { background: #0f766e; }
+.mentbtn.card { background: #b45309; }
+.mentbtn:active { filter: brightness(.92); }
+.mentbtn[disabled] { background: var(--line); color: var(--sub); cursor: default; }

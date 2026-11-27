@@ -25,6 +25,7 @@ TAB_ICONS = {
     "수당계산기": "calc",
     "PC 알람": "bell",
     "수입차 프로모션": "car",
+    "카톡 매크로": "send",
 }
 
 
@@ -207,11 +208,22 @@ def _dot(p: QPainter):
     p.drawEllipse(QPointF(12, 12), 4, 4)
 
 
+def _send(p: QPainter):
+    """종이비행기 — 카톡 매크로(v1.37)."""
+    path = QPainterPath(QPointF(3.5, 11))
+    path.lineTo(20.5, 3.5)
+    path.lineTo(13.5, 20.5)
+    path.lineTo(10.8, 13.2)
+    path.closeSubpath()
+    p.drawPath(path)
+    p.drawLine(QPointF(10.8, 13.2), QPointF(20.5, 3.5))
+
+
 _DRAW = {
     "tasks": _tasks, "calendar": _calendar, "people": _people, "folder": _folder,
     "chat": _chat, "search": _search, "calc": _calc, "bell": _bell, "gear": _gear,
     "plus": _plus, "history": _history, "collapse": _collapse, "expand": _expand,
-    "grid": _grid, "dot": _dot, "car": _car,
+    "grid": _grid, "dot": _dot, "car": _car, "send": _send,
 }
 
 NAMES = tuple(_DRAW)

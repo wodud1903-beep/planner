@@ -216,11 +216,11 @@ ok("창 세로를 못 박지 않는다",
    [l.strip() for l in _i.getsource(MainWindow).splitlines()
     if "self.setFixedHeight(" in l])
 
-ok("탭 8개", w.tabs.count() == 8, [w.tabs.tabText(i) for i in range(w.tabs.count())])
-ok("탭 차례 그대로(수입차 프로모션은 자료검색 다음 — v1.34)",
-   [w.tabs.tabText(i) for i in range(8)] ==
+ok("탭 9개", w.tabs.count() == 9, [w.tabs.tabText(i) for i in range(w.tabs.count())])
+ok("탭 차례 그대로(수입차 프로모션은 자료검색 다음 — v1.34 · 카톡 매크로는 맨 끝 — v1.37)",
+   [w.tabs.tabText(i) for i in range(9)] ==
    ["대시보드", "고객관리", "고객정보", "멘트복사", "자료검색", "수입차 프로모션",
-    "수당계산기", "PC 알람"],
+    "수당계산기", "PC 알람", "카톡 매크로"],
    [w.tabs.tabText(i) for i in range(w.tabs.count())])
 ok("고객정보는 고객관리 바로 옆",
    w.tabs.indexOf(w.tab_files) == w.tabs.indexOf(w.tbl_cust.parent().parent()) + 1

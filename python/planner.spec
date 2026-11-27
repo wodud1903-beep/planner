@@ -7,6 +7,8 @@ block_cipher = None
 
 # holidays 라이브러리는 국가별 서브모듈을 동적으로 import 하므로 모두 포함
 _hidden = collect_submodules('holidays')
+# PDF 병합(v1.37, 고객정보) — pypdf 는 필터 · 암호 처리 부품을 그때그때 불러오므로 모두 넣는다
+_hidden += collect_submodules('pypdf')
 
 a = Analysis(
     ['main.py'],

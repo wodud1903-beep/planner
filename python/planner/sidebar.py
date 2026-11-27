@@ -17,13 +17,47 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QFrame, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QPushButton, QVBoxLayout,
+    QListWidgetItem, QPushButton, QStyle, QStyledItemDelegate, QVBoxLayout,
 )
 
 from . import navicons, theme
 from .icon import make_icon
+
+
+SHORTCUT_MAX = 9                        # Ctrl+1 ~ Ctrl+9 (v1.37) — 10번째 메뉴부터는 단축키가 없다
+
+
+def shortcut_text(row: int) -> str:
+    """메뉴 줄(0부터) → 'Ctrl+1' … 'Ctrl+9'. 단축키가 없는 줄은 ""."""
+    return f"Ctrl+{row + 1}" if 0 <= row < SHORTCUT_MAX else ""
+
+
+class _NavDelegate(QStyledItemDelegate):
+    """메뉴 줄 오른쪽 끝에 작은 회색 글씨로 단축키(v1.37 — 지점장: '메뉴의 우측에는 작은 글씨로 단축키 명을').
+
+    줄 번호로 그리므로 메뉴를 끌어 순서를 바꾸면 글씨도 저절로 그 순서를 따른다(줄 = 탭 = Ctrl+번호)."""
+
+    def __init__(self, nav, collapsed):
+        super().__init__(nav)
+        self._collapsed = collapsed
+
+    def paint(self, p, opt, idx):        # noqa: N802 — Qt 이름 그대로
+        super().paint(p, opt, idx)
+        text = shortcut_text(idx.row())
+        if not text or self._collapsed():
+            return
+        p.save()
+        f = QFont(opt.font)
+        f.setPixelSize(10)
+        f.setWeight(QFont.Normal)
+        p.setFont(f)
+        sel = bool(opt.state & QStyle.State_Selected)
+        p.setPen(QColor(theme.c("nav_sel_text") if sel else theme.c("subtext")))
+        p.drawText(opt.rect.adjusted(0, 0, -12, 0), Qt.AlignRight | Qt.AlignVCenter, text)
+        p.restore()
 
 
 class NavList(QListWidget):
@@ -122,6 +156,7 @@ class Sidebar(QFrame):
         v.addWidget(self.lbl_menu)
         self.nav = NavList()
         self.nav.setToolTip("끌어서 순서를 바꿀 수 있습니다")
+        self.nav.setItemDelegate(_NavDelegate(self.nav, self.is_collapsed))
         self.nav.currentRowChanged.connect(self._on_row)
         v.addWidget(self.nav)
         v.addStretch(1)
@@ -136,6 +171,11 @@ class Sidebar(QFrame):
         self.btn_settings = self._side_button("설정", "gear",
                                               "구글 연결·알람·단축키·테마 등")
         v.addWidget(self.btn_settings)
+        # 관리자만(v1.37) — 일정관리기 · 업무자료검색에 로그인한 계정 목록. 계정이 확인되면 main_window 가 보인다
+        self.btn_members = self._side_button("회원 목록", "people",
+                                             "관리자 — 일정관리기 · 업무자료검색에 로그인한 계정(이메일)")
+        self.btn_members.hide()
+        v.addWidget(self.btn_members)
         v.addSpacing(6)
 
         foot = QHBoxLayout()
@@ -179,11 +219,12 @@ class Sidebar(QFrame):
         self.nav.blockSignals(True)
         try:
             self.nav.clear()
-            for name, icon_name in self._pages:
+            for i, (name, icon_name) in enumerate(self._pages):
                 it = QListWidgetItem(navicons.icon(icon_name, normal, sel),
                                      "" if self._collapsed else name)
                 it.setData(Qt.UserRole, name)
-                it.setToolTip(name)
+                key = shortcut_text(i)
+                it.setToolTip(f"{name} ({key})" if key else name)   # 접은 메뉴에서도 단축키가 보이게
                 it.setSizeHint(QSize(0, NavList.ROW_H))
                 self.nav.addItem(it)
             if 0 <= current < self.nav.count():
@@ -220,7 +261,7 @@ class Sidebar(QFrame):
                   self.btn_ver, self.chk_startup):
             w.setVisible(not on)
         self.btn_primary.setText("" if on else "할일 추가")
-        for b in (self.btn_calendar, self.btn_settings):
+        for b in (self.btn_calendar, self.btn_settings, self.btn_members):
             b.setText("" if on else b.property("full_text"))
         for i in range(self.nav.count()):
             it = self.nav.item(i)
@@ -234,7 +275,7 @@ class Sidebar(QFrame):
     def _paint_icons(self) -> None:
         normal = theme.c("topbar_text")
         self.btn_primary.setIcon(navicons.icon("plus", theme.fill_text()))
-        for b in (self.btn_calendar, self.btn_settings):
+        for b in (self.btn_calendar, self.btn_settings, self.btn_members):
             b.setIcon(navicons.icon(b.property("icon_name"), normal))
         self.btn_fold.setIcon(navicons.icon(
             "expand" if self._collapsed else "collapse", theme.c("subtext"), size=16))

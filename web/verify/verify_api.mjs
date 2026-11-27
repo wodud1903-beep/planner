@@ -560,5 +560,59 @@ console.log("\n[업데이트 우회 길] 저장소가 비공개가 돼도 PC 가
   globalThis.fetch = realFetch;
 }
 
+console.log("\n[회원] v1.37 — PC 앱에 로그인한 계정 목록 · 관리자만 본다");
+{
+  process.env.GOOGLE_CLIENT_SECRET = "test-secret";
+  const M = load("members.js");
+  const T = M._test;
+  const box = new Map();
+  T.setStore({ async get(id) { return box.has(id) ? JSON.parse(box.get(id)) : null; },
+               async put(id, rec) { box.set(id, JSON.stringify(rec)); },
+               async list() { return [...box.keys()]; } });
+  const tokens = { "T-staff": "staff@example.com", "T-admin": "wodud1903@gmail.com", "T-other": "kim@example.com" };
+  T.setWho(async (t) => tokens[t] || "");
+  let clock = Date.parse("2026-11-27T01:00:00Z");
+  T.setClock(() => new Date(clock));
+  const call = async (method, tok, body) => {
+    const r = res();
+    await M({ method, url: "/api/members", headers: { authorization: tok ? "Bearer " + tok : "" }, body }, r);
+    return r;
+  };
+  let r = await call("POST", "", { app: "planner", ver: "1.37.0" });
+  ok("토큰이 없으면 401(기록 안 함)", r.statusCode === 401 && box.size === 0);
+  r = await call("POST", "T-bad", { app: "planner" });
+  ok("구글이 모르는 토큰도 401", r.statusCode === 401 && box.size === 0);
+  r = await call("POST", "T-staff", { app: "planner", ver: "1.37.0", email: "fake@evil.com" });
+  ok("로그인 기록 — 이메일은 구글이 확인한 것(보낸 이메일은 무시)", r.statusCode === 200 && box.size === 1
+     && [...box.values()][0].includes("staff@example.com") && ![...box.values()][0].includes("fake@evil.com"));
+  clock += 3600e3;
+  await call("POST", "T-staff", { app: "kb", ver: "1.10.0" });
+  await call("POST", "T-staff", { app: "planner", ver: "1.37.0" });
+  await call("POST", "T-other", { app: "kb", ver: "1.10.0" });
+  r = await call("POST", "T-staff", { app: "hack" });
+  ok("모르는 앱 이름은 400", r.statusCode === 400);
+  r = await call("GET", "T-staff");
+  ok("관리자가 아니면 목록을 못 본다(403)", r.statusCode === 403);
+  r = await call("GET", "T-admin");
+  const m = r.json().members || [];
+  const st = m.find((x) => x.email === "staff@example.com");
+  ok("관리자는 목록을 본다 — 앱마다 처음 · 마지막 · 판 · 횟수",
+     r.statusCode === 200 && m.length === 2 && st.apps.planner.n === 2 && st.apps.kb.ver === "1.10.0"
+     && st.apps.planner.first === "2026-11-27T01:00:00.000Z" && st.apps.planner.last === "2026-11-27T02:00:00.000Z",
+     JSON.stringify(m).slice(0, 200));
+  ok("관리자 = PC config.RATES_ADMINS", (() => {
+    const py = readFileSync(join(ROOT, "python", "planner", "config.py"), "utf-8");
+    const mm = py.match(/RATES_ADMINS = \(([^)]*)\)/);
+    return mm && JSON.stringify([...mm[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])) === JSON.stringify(T.ADMINS);
+  })());
+  T.setStore(null);
+  delete process.env.BLOB_READ_WRITE_TOKEN; delete process.env.BLOB_STORE_ID;
+  const M2 = load("members.js");
+  r = res();
+  await M2({ method: "GET", url: "/api/members", headers: {} }, r);
+  ok("저장소가 아직이면 503 no_store", r.statusCode === 503 && r.json().error === "no_store");
+  delete process.env.GOOGLE_CLIENT_SECRET;
+}
+
 console.log(fails ? `\n${fails}건 실패` : "\n전부 통과");
 process.exit(fails ? 1 : 0);

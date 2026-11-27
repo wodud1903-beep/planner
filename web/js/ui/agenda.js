@@ -88,6 +88,7 @@ export async function screen() {
           <h2 id="aghello">${greeting(now)}</h2>
           <p class="s">${now.getMonth() + 1}월 ${now.getDate()}일 ${DAY[now.getDay()]}요일</p>
         </div>
+        <a class="chip" id="agment" href="#/ment" title="채널마다 상담후 · 부재중 멘트와 명함을 카카오톡으로">멘트·명함</a>
         <a class="chip" id="agotp" href="#/otp" title="휴대폰으로 온 인증번호 보기">인증번호</a>
         <button class="primary" id="agadd">${raw(icon("plus", 18))}할일 추가</button>
       </div>

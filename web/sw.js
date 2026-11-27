@@ -29,6 +29,7 @@ const PRECACHE = [
   "./js/notes.js", "./js/ui/feed.js", "./js/board.js", "./js/ui/board.js", "./js/push.js",
   "./js/brief.js", "./js/kbedits.js", "./js/otp.js", "./js/ui/otp.js",
   "./js/promo.js", "./js/ui/promo.js",
+  "./js/ment.js", "./js/ui/ment.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-512-maskable.png",
 ];
 
