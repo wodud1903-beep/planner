@@ -46,6 +46,9 @@ A1Auto 와 다른 것(앱 안에 들어오며 · 오발송을 막으려고)
     저장은 못 쓴 것이 있을 때만(다른 프로그램이 그사이 쓴 기록을 옛 사본으로 덮지 않게).
   · 중복 발송 일수(dupdays)는 jy.ini 대신 환경설정 칸으로 고친다(기본 1, 0 = 검사 안 함).
   · 구글 로그인을 해야만 시작한다(지점장 — 예전 비밀번호 인증 대신). 화면(ui.start_block)이 까닭 글을 준다.
+  · 발송 기록(customers.tsv) · 발송 로그는 내 구글 계정에도 올려 PC 사이에서 맞춘다(kakao_history — v1.38).
+    로그 줄 · customers.tsv 모양은 그대로이고, customers.tsv 는 다 쓴 뒤 바꿔 끼운다.
+  · 수정로그는 '도움말 내용 생략' 대신 실제 이력(CHANGE_LOG — 고칠 때마다 맨 위에 더한다).
 """
 
 from __future__ import annotations
@@ -76,6 +79,48 @@ REMOTE_NAME = "kakao_macro.json"
 OLD_INI = r"C:\jy.ini"
 SEED_AT = "1970-01-01T00:00:00.000000Z"   # jy.ini 에서 가져온 값의 시각 — 계정에 정해 둔 값이 있으면 그것이 이긴다
 TITLE_MAX = 100                     # 문구 제목 길이(예전 문구 서버가 막던 것 그대로)
+
+# ---------------------------------------------------------------------------
+# 수정로그(도구 → 수정로그) — A1Auto 는 '도움말 내용 생략' 이었다. 지점장(v1.38): "수정로그는 앞으로 너가 직접
+# 업데이트해서 올려줘." ⚠️ 매크로(kakao_*.py)를 고칠 때마다 맨 위에 한 절을 더한다(CLAUDE.md 규칙 · 검사가 모양을 본다).
+# (날짜, 판, 직원이 읽을 말 — 다섯 줄 안쪽)
+# ---------------------------------------------------------------------------
+CHANGE_LOG = (
+    ("2026-11-27", "일정관리기 v1.38.0 · 업무자료검색 v1.11.0", (
+        "발송 기록(고객 목록)과 발송 로그를 내 구글 계정에 올려, 다른 PC 에서도 자동으로 불러옵니다",
+        "도구 → 발송 기록: 발송 로그(기간 · 결과 · 검색)와 고객 목록(마지막 발송 · 횟수), 엑셀로 저장",
+        "다른 PC 에서 보낸 사람도 '최근 N일 내 발송함' 으로 건너뜁니다",
+        "예전 A1Auto 로그 파일(logs 폴더)도 처음 한 번 읽어 올립니다",
+        "수정로그를 채웠습니다 — 앞으로 고칠 때마다 여기에 적습니다",
+    )),
+    ("2026-11-27", "일정관리기 v1.37.0 · 업무자료검색 v1.10.0", (
+        "A1Auto 를 일정관리기 · 업무자료검색 안으로 옮겼습니다 — 화면 · 순서 · 기다리는 시간 · 로그 그대로",
+        "서버 점검(킬스위치) · 비밀번호 인증을 없앴습니다 — 대신 구글 로그인을 해야 시작합니다",
+        "자주 쓰는 문구 · 발송 간격을 내 구글 계정에 저장합니다(다른 PC · 두 프로그램이 같이 봅니다)",
+        "환경설정에 '중복 발송 막기(일)' 칸과 [A1Auto 기록 가져오기] 단추",
+        "오발송 막기: 도는 중 Insert 는 무시 · Delete 로 멈추면 클립보드는 그 사람 차례 뒤에 되돌림",
+    )),
+    ("2026-09-27", "A1Auto 1.1.2", (
+        "이미지를 보낼 때 카톡 창 확인이 매크로를 멈추던 문제를 고쳤습니다",
+    )),
+    ("2026-09-21", "A1Auto 1.1", (
+        "발송 안정성: 방 이름 확인 · 연속 3회 실패하면 안전 중단 · 최근 발송한 사람 건너뛰기",
+        "진행률 · 남은 시간 · 트레이 알림 · 자동 업데이트",
+    )),
+    ("2026-08-03", "A1Auto 1.0", (
+        "처음 — 카카오톡 친구 목록을 차례로 돌며 같은 메시지 · 이미지를 보냅니다",
+    )),
+)
+
+
+def change_log_text() -> str:
+    """수정로그를 글로(새것이 위)."""
+    out = []
+    for day, ver, lines in CHANGE_LOG:
+        out.append(f"■ {day}  {ver}")
+        out.extend(f"  · {t}" for t in lines)
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -252,13 +297,20 @@ class CustomerStore:
         for cu in self.items.values():
             lines.append("\t".join([_sanitize(cu.name), _date_to_str(cu.first_seen), _date_to_str(cu.last_sent),
                                     str(cu.send_count), "1" if cu.opt_out else "0", _sanitize(cu.memo)]))
+        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            # TStringList.SaveToFile(TEncoding.UTF8) — BOM + CRLF
-            self.path.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8-sig"))
+            # TStringList.SaveToFile(TEncoding.UTF8) — BOM + CRLF. 임시 파일에 다 쓴 뒤 바꿔 끼운다(v1.38) —
+            # 쓰는 도중 꺼지거나 다른 프로그램(업무자료검색 ↔ 일정관리기)이 읽어도 반쯤 쓴 파일을 보지 않게.
+            tmp.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8-sig"))
+            os.replace(tmp, self.path)
             self.dirty = False
         except OSError:
             self.dirty = True             # 엑셀에 열려 있으면 못 쓴다 — 발송은 계속되어야 하므로 넘어간다
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     def flush(self) -> None:
         """중단 · 닫을 때의 CustomerStore.Save — 못 쓴 것이 있을 때만(다른 프로그램이 쓴 기록을 덮지 않게)."""

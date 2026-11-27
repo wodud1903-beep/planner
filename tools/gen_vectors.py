@@ -411,7 +411,6 @@ def main() -> int:
         out["doc_url"].append([cell, sheets.doc_url(cell)])
 
     for rows in RATE_ROWS:
-        got = sheets.read_rates.__wrapped__ if False else None   # (통신 함수라 직접 안 쓴다)
         out["parse_rates"].append([rows, _parse_rates(rows)])
 
     out["promo"] = _promo_vectors()

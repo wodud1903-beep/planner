@@ -215,11 +215,13 @@ ok("단추 글자", (v.btn_image.text(), v.btn_start.text(), v.btn_stop.text()) 
    ("이미지 불러오기", "매크로 시작 (INSERT)", "매크로 중지 (DELETE)"))
 ok("카드 처음 글자 · 발송인원수 0", [lb.text() for lb in (v.lbl_success, v.lbl_stop, v.lbl_speed, v.lbl_skip)]
    == ["성공횟수", "중단횟수", "속도:", "건너뜀"] and v.ed_count.text() == "0")
-ok("도구 메뉴 — 자주 쓰는 문구 · 환경설정 · 수정로그", [a.text() for a in v.btn_tools.menu().actions()]
-   == ["자주 쓰는 문구", "환경설정", "수정로그"])
+ok("도구 메뉴 — 자주 쓰는 문구 · 발송 기록(v1.38) · 환경설정 · 수정로그", [a.text() for a in v.btn_tools.menu().actions()]
+   == ["자주 쓰는 문구", "발송 기록", "환경설정", "수정로그"])
 ok("진행 글 '0건 진행'", v.lbl_progress.text() == "0건 진행")
 v.act_log.trigger()
-ok("수정로그 → '도움말 내용 생략'(그대로)", MSGS[-1:] == ["도움말 내용 생략"])
+ok("수정로그 → 실제 이력 창(v1.38 — A1Auto 는 '도움말 내용 생략')", v._dlg_log is not None and v._dlg_log.isVisible()
+   and km.CHANGE_LOG[0][0] in v._dlg_log.text.toPlainText())
+v._dlg_log.close()
 ok("1초마다 카드(Timer2) — '성공: 0'", wait(lambda: v.lbl_success.text() == "성공: 0", 2.5) and v.lbl_speed.text() == "속도:")
 v.rb_modes[0].click()
 ok("텍스트 → 이미지 불러오기 꺼짐", not v.btn_image.isEnabled())

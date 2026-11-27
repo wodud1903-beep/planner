@@ -284,6 +284,17 @@ select(["계약서.pdf"])
 tab.merge_selected()
 settle(tab)
 ok("또 합치면 '(2)' 를 붙여 묻는다", Path(asked.get("path", "")).name == want.stem + " (2).pdf", asked.get("path"))
+# 이름을 '.pdf' 없이 적었는데 그 이름의 PDF 가 이미 있다 — 저장 창은 붙이기 전 이름으로 물었으니 다시 묻는다
+before = want.read_bytes()
+QUESTIONS = []
+QMessageBox.question = staticmethod(lambda *a, **k: QUESTIONS.append(a[2]) or QMessageBox.No)
+QFileDialog.getSaveFileName = staticmethod(lambda parent, title, path, filt: (str(want)[:-4], filt))
+select(["계약서.pdf"])
+tab.merge_selected()
+settle(tab)
+ok("'.pdf' 를 붙인 이름이 이미 있으면 묻고 · [아니오] 면 그대로", QUESTIONS and "이미 있습니다" in QUESTIONS[-1]
+   and want.read_bytes() == before, QUESTIONS)
+QFileDialog.getSaveFileName = staticmethod(fake_save)
 BOXES.clear()
 select(["메모.txt"])
 tab.merge_selected()

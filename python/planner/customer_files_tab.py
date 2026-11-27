@@ -1559,6 +1559,11 @@ class CustomerFilesTab(QWidget):
             return
         if not fn.lower().endswith(".pdf"):
             fn += ".pdf"
+            # 저장 창의 '덮어쓸까요?' 는 .pdf 를 붙이기 전 이름으로 물었다 — 붙인 이름이 이미 있으면 여기서 다시 묻는다
+            if os.path.exists(fn) and QMessageBox.question(
+                    self, config.APP_NAME, f"'{os.path.basename(fn)}' 이(가) 이미 있습니다. 바꿀까요?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
         prog = QProgressDialog("PDF 로 합치는 중…", "", 0, len(order), self)
         prog.setCancelButton(None)
         prog.setWindowModality(Qt.WindowModal)
