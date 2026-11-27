@@ -7,7 +7,7 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readdirSync, statSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -563,7 +563,7 @@ console.log("\n[업데이트 우회 길] 저장소가 비공개가 돼도 PC 가
 console.log("\n[회원] v1.37 — PC 앱에 로그인한 계정 목록 · 관리자만 본다");
 {
   process.env.GOOGLE_CLIENT_SECRET = "test-secret";
-  const M = load("members.js");
+  const M = load("_members.js");
   const T = M._test;
   const box = new Map();
   T.setStore({ async get(id) { return box.has(id) ? JSON.parse(box.get(id)) : null; },
@@ -607,10 +607,34 @@ console.log("\n[회원] v1.37 — PC 앱에 로그인한 계정 목록 · 관리
   })());
   T.setStore(null);
   delete process.env.BLOB_READ_WRITE_TOKEN; delete process.env.BLOB_STORE_ID;
-  const M2 = load("members.js");
+  const M2 = load("_members.js");
   r = res();
   await M2({ method: "GET", url: "/api/members", headers: {} }, r);
   ok("저장소가 아직이면 503 no_store", r.statusCode === 503 && r.json().error === "no_store");
+  // 함수 한도 — Vercel 무료는 한 배포에 서버 함수 12개까지(13개째에서 v1.37.0 웹 배포가 통째로 실패했다)
+  const fnFiles = [];
+  (function walk(d, base) {
+    for (const n of readdirSync(d)) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) walk(p, base + n + "/");
+      else if (n.endsWith(".js") && !n.startsWith("_")) fnFiles.push(base + n);
+    }
+  })(join(ROOT, "api"), "");
+  ok("서버 함수 12개 이하(무료 요금제 한도)", fnFiles.length <= 12, `${fnFiles.length}개: ${fnFiles.join(", ")}`);
+  const vj = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf-8"));
+  ok("/api/members 는 api/update 로 이어 준다", (vj.rewrites || []).some((x) => x.source === "/api/members"
+     && x.destination === "/api/update?route=members"));
+  process.env.GOOGLE_CLIENT_SECRET = "test-secret";
+  const MM = load("_members.js");
+  MM._test.setStore({ async get() { return null; }, async put() {}, async list() { return []; } });
+  MM._test.setWho(async (t) => (t === "T-admin" ? "wodud1903@gmail.com" : ""));
+  const U = load("update.js");
+  for (const url of ["/api/members", "/api/update?route=members"]) {
+    const rr = res();
+    await U({ method: "GET", url, headers: { authorization: "Bearer T-admin" } }, rr);
+    ok(`update.js 가 회원 목록도 받는다(${url})`, rr.statusCode === 200 && Array.isArray(rr.json().members), rr.body);
+  }
+  MM._test.setStore(null);
   delete process.env.GOOGLE_CLIENT_SECRET;
 }
 
