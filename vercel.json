@@ -59,5 +59,11 @@
         }
       ]
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/members",
+      "destination": "/api/update?route=members"
+    }
   ]
 }

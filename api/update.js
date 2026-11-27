@@ -41,7 +41,12 @@ async function pick(app, token, tag) {
 const exeOf = (rel) => (rel.assets || []).find((a) =>
   /\.exe$/i.test(a.name || "") || /\.exe$/i.test(a.label || ""));
 
+// 회원 목록(/api/members)도 이 함수가 받는다 — 무료 요금제의 함수 12개 한도(vercel.json 주소 연결 · api/_members.js)
+const isMembers = (req) => /^\/api\/members(\?|$)/.test(req.url || "")
+  || new URL(req.url || "/", "http://x").searchParams.get("route") === "members";
+
 module.exports = async (req, res) => {
+  if (isMembers(req)) { await require("./_members.js")(req, res); return; }
   if (req.method !== "GET") { send(res, 405, { error: "method" }); return; }
   const token = (process.env.GITHUB_UPDATE_TOKEN || "").trim();
   if (!token) { send(res, 503, { error: "not_configured" }); return; }
