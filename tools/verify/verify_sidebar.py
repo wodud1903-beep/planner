@@ -73,7 +73,7 @@ nav = side.nav
 print("[1] 배치 — 왼쪽 메뉴 + 오른쪽 화면, 상단바·탭 막대는 없다")
 ok("탭 막대는 숨겼다", not w.tabs.tabBar().isVisible())
 ok("상단바가 없다", not hasattr(w, "_topbar"))
-ok("메뉴 줄 = 탭 수", nav.count() == w.tabs.count() == 8, (nav.count(), w.tabs.count()))
+ok("메뉴 줄 = 탭 수", nav.count() == w.tabs.count() == 9, (nav.count(), w.tabs.count()))
 ok("메뉴가 탭과 같은 순서·같은 이름", nav.names() == tab_names(w), nav.names())
 ok("메뉴 글자도 탭 이름", nav_texts(w) == tab_names(w))
 ok("메뉴마다 아이콘", all(not nav.item(i).icon().isNull() for i in range(nav.count())))
@@ -146,9 +146,9 @@ wide = side.width()
 side.btn_fold.click()
 pump()
 ok("좁아졌다", side.width() == side.W_SHUT < wide, (wide, side.width()))
-ok("메뉴 글자를 숨기고 이름은 풍선 도움말로",
+ok("메뉴 글자를 숨기고 이름은 풍선 도움말로(단축키도 함께 — v1.37)",
    all(t == "" for t in nav_texts(w))
-   and all(nav.item(i).toolTip() == nav.item(i).data(Qt.UserRole) for i in range(nav.count())))
+   and all(nav.item(i).toolTip() == f"{nav.item(i).data(Qt.UserRole)} (Ctrl+{i + 1})" for i in range(nav.count())))
 ok("계정·버전·시작 실행은 숨김",
    not w.lbl_account.isVisible() and not w.btn_ver.isVisible() and not w.chk_startup.isVisible())
 ok("단추는 아이콘만", side.btn_primary.text() == "" and w.btn_settings.text() == "")
@@ -185,12 +185,12 @@ print("\n[8] 기능이 늘면 메뉴에 저절로 붙는다")
 extra = QWidget()
 w.tabs.addTab(extra, "새 기능")
 w._sync_nav()
-ok("새 탭이 메뉴 끝에", nav.count() == 9 and nav.names()[-1] == "새 기능")
+ok("새 탭이 메뉴 끝에", nav.count() == 10 and nav.names()[-1] == "새 기능")
 ok("표에 없는 이름은 기본 아이콘", navicons.for_tab("새 기능") == "dot"
-   and not nav.item(8).icon().isNull())
+   and not nav.item(9).icon().isNull())
 w.tabs.removeTab(w.tabs.indexOf(extra))
 w._sync_nav()
-ok("빼면 메뉴에서도 빠진다", nav.count() == 8)
+ok("빼면 메뉴에서도 빠진다", nav.count() == 9)
 
 print("\n[9] 아이콘 — 모두 그려진다")
 for nm in navicons.NAMES:

@@ -24,6 +24,7 @@ let _err = "";
 let _timer = 0;
 let _view = null;        // 지금 띄운 보기 (닫을 때 blob 주소를 되돌려준다)
 const SEARCH_DELAY = 130;
+const ROOT_RULE = 2;     // 폴더 찾는 규칙 판 — 2: 내 드라이브 바로 밑 먼저(v1.35.2)
 const RECENT_MAX = 8;
 
 // ---------------------------------------------------------------- 설정·목록
@@ -49,7 +50,9 @@ export async function load({ refresh = true } = {}) {
   const ref = await folderRef();
   const cached = await store.get("data", "driveTop");
   // 저장본은 같은 폴더 설정으로 받은 것만 쓴다(옛 저장본엔 설정 값이 없다 — 그건 그대로 쓴다)
-  if (cached && cached.items && (!cached.ref || cached.ref === ref)) {
+  // 저장본은 같은 폴더 설정으로, 지금 찾는 규칙(ROOT_RULE)으로 받은 것만 쓴다 — 예전 규칙은 이름이 같은
+  // 다른 폴더(옛 복사본)를 골랐을 수 있다(v1.35.2). 그때는 버리고 다시 찾는다.
+  if (cached && cached.items && cached.rule === ROOT_RULE && (!cached.ref || cached.ref === ref)) {
     _rootId = cached.rootId; _rootRef = ref; setTop(cached.items);
   } else if (!refresh || cached) { _rootId = ""; _rootRef = ""; setTop([]); }   // 계정·폴더가 바뀌었다
   if (!refresh) return;
@@ -60,7 +63,7 @@ export async function load({ refresh = true } = {}) {
     _rootId = id; _rootRef = ref;
     const items = await drive.listFolder(id);
     _err = "";
-    await store.put("data", "driveTop", { rootId: id, ref, items, at: Date.now() });
+    await store.put("data", "driveTop", { rootId: id, ref, items, at: Date.now(), rule: ROOT_RULE });
     setTop(items);
     return true;
   } catch (e) {

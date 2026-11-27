@@ -11,5 +11,15 @@
     { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
     { "src": "./icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "멘트 보내기", "short_name": "멘트", "description": "채널마다 상담후 · 부재중 멘트와 명함을 카카오톡으로",
+      "url": "./#/ment", "icons": [{ "src": "./icons/sc-ment.png", "sizes": "96x96", "type": "image/png" }] },
+    { "name": "고객 찾기", "short_name": "고객", "description": "고객관리 목록 · 검색",
+      "url": "./#/customers", "icons": [{ "src": "./icons/sc-customers.png", "sizes": "96x96", "type": "image/png" }] },
+    { "name": "자료 찾기", "short_name": "자료", "description": "업무자료 검색",
+      "url": "./#/kb", "icons": [{ "src": "./icons/sc-kb.png", "sizes": "96x96", "type": "image/png" }] },
+    { "name": "수당 계산", "short_name": "수당", "description": "수당계산기",
+      "url": "./#/calc", "icons": [{ "src": "./icons/sc-calc.png", "sizes": "96x96", "type": "image/png" }] }
   ]
 }

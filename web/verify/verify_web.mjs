@@ -2842,8 +2842,38 @@ console.log("\n[30] v1.35 — 폰 목록이 화면을 다 쓴다 · 메뉴 여�
   await pv.click("#kbback");
   await pv.waitForTimeout(300);
   const after = (await rows()).map((t) => t.trim());
-  ok("검색어 없이 보면 즐겨찾기 → 최근 본 것 → 나머지", after[0] === "★KB캐피탈" && after[1] === "🕘현대캐피탈",
-     after.join(" | "));
+  ok("검색어 없이 보면 즐겨찾기가 맨 위 · 본 자료는 올리지 않는다(최근 본 자료 없앰 — v1.35.3)",
+     after[0] === "★KB캐피탈" && !after.some((t) => t.includes("🕘"))
+     && JSON.stringify(after.slice(1)) === JSON.stringify(first.filter((t) => t !== "KB캐피탈")), after.join(" | "));
+  ok("최근 본 자료를 기기에 적지 않는다", (await pv.evaluate(() => new Promise((res) => {
+    const r = indexedDB.open("planner");
+    r.onsuccess = () => { const g = r.result.transaction("meta").objectStore("meta").get("kbRecent");
+                          g.onsuccess = () => res(g.result === undefined); };
+  }))));
+  // ---- v1.35.3 업무자료검색 웹과 같은 모양
+  ok("목록 줄 — 분류 글자 · 제목 · 아래 금융사·분류", (await pv.locator("#kblist button.row .av").count()) > 0
+     && (await pv.locator("#kblist button.row .tx .s").count()) > 0);
+  ok("분류 칩에 건수", /전체\s*\d+/.test(await pv.locator('#kbcats button[data-cat=""]').innerText()),
+     await pv.locator("#kbcats").innerText());
+  ok("목록 아래 자료 건수", (await pv.locator("#kbfoottext").innerText()).includes("건"));
+  ok("[내 정보] 단추는 그대로", await pv.locator("#kbme").isVisible());
+  await pv.setViewportSize({ width: 1366, height: 800 });
+  await pv.goto(s.url + "#/kb", { waitUntil: "networkidle" });
+  await pv.waitForSelector("#kblist button.row", { timeout: 8000 });
+  ok("PC 폭 — 고르기 전 오른쪽은 '찾을 자료를 골라 주세요'", (await pv.locator("#kbdetail .hello").isVisible())
+     && (await pv.locator("#kbdetail").innerText()).includes("찾을 자료를 골라 주세요"));
+  await pv.locator("#kblist button.row").first().click();
+  await pv.waitForSelector("#kbdetail .dhead", { timeout: 5000 });
+  ok("고르면 머리(분류 글자·제목·꼬리표) · 본문 상자 · 본문 복사(주 단추)",
+     (await pv.locator("#kbdetail .dhead .tags .tag").count()) >= 1 && (await pv.locator("#kbdetail .kbbody").count()) === 1
+     && (await pv.locator("#kbcopy.primary").count()) === 1);
+  ok("고른 줄을 칠한다", (await pv.locator('#kblist button.row[aria-current="true"]').count()) === 1);
+  await pv.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await pv.keyboard.press("/");
+  ok("'/' 를 누르면 검색칸으로", await pv.evaluate(() => document.activeElement && document.activeElement.id === "kbq"));
+  const ov = await pv.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  ok("가로로 넘치지 않는다", ov);
+  await pv.setViewportSize({ width: 412, height: 900 });
   // ---- P1 프로모션 바뀐 곳(같은 달 판끼리만)
   await pv.goto(s.url + "#/promo", { waitUntil: "networkidle" });
   await pv.waitForSelector("#promolist .prow", { timeout: 10000 });
@@ -2901,6 +2931,206 @@ ok("레일이 세로로 선다", rail.w < 200, Math.round(rail.w) + "px");
 // 레일이 본문 **왼쪽**에 있는지까지 봐야 잡힌다.
 ok("레일이 본문 왼쪽에 붙는다", rail.x < rail.bodyX,
    `rail=${Math.round(rail.x)} body=${Math.round(rail.bodyX)}`);
+
+
+console.log("\n[31] v1.35.2 — 이름이 같은 '고객정보' 가 여럿: 내 드라이브 바로 밑 것 · 예전에 잘못 찾아 둔 것은 버린다");
+{
+  // 지점장: "모바일에서는 고객서류가 잘 나오는데 PC 웹에서는 폴더가 안 나와." — 드라이브에 '고객정보' 가 다섯 개.
+  // 예전 규칙(가장 최근 수정)은 '계약고객' 하나 든 옛 복사본을 골랐고, 그 결과를 저장본(driveTop)에 두고 계속 썼다.
+  const F = "application/vnd.google-apps.folder";
+  for (const [ref, label] of [["고객정보", "이름"], ["G:\\내 드라이브\\고객정보", "PC 경로(G:\\내 드라이브\\…)"]]) {
+    const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await c.addInitScript(([ref]) => {
+      sessionStorage.setItem("planner.tok", JSON.stringify({
+        token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+      if (sessionStorage.getItem("seeded31")) return;
+      sessionStorage.setItem("seeded31", "1");
+      const req = indexedDB.open("planner", 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        for (const n of ["meta", "data"]) if (!db.objectStoreNames.contains(n)) db.createObjectStore(n);
+        if (!db.objectStoreNames.contains("recent")) db.createObjectStore("recent", { keyPath: "uid" });
+      };
+      req.onsuccess = () => {
+        const t = req.result.transaction(["meta", "data"], "readwrite");
+        t.objectStore("meta").put(ref, "driveFolder");
+        // 예전 판이 잘못 찾아 둔 것(규칙 표시 없음)
+        t.objectStore("data").put({ rootId: "OLD_COPY", ref, at: 1,
+          items: [{ id: "K1", name: "계약고객", mimeType: "application/vnd.google-apps.folder" }] }, "driveTop");
+      };
+    }, [ref]);
+    const qs = [];
+    await c.route("**/accounts.google.com/**", (r) => r.abort());
+    await c.route("**/sheets.googleapis.com/**", (r) => r.fulfill({ json: { values: [] } }));
+    await c.route("**/www.googleapis.com/drive/v3/**", (r) => {
+      const u = decodeURIComponent(r.request().url());
+      if (u.includes("appDataFolder")) return r.fulfill({ json: { files: [] } });
+      if (u.includes("name='고객정보'")) {
+        qs.push(u);
+        return r.fulfill({ json: { files: u.includes("'root' in parents") ? [{ id: "REAL" }]
+                                                                         : [{ id: "OLD_COPY" }, { id: "REAL" }] } });
+      }
+      if (u.includes("'REAL' in parents")) return r.fulfill({ json: { files: [
+        { id: "C1", name: "진정진 120i", mimeType: F }, { id: "C2", name: "최정현", mimeType: F }] } });
+      if (u.includes("'OLD_COPY' in parents")) return r.fulfill({ json: { files: [{ id: "K1", name: "계약고객", mimeType: F }] } });
+      return r.fulfill({ json: { files: [] } });
+    });
+    const pq = await page(c);
+    await pq.goto(s2.url + "#/docs", { waitUntil: "networkidle" });
+    await pq.waitForFunction(() => document.querySelector("#dlist") &&
+      document.querySelector("#dlist").textContent.includes("최정현"), null, { timeout: 8000 }).catch(() => {});
+    const t = await pq.locator("#dlist").innerText();
+    ok(`${label}: PC 웹에서 내 드라이브\\고객정보 의 고객 폴더가 나온다`, t.includes("진정진 120i") && t.includes("최정현"), t.replace(/\s+/g, " "));
+    ok(`${label}: 옛 복사본('계약고객' 하나)은 안 나온다`, !t.includes("계약고객"));
+    ok(`${label}: 내 드라이브 바로 밑에서 먼저 찾는다`, qs.length > 0 && qs[0].includes("'root' in parents"), qs.length + "번");
+    const saved = await pq.evaluate(() => new Promise((res) => {
+      const req = indexedDB.open("planner");
+      req.onsuccess = () => {
+        const g = req.result.transaction("data").objectStore("data").get("driveTop");
+        g.onsuccess = () => res(g.result || null);
+      };
+    }));
+    ok(`${label}: 새 규칙으로 다시 저장한다`, saved && saved.rootId === "REAL" && saved.rule === 2, JSON.stringify(saved && { id: saved.rootId, rule: saved.rule }));
+    await c.close();
+  }
+  const segs = await (async () => {
+    const c = await browser.newContext();
+    const pq = await page(c);
+    await pq.goto(s2.url + "#/docs");
+    const r = await pq.evaluate(async () => {
+      const m = await import("./js/drive.js");
+      return [m.driveSegs(["G:", "내 드라이브", "영업", "고객정보"]), m.driveSegs(["My Drive", "고객정보"]),
+              m.driveSegs(["영업", "고객정보"]), m.driveSegs(["G:", "고객정보"])];
+    });
+    await c.close();
+    return r;
+  })();
+  ok("경로 앞머리(G: · 내 드라이브 · My Drive)를 뗀다", JSON.stringify(segs) ===
+     JSON.stringify([["영업", "고객정보"], ["고객정보"], ["영업", "고객정보"], ["고객정보"]]), JSON.stringify(segs));
+}
+
+console.log("\n[32] v1.37 — 폰에서 멘트 · 명함 보내기(PC 멘트복사와 같은 글 · 같은 명함) · 홈 화면 바로가기");
+{
+  const { createHash } = await import("node:crypto");
+  const key = (n) => createHash("sha1").update(String(n).trim(), "utf8").digest("hex").slice(0, 16);
+  // 진짜 PNG(1×1) — 공유 파일의 크기 · 형식을 본다
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  const greet = [{ name: "에이원오토", after: "상담후 인사 — 에이원오토", miss: "부재중 인사 — 에이원오토", at: "2026-11-02T00:00:00Z" },
+                 { name: "우리금융", after: "상담후 인사 — 우리금융", miss: "부재중 인사 — 우리금융" },
+                 { name: "지운채널", after: "x", miss: "y", at: "2026-10-01T00:00:00Z" }];
+  const app = {
+    "planner_sync.json": { id: "PCS32", mod: "2026-11-10T01:00:00.000Z", body: { updatedAt: "2026-11-10T01:00:00Z",
+      files: { "greetings.json": JSON.stringify(greet), "deleted.json": JSON.stringify({ "greetings.json": { "지운채널": "2026-10-05T00:00:00Z" } }) },
+      times: {} } },
+  };
+  const cardName = `bizcard_${key("에이원오토")}.png`;
+  let media = 0, listed = 0;
+  const c32 = await browser.newContext({ viewport: { width: 400, height: 860 }, timezoneId: "Asia/Seoul" });
+  await c32.addInitScript(() => {
+    sessionStorage.setItem("planner.tok", JSON.stringify({
+      token: "test-token-ascii-only", expiresAt: Date.now() + 3600e3, email: "me@example.com" }));
+    // 폰 공유 창 · 클립보드 흉내 — 무엇을 넘겼는지 적는다
+    window.__shared = []; window.__copied = []; window.__shareErr = "";
+    const share = async (d) => {
+      const files = (d.files || []).map((f) => ({ name: f.name, type: f.type, size: f.size }));
+      window.__shared.push({ text: d.text || "", files });
+      if (window.__shareErr) { const e = new Error("x"); e.name = window.__shareErr; throw e; }
+    };
+    Object.defineProperty(navigator, "share", { value: share, configurable: true });
+    Object.defineProperty(navigator, "canShare", { value: (d) => !!(d && d.files && d.files.length), configurable: true });
+    Object.defineProperty(navigator, "clipboard", { value: {
+      writeText: async (t) => { window.__copied.push(t); },
+      write: async (items) => { window.__copied.push("[그림]"); },
+    }, configurable: true });
+  });
+  await c32.route("**/accounts.google.com/**", (r) => r.abort());
+  await c32.route("**/www.googleapis.com/drive/v3/**", (r) => {
+    const u = decodeURIComponent(r.request().url());
+    if (u.includes("spaces=appDataFolder") && u.includes("name contains 'bizcard_'")) {
+      listed++;
+      return r.fulfill({ json: { files: [{ id: "BC1", name: cardName, md5Checksum: "md5-1", modifiedTime: "2026-11-10T00:00:00Z" },
+                                         { id: "BC9", name: "bizcard_ffffffffffffffff.png", md5Checksum: "z" }] } });
+    }
+    if (u.includes("spaces=appDataFolder")) {
+      const name = (u.match(/name='([^']+)'/) || [])[1];
+      const f = app[name];
+      return r.fulfill({ json: { files: f ? [{ id: f.id, name, modifiedTime: f.mod }] : [] } });
+    }
+    if (u.includes("files/BC1?alt=media")) { media++; return r.fulfill({ body: PNG, contentType: "image/png" }); }
+    const m = u.match(/files\/([A-Za-z0-9_]+)\?alt=media/);
+    const f = m && Object.values(app).find((x) => x.id === m[1]);
+    if (f) return r.fulfill({ body: JSON.stringify(f.body), contentType: "application/json" });
+    return r.fulfill({ json: { files: [] } });
+  });
+  const p32 = await page(c32);
+  await p32.goto(s2.url + "#/agenda", { waitUntil: "networkidle" });
+  await p32.waitForTimeout(600);
+  ok("홈 위쪽에 [멘트·명함]", (await p32.locator("#agment").count()) === 1
+     && (await p32.locator("#agment").getAttribute("href")) === "#/ment");
+  await p32.click("#agment");
+  await p32.waitForTimeout(1200);
+  const names = (await p32.locator(".mentrow .mentname").allTextContents()).map((x) => x.trim());
+  ok("PC 멘트복사의 채널 그대로(지운 채널은 빠진다)", JSON.stringify(names) === JSON.stringify(["에이원오토", "우리금융"]), names.join(","));
+  const btns = await p32.locator(".mentrow").first().locator("button").allTextContents();
+  ok("채널마다 [상담후] [부재중] [명함]", JSON.stringify(btns.map((x) => x.trim())) === JSON.stringify(["상담후", "부재중", "명함"]));
+  const cardBtn = (i) => p32.locator(".mentrow").nth(i).locator('button[data-act="card"]');
+  ok("명함을 올린 채널만 [명함] 켜짐(PC 와 같다)", await cardBtn(0).isEnabled() && !(await cardBtn(1).isEnabled()));
+  ok("명함은 열 때 미리 받아 둔다(누르면 바로)", media === 1, `받기 ${media}번`);
+  await p32.locator(".mentrow").nth(0).locator('button[data-act="after"]').click();
+  await p32.waitForTimeout(300);
+  let sh = await p32.evaluate(() => ({ shared: window.__shared, copied: window.__copied }));
+  ok("[상담후] → 공유 창에 그 글 · 클립보드에도", sh.shared.length === 1 && sh.shared[0].text === "상담후 인사 — 에이원오토"
+     && sh.copied.includes("상담후 인사 — 에이원오토"), JSON.stringify(sh).slice(0, 200));
+  await cardBtn(0).click();
+  await p32.waitForTimeout(300);
+  sh = await p32.evaluate(() => window.__shared);
+  const last = sh[sh.length - 1];
+  ok("[명함] → 그림 파일로 공유('명함_에이원오토.png' · PNG)", last.files.length === 1 && last.files[0].name === "명함_에이원오토.png"
+     && last.files[0].type === "image/png" && last.files[0].size === PNG.length, JSON.stringify(last));
+  await p32.evaluate(() => { window.__shareErr = "AbortError"; });
+  await p32.locator(".mentrow").nth(1).locator('button[data-act="miss"]').click();
+  await p32.waitForTimeout(300);
+  ok("공유 창을 그냥 닫으면 아무 말 없다(클립보드엔 있다)", !(await p32.locator("#toast").isVisible())
+     && (await p32.evaluate(() => window.__copied)).includes("부재중 인사 — 우리금융"));
+  await p32.evaluate(() => { window.__shareErr = ""; delete Navigator.prototype.share; Object.defineProperty(navigator, "share", { value: undefined, configurable: true }); });
+  await p32.locator(".mentrow").nth(1).locator('button[data-act="after"]').click();
+  await p32.waitForTimeout(300);
+  const t32 = await p32.locator("#toast").innerText().catch(() => "");
+  ok("공유 창이 없는 기기 → 복사하고 알린다", t32.includes("복사했어요"), t32);
+  await p32.goto(s2.url + "#/agenda");
+  await p32.waitForTimeout(400);
+  await p32.goto(s2.url + "#/ment");
+  await p32.waitForTimeout(1200);
+  ok("다시 열면 — 바뀌지 않은 명함은 다시 받지 않는다", media === 1 && listed >= 2, `받기 ${media}번 · 목록 ${listed}번`);
+  delete app["planner_sync.json"];
+  await p32.evaluate(async () => (await import("./js/ui/ment.js")).load());
+  await p32.waitForTimeout(800);
+  const dn = (await p32.locator(".mentrow .mentname").allTextContents()).map((x) => x.trim());
+  ok("PC 에서 고친 적 없으면 PC 기본 문구의 채널", dn.length === 6 && dn[0] === "에이원오토" && dn.includes("KB캐피탈"), dn.join(","));
+  await c32.close();
+
+  // ---- H5 홈 화면 바로가기(안드로이드: 앱 아이콘을 길게 누르면)
+  const man = JSON.parse(readFileSync(join(WEB, "manifest.webmanifest"), "utf-8"));
+  const sc = man.shortcuts || [];
+  ok("바로가기 넷 — 멘트 보내기 · 고객 찾기 · 자료 찾기 · 수당 계산",
+     JSON.stringify(sc.map((x) => [x.name, x.url])) === JSON.stringify([["멘트 보내기", "./#/ment"], ["고객 찾기", "./#/customers"],
+                                                                     ["자료 찾기", "./#/kb"], ["수당 계산", "./#/calc"]]));
+  const dims = sc.map((x) => {
+    const f = join(WEB, x.icons[0].src.replace(/^\.\//, ""));
+    if (!existsSync(f)) return "없음";
+    const b = readFileSync(f);
+    return `${b.readUInt32BE(16)}x${b.readUInt32BE(20)}`;
+  });
+  ok("바로가기마다 96×96 아이콘", dims.every((d) => d === "96x96") && sc.every((x) => x.icons[0].sizes === "96x96"), dims.join(","));
+  const pS = await page(await browser.newContext());
+  const hits = [];
+  for (const x of sc) {
+    await pS.goto(s2.url + x.url.slice(1), { waitUntil: "domcontentloaded" });
+    await pS.waitForTimeout(500);
+    hits.push(await pS.evaluate(() => location.hash));
+  }
+  ok("바로가기 주소가 그 화면으로 열린다", JSON.stringify(hits) === JSON.stringify(["#/ment", "#/customers", "#/kb", "#/calc"]), hits.join(","));
+}
 
 await browser.close();
 await s2.close();

@@ -854,6 +854,54 @@ def drive_write(auth: GoogleAuth, name: str, content: str) -> str:
     return fid
 
 
+
+# ---- 앱 전용 공간의 그림 파일(명함 사진 — v1.36, bizcard) ----
+def drive_find_meta(auth: GoogleAuth, name: str) -> Optional[dict]:
+    """appDataFolder 의 name 파일 → {id, md5Checksum, modifiedTime, size} (없으면 None)."""
+    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20, params={
+        "spaces": "appDataFolder",
+        "q": f"name='{name}'",
+        "fields": "files(id,name,modifiedTime,md5Checksum,size)",
+    })
+    if r.status_code != 200:
+        raise _drive_fail("Drive 조회 실패", r)
+    files = r.json().get("files", [])
+    return files[0] if files else None
+
+
+def drive_read_bytes(auth: GoogleAuth, file_id: str) -> bytes:
+    r = _http().get(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(),
+                     timeout=60, params={"alt": "media"})
+    if r.status_code != 200:
+        raise _drive_fail("Drive 다운로드 실패", r)
+    return r.content
+
+
+def drive_write_bytes(auth: GoogleAuth, name: str, data: bytes, mime: str) -> str:
+    """appDataFolder 에 name 파일(그림 등)을 만들거나 갈아 끼운다 → file_id."""
+    meta = drive_find_meta(auth, name)
+    fid = meta["id"] if meta else None
+    if fid is None:
+        r = _http().post(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+                          json={"name": name, "parents": ["appDataFolder"], "mimeType": mime})
+        if r.status_code not in (200, 201):
+            raise _drive_fail("Drive 파일 생성 실패", r)
+        fid = r.json()["id"]
+    hdr = auth._headers()
+    hdr["Content-Type"] = mime
+    up = _http().patch(f"{config.DRIVE_UPLOAD_URL}/{fid}", headers=hdr, timeout=60,
+                        params={"uploadType": "media"}, data=data)
+    if up.status_code not in (200, 201):
+        raise _drive_fail("Drive 업로드 실패", up)
+    return fid
+
+
+def drive_delete(auth: GoogleAuth, file_id: str) -> None:
+    """앱 전용 공간의 파일을 지운다(없으면 그냥 넘어간다)."""
+    r = _http().delete(f"{config.DRIVE_FILES_URL}/{file_id}", headers=auth._headers(), timeout=20)
+    if r.status_code not in (200, 204, 404):
+        raise _drive_fail("Drive 삭제 실패", r)
+
 # ---------------------------------------------------------------------------
 # 드라이브 '내 드라이브' 조회 ('고객정보' 탭)
 #
@@ -872,7 +920,7 @@ def _drive_escape(name: str) -> str:
 def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
     """폴더 이름(또는 id)으로 폴더 id 를 찾는다. 못 찾으면 빈 값.
 
-    이름이 같은 폴더가 여럿이면 가장 최근 것을 쓴다.
+    이름이 같은 폴더가 여럿이면 내 드라이브 바로 밑 것, 없으면 가장 최근 것을 쓴다.
     """
     folder = (folder or "").strip()
     if not folder:
@@ -884,19 +932,21 @@ def drive_folder_id(auth: GoogleAuth, folder: str) -> str:
                          params={"fields": "id,mimeType"})
         if r.status_code == 200 and r.json().get("mimeType") == DRIVE_FOLDER_MIME:
             return folder
-    r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
-                     params={
-                         "q": (f"name='{_drive_escape(folder)}'"
-                               f" and mimeType='{DRIVE_FOLDER_MIME}'"
-                               " and trashed=false"),
-                         "fields": "files(id,name,modifiedTime)",
-                         "orderBy": "modifiedTime desc",
-                         "pageSize": 10,
-                     })
-    if r.status_code != 200:
-        raise GoogleError(f"드라이브 폴더 조회 실패 (HTTP {r.status_code})")
-    files = r.json().get("files", [])
-    return files[0]["id"] if files else ""
+    # 이름이 같은 폴더가 여럿이면 **내 드라이브 바로 밑** 것이 먼저(v1.35.2). 폴더의 수정 시각은 안에 고객
+    # 폴더를 넣어도 바뀌지 않아, '가장 최근' 만 보면 옛 복사본('계약고객' 하나 든 것)을 골랐다.
+    for parent in ("root", ""):
+        q = (f"name='{_drive_escape(folder)}'"
+             f" and mimeType='{DRIVE_FOLDER_MIME}'"
+             " and trashed=false" + (f" and '{parent}' in parents" if parent else ""))
+        r = _http().get(config.DRIVE_FILES_URL, headers=auth._headers(), timeout=20,
+                         params={"q": q, "fields": "files(id,name,modifiedTime)",
+                                 "orderBy": "modifiedTime desc", "pageSize": 10})
+        if r.status_code != 200:
+            raise GoogleError(f"드라이브 폴더 조회 실패 (HTTP {r.status_code})")
+        files = r.json().get("files", [])
+        if files:
+            return files[0]["id"]
+    return ""
 
 
 # 구글이 '너무 빨리 묻는다'(429)거나 잠깐 탈이 났을 때(5xx) 다시 물어보는 횟수.

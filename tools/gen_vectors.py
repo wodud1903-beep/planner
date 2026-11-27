@@ -417,6 +417,12 @@ def main() -> int:
     out["promo"] = _promo_vectors()
     out["promo_track"] = _promo_track_vectors()
 
+    # 멘트 · 명함 보내기(v1.37, 폰 웹) — PC [멘트복사] 와 같은 기본 문구 · 같은 명함 열쇠(web/js/ment.js)
+    from planner import bizcard, greetings  # noqa: E402 — bizcard 는 Qt 를 부른다(여기서만)
+    out["greetings_defaults"] = greetings.defaults()
+    out["bizcard_keys"] = [[n, bizcard.key_of(n)] for n in (
+        "에이원오토", "우리금융", "BNK캐피탈", "KB캐피탈", "  하나캐피탈 ", "롯데렌터카 본점", "A1 Auto", "😊 이모지", "")]
+
     dest = ROOT / "web" / "verify" / "vectors.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n",

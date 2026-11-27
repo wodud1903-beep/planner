@@ -1,16 +1,16 @@
 """인삿말 탭 — 채널별 인삿말을 한 번 눌러 클립보드에 복사한다.
 
-쓰시던 HTML 도구를 그대로 옮긴 화면이다. 채널마다 [상담후] / [부재중]
-두 버튼이 있고, 누르면 그 문구가 복사되며 버튼이 잠깐 초록으로 바뀐다.
-문구는 [문구 편집] 에서 직접 고칠 수 있다.
+쓰시던 HTML 도구를 그대로 옮긴 화면이다. 채널마다 [상담후] / [부재중] / [명함복사]
+세 버튼이 있고, 누르면 그 문구(명함은 그림)가 복사되며 버튼이 잠깐 초록으로 바뀐다.
+문구는 [문구 편집] 에서, 명함 사진은 카드마다 [명함] 에서 올린다(v1.36 — bizcard, 채널마다 따로 v1.36.1).
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMessageBox, QPushButton, QScrollArea, QSizePolicy, QTextEdit, QVBoxLayout,
     QWidget,
 )
@@ -25,6 +25,8 @@ from .ment_templates import TemplateSection
 TONE_AFTER = "blue"
 TONE_MISS = "teal"
 TONE_OK = "green"
+TONE_CARD = "amber"       # 명함복사(v1.36)
+CARD_OFF_TIP = "이 채널의 명함 사진을 먼저 올려 주세요 — 카드 오른쪽 위 [명함 올리기]"
 
 COLS = 2                  # 한 줄에 카드 몇 개
 _FLASH_MS = 1200
@@ -77,7 +79,7 @@ class _CopyButton(QPushButton):
 
 
 class _ChannelCard(QFrame):
-    def __init__(self, on_copy, parent=None):
+    def __init__(self, on_copy, on_card=None, on_edit_card=None, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.NoFrame)
         # 가로만 늘어나고 세로는 내용 높이 그대로 — 카드마다 크기가 달라지지 않게
@@ -86,8 +88,17 @@ class _ChannelCard(QFrame):
         v.setContentsMargins(12, 10, 12, 12)
         v.setSpacing(8)
 
+        head = QHBoxLayout()
+        head.setSpacing(6)
         self.lbl = QLabel("")
-        v.addWidget(self.lbl)
+        head.addWidget(self.lbl, 1)
+        # 이 채널의 명함 사진(v1.36.1 — 채널마다 다른 명함)
+        self.btn_cardset = QPushButton("명함 올리기")
+        self.btn_cardset.setCursor(Qt.PointingHandCursor)
+        self.btn_cardset.setToolTip("이 채널의 [명함복사] 로 복사할 명함 사진을 올리거나 바꿉니다")
+        self.btn_cardset.clicked.connect(lambda _c=False: on_edit_card(self) if on_edit_card else None)
+        head.addWidget(self.btn_cardset)
+        v.addLayout(head)
 
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -96,9 +107,19 @@ class _ChannelCard(QFrame):
         for b, state in ((self.btn_after, "상담후"), (self.btn_miss, "부재중")):
             b.clicked.connect(lambda _c=False, bb=b, st=state: on_copy(self, bb, st))
             row.addWidget(b, 1)
+        # 명함복사(v1.36) — 올려 둔 명함 사진을 클립보드에. 명함이 없으면 꺼 둔다(set_card)
+        self.btn_card = _CopyButton("명함복사", TONE_CARD)
+        self.btn_card.clicked.connect(lambda _c=False: on_card(self, self.btn_card) if on_card else None)
+        row.addWidget(self.btn_card, 1)
+        self.set_card(False)
         v.addLayout(row)
 
         self.name = ""
+
+    def set_card(self, on: bool) -> None:
+        self.btn_card.setEnabled(bool(on))
+        self.btn_card.setToolTip(f"{self.name} 명함 사진을 클립보드에 — 카톡 대화창에서 Ctrl+V" if on else CARD_OFF_TIP)
+        self.btn_cardset.setText("명함 ✓" if on else "명함 올리기")
 
     def set_channel(self, ch: dict) -> None:
         self.name = (ch.get("name") or "").strip()
@@ -113,9 +134,14 @@ class _ChannelCard(QFrame):
         self.lbl.setStyleSheet(
             f"color:{theme.c('text')};font-size:15px;font-weight:bold;"
             "background:transparent;border:none;")
+        self.btn_cardset.setStyleSheet(
+            f"QPushButton{{background:{theme.c('window_bg')};color:{theme.strong('orange')};"
+            f"border:1px solid {theme.c('border')};border-radius:8px;padding:3px 10px;font-size:12px;font-weight:bold;}}"
+            f"QPushButton:hover{{background:{theme.c('btn_hover')};}}")
         # 단추 색도 함께 — 카드만 바꾸면 안 눌린 단추가 예전 색으로 남는다
         self.btn_after.apply_theme()
         self.btn_miss.apply_theme()
+        self.btn_card.apply_theme()
 
 
 class GreetingEditDialog(QDialog):
@@ -125,7 +151,8 @@ class GreetingEditDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("멘트 문구 편집")
         self.resize(720, 560)
-        self.items = [dict(it) for it in items]
+        # _orig = 열 때의 이름 — 이름을 바꾸면 그 채널의 명함도 새 이름으로 옮긴다(v1.36.1)
+        self.items = [dict(it, _orig=it.get("name", "")) for it in items]
         self._cur = -1
 
         root = QVBoxLayout(self)
@@ -199,6 +226,7 @@ class GreetingEditDialog(QDialog):
                 "name": self.ed_name.text().strip(),
                 "after": self.ed_after.toPlainText(),
                 "miss": self.ed_miss.toPlainText(),
+                "_orig": self.items[self._cur].get("_orig", ""),
             }
 
     def _on_row(self, row: int) -> None:
@@ -263,11 +291,110 @@ class GreetingEditDialog(QDialog):
         return None
 
 
+class BizCardDialog(QDialog):
+    """명함 사진 — 보기 · [사진 고르기…] · [붙여넣기] · [빼기]. 올리면 내 구글 계정(앱 전용 공간)에도 둔다."""
+
+    def __init__(self, card, auth_getter, parent=None, name: str = ""):
+        super().__init__(parent)
+        self._name = name
+        self.setWindowTitle(f"명함 사진 — {name}" if name else "명함 사진")
+        self.resize(520, 460)
+        self._card = card
+        self._auth = auth_getter
+        v = QVBoxLayout(self)
+        hint = QLabel(f"'{name}' 카드의 [명함복사] 를 누르면 이 사진이 클립보드에 들어갑니다(카톡 대화창에서 Ctrl+V).\n"
+                      "채널마다 다른 명함을 올릴 수 있습니다. 내 구글 계정에 저장되어 같은 계정의 다른 PC 에도 따라갑니다.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{theme.c('subtext')};")
+        v.addWidget(hint)
+        self.lbl_img = QLabel()
+        self.lbl_img.setAlignment(Qt.AlignCenter)
+        self.lbl_img.setMinimumHeight(280)
+        self.lbl_img.setStyleSheet(f"background:{theme.c('panel_bg')};border:1px dashed {theme.c('border')};"
+                                   f"border-radius:10px;color:{theme.c('subtext')};")
+        v.addWidget(self.lbl_img, 1)
+        row = QHBoxLayout()
+        self.btn_pick = QPushButton("사진 고르기…")
+        self.btn_pick.clicked.connect(self._pick)
+        self.btn_paste = QPushButton("붙여넣기(Ctrl+V)")
+        self.btn_paste.clicked.connect(self._paste)
+        self.btn_del = QPushButton("빼기")
+        self.btn_del.clicked.connect(self._remove)
+        for b in (self.btn_pick, self.btn_paste, self.btn_del):
+            row.addWidget(b)
+        row.addStretch(1)
+        close = QPushButton("닫기")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        v.addLayout(row)
+        QShortcut(QKeySequence.Paste, self, activated=self._paste)
+        self._paint()
+
+    def _paint(self) -> None:
+        img = self._card.image(self._name)
+        if img is None:
+            self.lbl_img.setPixmap(QPixmap())
+            self.lbl_img.setText("아직 명함 사진이 없습니다.\n[사진 고르기…] 로 고르거나, 캡처한 그림을 Ctrl+V")
+        else:
+            pm = QPixmap.fromImage(img).scaled(460, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.lbl_img.setPixmap(pm)
+        self.btn_del.setEnabled(img is not None)
+        self.btn_pick.setText("다른 사진으로…" if img is not None else "사진 고르기…")
+
+    def _ready(self) -> bool:
+        auth = self._auth() if callable(self._auth) else None
+        if auth is None or not auth.is_connected():
+            QMessageBox.information(self, config.APP_NAME,
+                                    "명함 사진은 구글 로그인 뒤에 올릴 수 있습니다.\n[설정] 에서 Google 로그인을 먼저 해 주세요.")
+            return False
+        return True
+
+    def _put(self, img: QImage) -> None:
+        if not self._ready():
+            return
+        err = self._card.set_image(self._name, img, self._auth())
+        if err:
+            QMessageBox.warning(self, config.APP_NAME, err)
+        self._paint()
+
+    def _pick(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "명함 사진 고르기", "",
+                                              "그림 (*.png *.jpg *.jpeg *.bmp *.gif *.webp)")
+        if path:
+            self._put(QImage(path))
+
+    def _paste(self) -> None:
+        md = QGuiApplication.clipboard().mimeData()
+        img = QImage()
+        if md is not None and md.hasImage():
+            img = QImage(md.imageData())
+        elif md is not None and md.hasUrls():
+            for u in md.urls():
+                if u.isLocalFile():
+                    img = QImage(u.toLocalFile())
+                    if not img.isNull():
+                        break
+        if img.isNull():
+            QMessageBox.information(self, config.APP_NAME, "클립보드에 그림이 없습니다.")
+            return
+        self._put(img)
+
+    def _remove(self) -> None:
+        if QMessageBox.question(self, config.APP_NAME,
+                                f"'{self._name}' 명함 사진을 뺄까요? (다른 PC 에서도 빠집니다)") != QMessageBox.Yes:
+            return
+        auth = self._auth() if callable(self._auth) else None
+        self._card.remove(self._name, auth)
+        self._paint()
+
+
 class GreetingTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items: list = []
         self.cards: list = []
+        self.bizcard = None              # 명함 사진(main_window 가 set_bizcard 로 넣는다)
+        self.auth_getter = None          # 명함을 올릴 때 쓸 구글 로그인
         # 문구를 고치면 알려 준다(메인 창이 Drive 동기화를 예약한다)
         self.on_changed = None
 
@@ -308,11 +435,27 @@ class GreetingTab(QWidget):
         self.scroll.setWidget(inner)
         v.addWidget(self.scroll, 1)
 
-        self.lbl_status = QLabel("파란색 = 상담후   ·   청록색 = 부재중")
+        self.lbl_status = QLabel("파란색 = 상담후   ·   청록색 = 부재중   ·   주황색 = 명함")
         v.addWidget(self.lbl_status)
 
         self.reload()
         self.apply_theme()
+
+    def set_bizcard(self, card, auth_getter=None) -> None:
+        """명함 사진(bizcard.BizCard) — 생기거나 빠지면 [명함복사] 를 켜고 끈다."""
+        self.bizcard = card
+        self.auth_getter = auth_getter
+        card.changed.connect(self._paint_card)
+        self._paint_card()
+
+    def _paint_card(self, *_a) -> None:
+        for c in self.cards:
+            c.set_card(bool(self.bizcard and self.bizcard.has(c.name)))
+
+    def _edit_bizcard(self, card: "_ChannelCard") -> None:
+        if self.bizcard is None:
+            return
+        BizCardDialog(self.bizcard, self.auth_getter, self, name=card.name).exec()
 
     def set_template_specs(self, specs: list) -> None:
         """아래 '고객 안내 문구' 카드들(main_window 가 무엇을 할지 넣어 준다)."""
@@ -331,8 +474,9 @@ class GreetingTab(QWidget):
             c.deleteLater()
         self.cards = []
         for i, ch in enumerate(self.items):
-            card = _ChannelCard(self._copy)
+            card = _ChannelCard(self._copy, self._copy_card, self._edit_bizcard)
             card.set_channel(ch)
+            card.set_card(bool(self.bizcard and self.bizcard.has(card.name)))
             self.grid.addWidget(card, i // COLS, i % COLS)
             self.cards.append(card)
         for col in range(COLS):
@@ -343,12 +487,19 @@ class GreetingTab(QWidget):
         got = GreetingEditDialog.run(self.items, self)
         if got is None:
             return
-        self.items = got
+        if self.bizcard is not None:
+            auth = self.auth_getter() if callable(self.auth_getter) else None
+            for it in got:
+                old, new = (it.get("_orig") or "").strip(), (it.get("name") or "").strip()
+                if old and new and old != new:
+                    self.bizcard.rename(old, new, auth)
+        self.items = [{k: v for k, v in it.items() if k != "_orig"} for it in got]
         try:
             greetings.save(self.items)
         except Exception as e:
             QMessageBox.warning(self, config.APP_NAME, "문구 저장 실패:\n" + str(e))
         self._rebuild()
+        self._paint_card()
         self.lbl_status.setText("문구를 저장했습니다.")
         if callable(self.on_changed):
             try:
@@ -368,6 +519,13 @@ class GreetingTab(QWidget):
             return
         btn.flash()
         self.lbl_status.setText(f"{card.name}({state}) 복사됨 ✓")
+
+    def _copy_card(self, card: "_ChannelCard", btn: "_CopyButton") -> None:
+        if self.bizcard is None or not self.bizcard.copy(card.name):
+            self.lbl_status.setText(CARD_OFF_TIP)
+            return
+        btn.flash()
+        self.lbl_status.setText(f"{card.name} — 명함 사진 복사됨 ✓ (카톡 대화창에서 Ctrl+V)")
 
     # ---- 테마 ----
     def apply_theme(self) -> None:

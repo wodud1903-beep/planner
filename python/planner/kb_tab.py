@@ -118,7 +118,7 @@ def sub_line(it: dict) -> str:
 
 
 class _ItemDelegate(QStyledItemDelegate):
-    """자료 한 줄(v1.35) — 위: (★/🕘) 제목 · 아래: 금융사 · 분류(작게) · 오른쪽: 📎(첨부 있음).
+    """자료 한 줄(v1.35) — 위: (★) 제목 · 아래: 금융사 · 분류(작게) · 오른쪽: 📎(첨부 있음).
 
     예전엔 제목만 보여서 어느 금융사 · 어느 분류 자료인지 열어 봐야 알았다."""
 
@@ -262,8 +262,6 @@ class KbView(QWidget):
         self.lst.currentRowChanged.connect(self._show)
         self.lst.itemActivated.connect(
             lambda _i: self.picked.emit(self.lst.current_item_data() or {}))
-        # 누르거나 복사한 자료는 '최근 본 자료' 로(v1.35) — 처음 열 때 저절로 고른 첫 줄은 빼고
-        self.lst.itemClicked.connect(lambda li: self._touch(li.data(Qt.UserRole)))
 
         right = QWidget()
         rv = QVBoxLayout(right)
@@ -351,7 +349,7 @@ class KbView(QWidget):
         cat = self.cat_chips.current
         found = kb.search(self.items, q, cat)
         if not q.strip() and not cat:
-            found = kb_marks.arrange(found)       # 즐겨찾기 → 최근 본 것 → 나머지
+            found = kb_marks.arrange(found)       # 즐겨찾기 → 나머지(최근 본 자료는 v1.35.3 에서 뺐다)
         # ⚠️ 목록을 다시 채우는 동안에는 '고른 줄이 바뀜' 신호를 막는다. 안 막으면
         #    비우는 순간 '아무것도 안 고름' 이 와서 오른쪽(첨부 줄)을 비웠다가 다시
         #    채운다 — 검색할 때마다 첨부를 통째로 다시 그리던 이유다. 다 채운 뒤 한 번만 보여 준다.
@@ -367,10 +365,6 @@ class KbView(QWidget):
         self.lbl_status.setText(
             f"{n}건 찾음 (전체 {total}건)" if q.strip() or cat
             else f"전체 {total}건")
-
-    def _touch(self, it) -> None:
-        if it:
-            kb_marks.touch(it)
 
     def _toggle_fav(self) -> None:
         it = self.lst.current_item_data()
@@ -507,7 +501,6 @@ class KbView(QWidget):
             atts = self.lst_att.selected_atts() or self.lst_att.atts()
         if not atts:
             return
-        self._touch(self.lst.current_item_data())
         if any(not kb_files.cached(a) for a in atts):
             # 아직 받는 중 — 다 받으면 그때 복사한다(누른 것을 잊지 않는다)
             self._want_copy = list(atts)
@@ -594,7 +587,6 @@ class KbView(QWidget):
     def _copy_body(self) -> None:
         it = self.lst.current_item_data() or {}
         self._copy(it.get("body", ""), "본문")
-        self._touch(it)
 
     def focus_search(self) -> None:
         self.ed_find.setFocus()

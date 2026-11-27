@@ -14,6 +14,7 @@ import * as WK from "../js/weekly.js";
 import * as BD from "../js/board.js";
 import * as SH from "../js/sheets.js";
 import * as PR from "../js/promo.js";
+import * as MT from "../js/ment.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const V = JSON.parse(readFileSync(join(here, "vectors.json"), "utf-8"));
@@ -252,6 +253,28 @@ console.log("\n[18] 프로모션 바뀐 곳 (promo.py track) — 같은 달 판�
     Object.entries(S[4].marks).filter(([, m]) => m).map(([k]) => k).sort(), ["audi", "benz"]);
   eq("아우디(제목에 달이 없음)는 받은 날로", [S[4].marks.audi.from, S[4].marks.audi.to], ["12/01", "12/15"]);
   console.log(`  ${T.steps.length * 4 + T.title_month.length * 2 + 8}개 대조`);
+}
+
+console.log("\n[멘트] 폰 멘트 · 명함(v1.37) — PC 멘트복사와 같은 글 · 같은 명함 열쇠");
+{
+  eq("기본 문구 = PC greetings.DEFAULTS", MT.DEFAULTS, V.greetings_defaults);
+  for (const [name, key] of V.bizcard_keys) eq(`명함 열쇠(${JSON.stringify(name)}) = PC bizcard.key_of`, await MT.bizKey(name), key);
+  eq("명함 파일 이름", MT.cardFile("0123456789abcdef"), "bizcard_0123456789abcdef.png");
+  eq("PC 에서 고친 적 없으면(파일 없음) 기본 문구", MT.liveGreetings(null).map((g) => g.name), V.greetings_defaults.map((g) => g.name));
+  eq("깨졌거나 비었으면 기본 문구", MT.liveGreetings([{ name: "  " }, 3, null]).length, V.greetings_defaults.length);
+  const saved = [{ name: " 우리금융 ", after: "A", miss: "M", at: "2026-11-01T00:00:00Z" },
+                 { name: "지운채널", after: "x", miss: "y", at: "2026-10-01T00:00:00Z" },
+                 { name: "되살린채널", after: "x", miss: "y", at: "2026-11-05T00:00:00Z" },
+                 { name: "옛채널", after: 5, miss: null }];
+  const dead = { "greetings.json": { "지운채널": "2026-10-02T00:00:00Z", "되살린채널": "2026-11-01T00:00:00Z",
+                                     "옛채널": "2026-01-01T00:00:00Z" } };
+  eq("저장한 것 — 이름 앞뒤 공백 빼고 · 지운 표식보다 나중에 고친 것만(PC tombs 와 같은 규칙)",
+     MT.liveGreetings(saved, dead), [{ name: "우리금융", after: "A", miss: "M" }, { name: "되살린채널", after: "x", miss: "y" }]);
+  eq("지운 표식이 없으면 다 보인다", MT.liveGreetings(saved).map((g) => g.name), ["우리금융", "지운채널", "되살린채널", "옛채널"]);
+  eq("글이 아닌 값은 글로", MT.liveGreetings(saved).at(-1), { name: "옛채널", after: "5", miss: "" });
+  eq("공유할 명함 파일 이름", [MT.cardName("에이원오토"), MT.cardName("A/B:C"), MT.cardName("")],
+     ["명함_에이원오토.png", "명함_A B C.png", "명함_채널.png"]);
+  console.log(`  ${V.bizcard_keys.length + 9}개 대조`);
 }
 
 console.log("\n" + (fails ? `${fails}건 실패 / ${total}건` : `전부 통과 (${total}건)`));
