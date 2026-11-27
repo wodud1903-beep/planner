@@ -66,13 +66,19 @@ from . import sidebar as sidebar_mod
 
 
 class _AppDataIO:
-    """내 구글 계정 앱 전용 공간(appDataFolder)의 글 파일 — 카톡 매크로 설정 · 문구(kakao_macro.json, v1.37)."""
+    """내 구글 계정 앱 전용 공간(appDataFolder)의 글 파일 — 카톡 매크로 설정 · 문구(kakao_macro.json, v1.37) ·
+    발송 기록(kakao_history.json, v1.38)."""
 
     def __init__(self, auth):
         self.auth = auth
 
     def find(self, name: str):
         return google_client.drive_find(self.auth, name)
+
+    def meta(self, name: str):
+        """(파일 id, 판 md5) — 발송 기록이 그대로면 받지 않게. 없으면 (None, "")."""
+        m = google_client.drive_find_meta(self.auth, name)
+        return (m["id"], m.get("md5Checksum") or "") if m else (None, "")
 
     def read(self, fid: str) -> str:
         return google_client.drive_read_bytes(self.auth, fid).decode("utf-8", errors="replace")

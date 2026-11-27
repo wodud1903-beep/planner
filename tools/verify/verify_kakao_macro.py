@@ -899,7 +899,7 @@ ok("…다음 맞추기에 올라감", "맞추는 중에 저장" in json.loads(S
 
 # ===========================================================================
 print("[16] 서버 기능은 없다 — 킬스위치 · 비밀번호 · 서버 주소")
-srcs = [_ROOT / "python/planner" / f for f in ("kakao_macro.py", "kakao_win.py", "kakao_macro_view.py")]
+srcs = [_ROOT / "python/planner" / f for f in ("kakao_macro.py", "kakao_win.py", "kakao_macro_view.py", "kakao_history.py")]
 srcs = [s for s in srcs if s.is_file()]
 bad_words = ("http://", "https://", "dothome", ".php", "sv.txt", "pwhash", "AppPwHash", "del.bat", "서버 점검 중",
              "비밀번호를 입력", "프로그램 인증", "URLDownloadToFile", "kmacro_public", "jy2 hansome")

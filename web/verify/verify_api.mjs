@@ -600,6 +600,26 @@ console.log("\n[회원] v1.37 — PC 앱에 로그인한 계정 목록 · 관리
      r.statusCode === 200 && m.length === 2 && st.apps.planner.n === 2 && st.apps.kb.ver === "1.10.0"
      && st.apps.planner.first === "2026-11-27T01:00:00.000Z" && st.apps.planner.last === "2026-11-27T02:00:00.000Z",
      JSON.stringify(m).slice(0, 200));
+  // PC 를 켜면 두 프로그램이 같은 순간 알린다 — 한쪽이 다른 쪽을 덮어 목록에서 빠지면 안 된다(v1.38)
+  const slow = new Map();
+  T.setStore({ async get(id) { await new Promise((ok_) => setTimeout(ok_, 5)); return slow.has(id) ? JSON.parse(slow.get(id)) : null; },
+               async put(id, rec) { await new Promise((ok_) => setTimeout(ok_, 5)); slow.set(id, JSON.stringify(rec)); },
+               async list() { return [...slow.keys()]; } });
+  // v1.37 에 쓴 묶음 파일(앱 둘을 한 파일에)
+  const crypto = await import("node:crypto");
+  const hid = (e) => crypto.createHash("sha256").update(e).digest("hex").slice(0, 32);
+  slow.set(hid("kim@example.com"), JSON.stringify({ email: "kim@example.com",
+    apps: { planner: { first: "2026-11-20T00:00:00.000Z", last: "2026-11-26T00:00:00.000Z", ver: "1.37.0", n: 4 } } }));
+  await Promise.all([call("POST", "T-staff", { app: "planner", ver: "1.38.0" }), call("POST", "T-staff", { app: "kb", ver: "1.11.0" })]);
+  await call("POST", "T-other", { app: "planner", ver: "1.38.0" });
+  r = await call("GET", "T-admin");
+  const m2 = r.json().members || [];
+  const st2 = m2.find((x) => x.email === "staff@example.com");
+  const kim = m2.find((x) => x.email === "kim@example.com");
+  ok("같은 순간 두 앱이 알려도 둘 다 남는다(앱마다 따로 저장)", st2 && st2.apps.planner && st2.apps.kb
+     && st2.apps.kb.ver === "1.11.0", JSON.stringify(m2).slice(0, 300));
+  ok("예전(v1.37) 묶음 파일도 읽고 · 처음 날 · 횟수를 이어 받는다", m2.length === 2 && kim.apps.planner.first === "2026-11-20T00:00:00.000Z"
+     && kim.apps.planner.n === 5 && kim.apps.planner.ver === "1.38.0", JSON.stringify(kim));
   ok("관리자 = PC config.RATES_ADMINS", (() => {
     const py = readFileSync(join(ROOT, "python", "planner", "config.py"), "utf-8");
     const mm = py.match(/RATES_ADMINS = \(([^)]*)\)/);

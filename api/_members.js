@@ -11,7 +11,9 @@
 //        → 200 {members: [{email, apps: {planner|kb: {first, last, ver, n}}}]}   관리자가 아니면 403
 //   503 {error: "not_configured" | "no_store"}       서버 설정 · 저장소(Blob)가 아직이면
 //
-// 저장: 비공개 Blob members/<이메일 해시>.json — 내용도 로그인 쿠키와 같은 열쇠로 한 번 더 잠근다(_session.seal).
+// 저장: 비공개 Blob members/<이메일 해시>.<앱>.json — 앱마다 따로(v1.38). 한 파일에 두 앱을 담으면 PC 를 켤 때
+//       두 프로그램이 같은 순간 알려 나중 것이 앞 것을 덮어 한 앱이 목록에서 빠졌다. v1.37 의 members/<해시>.json
+//       (앱 묶음)도 그대로 읽는다. 내용은 로그인 쿠키와 같은 열쇠로 한 번 더 잠근다(_session.seal).
 // 토큰은 저장하지 않는다. 관리자 = python/planner/config.py RATES_ADMINS 와 같다(검사가 대조한다).
 const crypto = require("node:crypto");
 const s = require("./_session.js");
@@ -94,20 +96,37 @@ module.exports = async (req, res) => {
     const ver = String(b.ver || "").slice(0, 20);
     const id = idOf(email);
     const at = now().toISOString();
-    const rec = (await st.get(id)) || { email, apps: {} };
-    const a = rec.apps[app] || { first: at, n: 0 };
-    rec.email = email;
-    rec.apps[app] = { first: a.first || at, last: at, ver, n: (a.n || 0) + 1 };
-    await st.put(id, rec);
+    let a = await st.get(`${id}.${app}`);
+    if (!a) {                                      // 이 앱은 처음 — v1.37 묶음 파일에 있던 처음 날 · 횟수를 이어 받는다
+      const old = await st.get(id).catch(() => null);
+      a = (old && old.apps && old.apps[app]) || { first: at, n: 0 };
+    }
+    await st.put(`${id}.${app}`, { email, app, first: a.first || at, last: at, ver, n: (a.n || 0) + 1 });
     s.send(res, 200, { ok: true });
     return;
   }
   if (!ADMINS.includes(email)) { s.send(res, 403, { error: "admin" }); return; }
   const ids = await st.list();
   const recs = (await Promise.all(ids.map((id) => st.get(id).catch(() => null)))).filter((r) => r && r.email);
+  // 이메일마다 하나로 — 앱마다 파일(v1.38)과 예전 묶음 파일(v1.37)을 합친다(같은 앱이면 나중에 알린 것)
+  const by = new Map();
+  const add = (email, app, x) => {
+    if (!APPS.has(app) || !x) return;
+    const m = by.get(email) || { email, apps: {} };
+    const had = m.apps[app];
+    if (!had || String(x.last || "") > String(had.last || "")) {
+      m.apps[app] = { first: x.first || "", last: x.last || "", ver: x.ver || "", n: x.n || 0 };
+    }
+    by.set(email, m);
+  };
+  for (const r of recs) {
+    if (r.app) add(r.email, r.app, r);
+    else for (const [app, x] of Object.entries(r.apps || {})) add(r.email, app, x);
+  }
+  const out = [...by.values()];
   const last = (r) => Object.values(r.apps || {}).map((x) => x.last || "").sort().pop() || "";
-  recs.sort((x, y) => (last(y) > last(x) ? 1 : last(y) < last(x) ? -1 : 0));
-  s.send(res, 200, { members: recs });
+  out.sort((x, y) => (last(y) > last(x) ? 1 : last(y) < last(x) ? -1 : 0));
+  s.send(res, 200, { members: out });
 };
 
 module.exports._test = {
