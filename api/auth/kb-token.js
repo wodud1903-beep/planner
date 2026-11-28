@@ -7,6 +7,7 @@
 // 쪽지(callback.js 의 sealKb)는 이 서버만 연다. 쪽지 자체가 열쇠라 보낸 곳(Origin)은 따지지 않는다
 // (서버끼리 묻는 길이다). 쪽지에서 나온 토큰은 드라이브 앱 전용 공간 권한만 갖는다.
 const s = require("../_session.js");
+const members = require("../_members.js");
 
 function body(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -19,6 +20,11 @@ module.exports = async (req, res) => {
   const h = String(body(req).h || "");
   const sess = h.length < 4096 ? s.unsealKb(h) : null;
   if (!sess || !sess.rt) { s.send(res, 401, { error: "signin" }); return; }
+  // 지점장이 사용을 제한한 계정이면 토큰을 주지 않는다(v1.40 — 로그인은 남겨 두고 화면이 '사용 제한' 을 알린다)
+  if ((await members.check(sess.email)).blocked) {
+    s.send(res, 403, { error: "blocked", email: sess.email || "" });
+    return;
+  }
   let g;
   try {
     g = await s.google({ refresh_token: sess.rt, grant_type: "refresh_token" });

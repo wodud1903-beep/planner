@@ -24,8 +24,29 @@ let _mode = "";           // "server" | "legacy" | "" (아직 모름)
 let _missing = [];        // 받은 권한에서 빠진 것(동의 화면에서 체크를 덜 했다)
 
 export const STATE = {
-  UNKNOWN: "unknown", AUTHED: "authed", NEED: "needsSignIn", OFFLINE: "offline",
+  UNKNOWN: "unknown", AUTHED: "authed", NEED: "needsSignIn", OFFLINE: "offline", BLOCKED: "blocked",
 };
+let _blocked = "";                    // 지점장이 사용을 제한한 계정(v1.40) — 있으면 화면을 잠근다(boot.js)
+/** 사용이 제한된 계정 이메일(아니면 ""). */
+export function blocked() { return _blocked; }
+function lockOut(mail) {
+  _blocked = String(mail || "") || "이 계정";
+  drop();
+  setState(STATE.BLOCKED);
+  try { dispatchEvent(new CustomEvent("planner:blocked", { detail: _blocked })); } catch (e) { /* 옛 브라우저 */ }
+}
+/** 켤 때 · 30분마다 — 지점장이 이 계정의 사용을 제한했나(v1.40). 받아 둔 토큰(1시간)으로 쓰는 동안에도 막히게.
+ *  못 물으면(오프라인 · 서버 탈남) 그냥 둔다. */
+export async function checkBlocked() {
+  if (_blocked || !_tok || !_tok.token) return false;
+  try {
+    const r = await fetch("/api/members?me=1", { headers: { Authorization: "Bearer " + _tok.token }, cache: "no-store" });
+    if (r.status !== 200) return false;
+    const j = (await r.json()) || {};
+    if (j.blocked) { lockOut(j.email || _tok.email); return true; }
+  } catch (e) { /* 못 물었다 — 다음에 */ }
+  return false;
+}
 let _state = STATE.UNKNOWN;
 
 export function state() { return _state; }
@@ -41,6 +62,7 @@ function tellEmail(e) {
 }
 function setState(s) {
   if (s === _state) return;
+  if (_blocked && s !== STATE.BLOCKED) return;   // 잠근 뒤엔 같이 나가던 토큰 요청이 '로그인됨' 으로 되돌리지 못한다
   _state = s;
   for (const fn of _listeners) { try { fn(s); } catch (e) { /* 화면 하나가 탈나도 계속 */ } }
 }
@@ -54,6 +76,7 @@ function load() {
   } catch (e) { return null; }
 }
 function save(t) {
+  if (_blocked) return;                            // 잠근 뒤에 도착한 토큰은 받아 두지 않는다
   _tok = t;
   try { sessionStorage.setItem(KEY, JSON.stringify(t)); } catch (e) { /* 사생활 보호 모드 */ }
 }
@@ -85,6 +108,7 @@ async function fromServer(timeoutMs = 8000) {
     let j = {};
     try { j = await r.json(); } catch (e) { return undefined; }
     if (!j.access_token) return undefined;
+    if (_blocked) return null;
     _mode = "server";
     _missing = Array.isArray(j.missing) ? j.missing : [];
     const had = _tok && _tok.email;
@@ -100,6 +124,16 @@ async function fromServer(timeoutMs = 8000) {
     return t;
   }
   if (r.status === 401) { _mode = "server"; return null; }
+  if (r.status === 403) {
+    // 지점장이 사용을 제한한 계정 — 예전 방식으로 넘어가지 않는다(그러면 팝업 로그인으로 비켜 갈 수 있다)
+    let j = {};
+    try { j = (await r.json()) || {}; } catch (e) { j = {}; }
+    if (j.error === "blocked") {
+      _mode = "server";
+      lockOut(j.email);
+      return null;
+    }
+  }
   // 503 은 둘이다 — 우리 서버가 '비밀 설정 전' 이라고 답한 것(→ 예전 방식)과, 서버·구글이
   // 잠깐 탈난 것(→ 잠시 뒤 다시). 예전엔 둘 다 예전 방식으로 넘어가 팝업이 막히고 빈 화면이었다.
   let why = "";
@@ -249,6 +283,7 @@ let _refreshing = null;
  * ⚠️ 예전엔 401 뒤에도 같은 토큰을 다시 돌려줘 재시도가 늘 같은 401 로 끝났다.
  */
 export async function token({ interactive = false, refresh = false, fresh = false } = {}) {
+  if (_blocked) return null;                       // 사용 제한(v1.40) — 화면이 잠겼다
   const now = Date.now();
   if (fresh) drop();
   if (_tok && _tok.expiresAt > now) {

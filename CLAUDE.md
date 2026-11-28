@@ -12,7 +12,7 @@
 ## 카톡 매크로(`kakao_*.py`)
 - **고칠 때마다 `kakao_macro.CHANGE_LOG` 맨 위에 한 절을 더한다**(날짜 · 판 · 직원이 읽을 말 다섯 줄 안쪽).
   매크로 화면 도구 → 수정로그에 그대로 보인다(지점장 v1.38 요청: "수정로그는 앞으로 너가 직접 업데이트해서 올려줘").
-- `kakao_win.py` · `kakao_macro.py` · `kakao_history.py` · `kakao_macro_view.py` · `members.py` 는 업무자료검색
+- `kakao_win.py` · `kakao_macro.py` · `kakao_history.py` · `kakao_macro_view.py` · `members.py` · `member_lock.py` 는 업무자료검색
   (`kbsearch/kbsearch/`)과 **글자 하나 다르지 않은 사본**이다 — 고치면 그쪽에도 옮기고 업무자료검색도 낸다.
 - A1Auto 동작(키 순서 · 기다리는 시간 · 로그 줄 · customers.tsv 모양)은 바꾸지 않는다. 바꾼 것은 kakao_macro 맨 위
   'A1Auto 와 다른 것' 에 적는다.
@@ -20,3 +20,5 @@
 ## 지킬 것
 - 저장소는 공개 — 토큰 · 비밀번호 · 개인 정보는 넣지 않는다. 검사 자료는 지어낸 것만.
 - 수입차 프로모션 시트는 읽기만 한다(쓰기 권한 · 쓰는 코드를 넣지 않는다).
+- 지점장(`config.OWNER_EMAIL` = `members.OWNER` = 서버 `api/_members.js` OWNER)만 회원 목록 · 사용 제한 · 관리자 지정.
+  관리자 권한은 코드에 박은 목록(RATES_ADMINS · KB_ADMINS) + 서버가 정한 관리자(`config.grant_admin`)다.

@@ -774,3 +774,13 @@ a.chip { text-decoration: none; display: inline-flex; align-items: center; }
 .mentbtn.card { background: #b45309; }
 .mentbtn:active { filter: brightness(.92); }
 .mentbtn[disabled] { background: var(--line); color: var(--sub); cursor: default; }
+
+/* 사용이 제한된 계정(v1.40) — 화면 전체를 덮는다 */
+.blockedwrap { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: var(--bg); }
+.blockedcard { max-width: 420px; width: 100%; background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px; padding: 24px 20px; text-align: center; }
+.blockedcard h2 { margin: 0 0 8px; font-size: 20px; }
+.blockedcard p { margin: 8px 0; color: var(--sub); line-height: 1.55; }
+.blockedcard .blockedmail { color: var(--text); font-weight: 700; word-break: break-all; }
+.blockedbtns { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }

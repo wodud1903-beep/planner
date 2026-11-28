@@ -3132,6 +3132,46 @@ console.log("\n[32] v1.37 — 폰에서 멘트 · 명함 보내기(PC 멘트복�
   ok("바로가기 주소가 그 화면으로 열린다", JSON.stringify(hits) === JSON.stringify(["#/ment", "#/customers", "#/kb", "#/calc"]), hits.join(","));
 }
 
+console.log("\n[33] v1.40 — 지점장이 사용을 제한한 계정: 화면 전체 잠금 · 예전 팝업 로그인으로 비켜 가지 못함");
+{
+  const c33 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  const gis = [], outs = [];
+  await c33.route("**/api/auth/token", (r) => r.fulfill({ status: 403, json: { error: "blocked", email: "bad@example.com" } }));
+  await c33.route("**/api/auth/logout", (r) => { outs.push(1); return r.fulfill({ json: { ok: true } }); });
+  await c33.route("**/accounts.google.com/**", (r) => { gis.push(r.request().url()); return r.abort(); });
+  const p33 = await page(c33);
+  await p33.goto(s2.url + "#/agenda");
+  await p33.waitForSelector("#blockedwrap", { timeout: 6000 }).catch(() => {});
+  const txt = (await p33.locator("#blockedwrap").textContent().catch(() => "")) || "";
+  ok("토큰 403 blocked → 화면 전체를 덮는 '사용이 제한된 계정' · 그 이메일", txt.includes("사용이 제한된 계정")
+     && txt.includes("bad@example.com") && txt.includes("지점장에게 문의"), txt.slice(0, 80));
+  ok("예전 방식(구글 팝업 로그인)으로 넘어가지 않는다", gis.length === 0, gis.join(" "));
+  ok("[다른 계정으로 로그인] · [로그아웃] 만", await p33.locator("#blockedswitch").isVisible()
+     && await p33.locator("#blockedout").isVisible());
+  await p33.locator("#blockedout").click();
+  await p33.waitForTimeout(500);
+  ok("[로그아웃] → 로그인 서버에 로그아웃", outs.length >= 1);
+  await c33.close();
+
+  // 받아 둔 토큰(1시간)으로 쓰는 중에 제한됐다 — 켤 때 · 30분마다 묻는다(?me=1)
+  const c34 = await browser.newContext({ viewport: { width: 412, height: 900 } });
+  await c34.route("**/api/auth/token", (r) => r.fulfill({ json: { access_token: "srv-ok", expires_in: 3600,
+                                                                  email: "late@example.com", missing: [] } }));
+  const asked = [];
+  await c34.route("**/api/members**", (r) => {
+    asked.push(r.request().headers().authorization || "");
+    return r.fulfill({ json: { email: "late@example.com", owner: false, admin: false, blocked: true } });
+  });
+  const p34 = await page(c34);
+  await p34.goto(s2.url + "#/agenda");
+  await p34.waitForSelector("#blockedwrap", { timeout: 6000 }).catch(() => {});
+  ok("토큰은 받았어도 내 상태가 blocked 면 잠금(토큰을 들고 묻는다)", await p34.locator("#blockedwrap").isVisible()
+     && asked.some((a) => a === "Bearer srv-ok"), asked.join(","));
+  const left = await p34.evaluate(() => sessionStorage.getItem("planner.tok"));
+  ok("잠그면 받아 둔 토큰도 버린다", !left, String(left).slice(0, 40));
+  await c34.close();
+}
+
 await browser.close();
 await s2.close();
 console.log("\n" + (fails ? `${fails}건 실패` : "전부 통과"));

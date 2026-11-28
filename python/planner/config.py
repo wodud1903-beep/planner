@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "일정관리기"
 APP_ID = "Planner"
-APP_VERSION = "1.39.0"
+APP_VERSION = "1.40.0"
 
 # 자동 업데이트: 이 저장소의 최신 릴리스를 확인
 UPDATE_REPO = "wodud1903-beep/planner"
@@ -164,12 +164,38 @@ RATES_ADMINS = ("wodud1903@gmail.com",)
 KB_ADMINS = ("wodud1903@gmail.com", "qkrwlsgh7303@gmail.com")
 
 
+# 지점장(v1.40) — 회원 목록 · 사용 제한 · 관리자 지정은 이 계정만. 서버 api/_members.js OWNER ·
+# members.OWNER · 업무자료검색 config.OWNER_EMAIL 과 같아야 한다(검사가 대조한다).
+OWNER_EMAIL = "wodud1903@gmail.com"
+
+# 지점장이 회원 목록에서 '관리자로 지정' 한 계정(v1.40) — 서버에 묻거나 이 PC 에 적어 둔 답으로 켜는 동안 채운다.
+# 관리자는 지점장과 같은 자료 수정 권한(수당율 · 회사 공통 업무자료 · 인증문자 정리)을 갖는다.
+# ⚠️ 시트로 올리려면 그 계정이 '수당연동용' · 인증문자 시트에 편집자로 공유돼 있어야 한다(회원 목록 창이 안내한다).
+_GRANTED: set = set()
+
+
+def grant_admin(email: str, on: bool) -> None:
+    e = (email or "").strip().lower()
+    if not e:
+        return
+    if on:
+        _GRANTED.add(e)
+    else:
+        _GRANTED.discard(e)
+
+
+def is_owner(email: str) -> bool:
+    return (email or "").strip().lower() == OWNER_EMAIL
+
+
 def is_rates_admin(email: str) -> bool:
-    return (email or "").strip().lower() in RATES_ADMINS
+    e = (email or "").strip().lower()
+    return e in RATES_ADMINS or e in _GRANTED
 
 
 def is_kb_admin(email: str) -> bool:
-    return (email or "").strip().lower() in KB_ADMINS
+    e = (email or "").strip().lower()
+    return e in KB_ADMINS or e in _GRANTED
 
 # 콜백 서버가 시도할 포트 범위 (델파이 원본과 동일)
 REDIRECT_PORT_RANGE = range(49200, 49231)
