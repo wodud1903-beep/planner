@@ -66,9 +66,10 @@ pump(0.4)
 m = w._macro
 ok("창 'A1Auto'", m is not None and m.isVisible() and m.windowTitle() == "A1Auto")
 v = m.view
-ok("A1Auto 화면 그대로(전송방식 · 시작/중지 · 카드 · 로그 · 도구 메뉴)",
+ok("A1Auto 부품 그대로 · 현황판 모양(전송방식 · 시작/중지 · 상태 띠 · 카드 · 로그 · 도구 메뉴 — kb-v1.12)",
    [r.text() for r in v.rb_modes] == ["텍스트", "이미지", "이미지+텍스트"]
-   and v.btn_start.text() == "매크로 시작 (INSERT)" and v.btn_stop.text() == "매크로 중지 (DELETE)"
+   and (v.btn_start.caption(), v.btn_start.key(), v.btn_stop.caption(), v.btn_stop.key())
+   == ("▶  매크로 시작", "INSERT", "■  매크로 중지", "DELETE") and v.lbl_state.text() == "○  대기 중"
    and [a.text() for a in v.btn_tools.menu().actions()] == ["자주 쓰는 문구", "발송 기록", "환경설정", "수정로그"])
 ok("앱 트레이를 함께 쓴다(끝나면 풍선 알림)", v.tray is w.tray)
 ok("창이 열려 있으면 Insert · Delete 를 본다", v.armed())
