@@ -849,6 +849,25 @@ $("#sync-out").onclick = async () => {
   rebuild();
 };
 $("#sync-close").onclick = () => sdlg.close();
+// 지점장이 이 계정의 사용을 제한했다(kb-v1.13) — 받아 둔 내 메모를 지우고 로그인 기능을 잠근다.
+// 다른 계정으로 로그인하거나 로그아웃만 할 수 있다(회사 공통 자료 보기는 로그인과 상관없다).
+addEventListener("kb:blocked", (e) => {
+  const mail = String((e && e.detail) || "") || "이 계정";
+  setAcct(""); dropMine();
+  if (document.getElementById("blockedwrap")) return;
+  const wrap = document.createElement("div");
+  wrap.id = "blockedwrap";
+  wrap.className = "blockedwrap";
+  wrap.setAttribute("role", "alertdialog");
+  wrap.innerHTML = `<div class="blockedcard"><h2>사용이 제한된 계정입니다</h2><p class="blockedmail"></p>
+    <p>관리자(지점장)가 이 계정의 사용을 제한했습니다.<br>지점장에게 문의해 주세요.</p>
+    <div class="blockedbtns"><button class="btn" id="blocked-switch">다른 계정으로 로그인</button>
+    <button class="btn ghost" id="blocked-out">로그아웃</button></div></div>`;
+  wrap.querySelector(".blockedmail").textContent = mail;
+  document.body.appendChild(wrap);
+  wrap.querySelector("#blocked-switch").onclick = () => login(true);
+  wrap.querySelector("#blocked-out").onclick = async () => { await sync.logout(); location.reload(); };
+});
 sdlg.addEventListener("click", (e) => { if (e.target === sdlg) sdlg.close(); });
 // 내 계정과 맞추기 — 화면으로 돌아올 때(15초 넘었으면)와 켜 둔 동안 1분마다. PC 에서 고친 것(팩스번호 등)이
 // 다시 열지 않아도 곧 보이게(지점장 요청 — "계정에 동기화되는 식으로").

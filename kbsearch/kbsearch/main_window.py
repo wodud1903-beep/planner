@@ -24,7 +24,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,
+    QApplication, QDialog, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,
     QPushButton, QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
@@ -33,6 +33,7 @@ from . import google_auth
 from .google_auth import GoogleAuth, LoginCancelled
 from .kakao_macro_view import KakaoMacroWindow
 from . import members
+from .member_lock import LockDialog
 from .icon import make_icon
 from .kb_view import KbEditDialog, KbView, MeInfoDialog, QuickSearch
 from .settings import Settings
@@ -77,6 +78,8 @@ class MainWindow(QMainWindow):
     sig_public = Signal(object, str)         # (공개로 받은 공통 자료 | None, 오류)
     sig_switch = Signal(object)              # 웹 스위치 상태(switch.fetch_state) | None
     sig_otp = Signal(object, str)            # 휴대폰 인증번호 — 새로 온 것 [{code, sender, body}], 오류 (kb-v1.8.0)
+    sig_member = Signal(str, object)         # 내 계정 상태(사용 제한 · 관리자 — kb-v1.13) (이메일, dict|None)
+    MEMBER_CHECK_MS = 30 * 60 * 1000
 
     STALE_SEC = 5 * 60          # 창·빠른검색을 열 때 이보다 오래됐으면 공통 자료를 다시 받는다
 
@@ -110,6 +113,17 @@ class MainWindow(QMainWindow):
         self._build_tray()
 
         self.sig_login.connect(self._on_login)
+        # 사용 제한 · 관리자 지정(kb-v1.13 — 일정관리기 회원 목록에서 지점장이 정한다). 켜자마자 이 PC 에 적어 둔 답으로,
+        # 로그인돼 있으면 서버에 묻고, 30분마다 다시.
+        self.sig_member.connect(self._on_member)
+        self._member_cache = members.StatusCache()
+        self._locking = False
+        self._member_timer = QTimer(self)
+        self._member_timer.setInterval(self.MEMBER_CHECK_MS)
+        self._member_timer.timeout.connect(self._check_member)
+        self._member_timer.start()
+        QTimer.singleShot(0, self._startup_gate)
+        QTimer.singleShot(3000, self._check_member)
         self.sig_sync.connect(self._on_sync)
         self.sig_edits.connect(self._on_edits)
         self.sig_update.connect(self._on_update)
@@ -608,6 +622,69 @@ class MainWindow(QMainWindow):
             return ""
         return "카톡 매크로는 구글 로그인을 해야 쓸 수 있습니다.\n위 [동기화] 를 눌러 로그인한 뒤 다시 눌러 주세요."
 
+    # ------------------------------------------------------------ 사용 제한 · 관리자 지정(kb-v1.13)
+    def _startup_gate(self) -> None:
+        """켜자마자 — 이 PC 에 적어 둔 답으로. 제한된 계정이면 잠그고, 관리자면 바로 관리자(서버 답을 기다리지 않고).
+        로그아웃해 둔 PC 라도 이 PC 에서 제한됐던 계정이 있으면 잠근다(로그아웃으로 비켜 가지 못하게)."""
+        email = self._account().strip().lower()
+        c = self._member_cache.get(email) if email else None
+        if c and c["blocked"]:
+            self._enforce_block(email)
+            return
+        if not email:
+            other = self._member_cache.blocked_email()
+            if other:
+                self._enforce_block(other)
+                return
+        if c and c["admin"] and not config.is_admin(email):
+            config.grant_admin(email, True)
+            self.refresh_account()
+
+    def _check_member(self) -> None:
+        email = self._account().strip().lower()
+        if not email or not members.ENABLED:
+            return
+
+        def work():
+            self.sig_member.emit(email, members.status(self.gauth))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_member(self, email: str, st) -> None:
+        if st is None:
+            return                              # 못 물었다 — 아무것도 바꾸지 않는다(다음에 다시)
+        self._member_cache.put(email, st)
+        if st.get("blocked"):
+            self._enforce_block(email)
+            return
+        was = config.is_admin(email)
+        config.grant_admin(email, bool(st.get("admin")))
+        if config.is_admin(email) != was:
+            self.refresh_account()              # 아래 줄 '(관리자)' · 편집 권한을 새로
+
+    def _enforce_block(self, email: str) -> None:
+        """사용 제한 — 잠금 창. 풀리면 그대로 쓰고, [끝내기] 면 프로그램을 끝낸다."""
+        if self._locking:
+            return
+        self._locking = True
+        config.grant_admin(email, False)
+
+        def recheck():
+            st = members.status(self.gauth) if self.gauth.is_connected() else None
+            if st is not None:
+                self._member_cache.put(email, st)
+            return st
+
+        try:
+            dlg = LockDialog(email, recheck, config.APP_NAME, self)
+            ok = dlg.exec() == QDialog.Accepted
+        finally:
+            self._locking = False
+        if ok:
+            config.grant_admin(email, bool((dlg.status or {}).get("admin")))
+            self.refresh_account()
+            return
+        self.quit_app()
+
     def _macro_busy(self) -> bool:
         return self._macro is not None and self._macro.view.busy()
 
@@ -804,6 +881,7 @@ class MainWindow(QMainWindow):
         self._set_msg(f"{email} 로 로그인했습니다.", "ok")
         self.refresh_account()
         self.show_window()
+        self._check_member()                      # 사용 제한 · 관리자(kb-v1.13)
         # 동의 화면에서 뺀 항목이 있으면 바로 알린다(kb-v1.8.1) — 예전엔 동기화가 '그냥 안 되는' 것처럼 보였다
         miss = self.gauth.missing_scopes()
         if miss:

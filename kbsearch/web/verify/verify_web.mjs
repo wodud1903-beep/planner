@@ -1102,6 +1102,29 @@ await page.click("#btn-on");
 await page.waitForSelector("#admin-state.on");
 await page.waitForSelector("#list button.row");
 ok("관리 — 다시 켜면 자료가 돌아온다", JSON.parse(blob).on === true && await page.locator("#split").isVisible());
+
+// ---- kb-v1.13 — 지점장이 사용을 제한한 계정: 로그인 기능을 잠근다(jyplanner 가 403 blocked)
+{
+  const cB = await browser.newContext({ viewport: { width: 412, height: 900 }, serviceWorkers: "block" });
+  await cB.addInitScript(noInstallBar);
+  await cB.addInitScript(() => { try { localStorage.setItem("kbsearch:acct:v1", "bad@example.com"); } catch (e) { /* 막힘 */ } });
+  await cB.route("**/api/auth/token", (rt) => rt.fulfill({ status: 403, json: { error: "blocked", email: "bad@example.com" } }));
+  const outs = [];
+  await cB.route("**/api/auth/logout", (rt) => { outs.push(1); return rt.fulfill({ json: { ok: true } }); });
+  const pB = await cB.newPage();
+  await pB.goto(BASE + "/");
+  await pB.waitForSelector("#blockedwrap", { timeout: 6000 }).catch(() => {});
+  const tB = (await pB.locator("#blockedwrap").textContent().catch(() => "")) || "";
+  ok("제한된 계정 — '사용이 제한된 계정' · 그 이메일 · 지점장에게 문의", tB.includes("사용이 제한된 계정")
+     && tB.includes("bad@example.com") && tB.includes("지점장에게 문의"), tB.slice(0, 80));
+  ok("받아 둔 계정 표시도 지운다", (await pB.evaluate(() => localStorage.getItem("kbsearch:acct:v1"))) === null);
+  ok("[다른 계정으로 로그인] · [로그아웃]", await pB.locator("#blocked-switch").isVisible()
+     && await pB.locator("#blocked-out").isVisible());
+  await pB.locator("#blocked-out").click();
+  await pB.waitForTimeout(400);
+  ok("[로그아웃] → 로그아웃", outs.length >= 1);
+  await cB.close();
+}
 await browser.close();
 server.close();
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP_NAME = "업무자료검색"
 APP_ID = "KbSearch"
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.13.0"
 
 # ---------------------------------------------------------------------------
 # 서비스 스위치 — **자동 업데이트로 끄고 켠다.**
@@ -119,8 +119,26 @@ PLANNER_SYNC_FILE = "planner_sync.json"
 PLANNER_APP_ID = "Planner"      # 처음 켤 때 이 PC 의 일정관리기 공통 자료를 가져온다
 
 
+# 지점장(kb-v1.13) — 일정관리기 config.OWNER_EMAIL · members.OWNER 와 같다(검사가 대조한다).
+OWNER_EMAIL = "wodud1903@gmail.com"
+
+# 지점장이 일정관리기 회원 목록에서 '관리자로 지정' 한 계정 — 켜는 동안 서버 답(또는 이 PC 에 적어 둔 답)으로 채운다.
+_GRANTED: set = set()
+
+
+def grant_admin(email: str, on: bool) -> None:
+    e = (email or "").strip().lower()
+    if not e:
+        return
+    if on:
+        _GRANTED.add(e)
+    else:
+        _GRANTED.discard(e)
+
+
 def is_admin(email: str) -> bool:
-    return (email or "").strip().lower() in KB_ADMINS
+    e = (email or "").strip().lower()
+    return e in KB_ADMINS or e in _GRANTED
 
 
 def atomic_write(path, text: str) -> None:

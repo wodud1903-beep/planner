@@ -78,14 +78,23 @@ export function mergeEdits(recs, dead, remote, now = stamp()) {
 
 // ------------------------------------------------------------------ 로그인 · 토큰
 let tok = null;                    // {access_token, exp, email}
+let locked = false;                // 사용 제한으로 잠갔다 — 이 화면에서는 다시 묻지 않는다
 export const account = () => (tok && tok.email) || "";
 
 /** 쓸 토큰. 로그인 안 했으면 null, 서버가 잠깐 탈났으면 throw. */
 export async function token(force = false) {
+  if (locked) return null;
   if (!force && tok && tok.exp - Date.now() > 120e3) return tok;
   const r = await fetch("/api/auth/token", { method: "POST", credentials: "same-origin" });
   const j = await r.json().catch(() => ({}));
   if (r.status === 401) { tok = null; return null; }
+  if (r.status === 403 && j.error === "blocked") {
+    // 지점장이 사용을 제한한 계정(kb-v1.13) — 화면이 잠근다(app.js 'kb:blocked')
+    tok = null;
+    locked = true;
+    try { dispatchEvent(new CustomEvent("kb:blocked", { detail: String(j.email || "") })); } catch (e) { /* 옛 브라우저 */ }
+    return null;
+  }
   if (!r.ok || !j.access_token) throw new Error("로그인 서버에 닿지 못했습니다 — 잠시 뒤 다시 해 주세요.");
   tok = { access_token: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000,
           email: j.email || "", missing: j.missing || [], sheets: j.sheets === true };
