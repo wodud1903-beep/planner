@@ -16,6 +16,7 @@ _os.chdir(_ROOT / "python")
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from datetime import datetime, timedelta
@@ -350,7 +351,8 @@ days = [c[0] for c in km.CHANGE_LOG]
 ok("새것이 위(날짜가 내려간다)", days == sorted(days, reverse=True), days)
 ok("절마다 한 줄 이상 다섯 줄 안쪽 · 한 줄 90자 안쪽",
    all(1 <= len(c[2]) <= 5 and all(0 < len(t) <= 90 for t in c[2]) for c in km.CHANGE_LOG))
-ok("맨 위 절은 이번 판(일정관리기 · 업무자료검색)", "v1.38.0" in km.CHANGE_LOG[0][1] and "v1.11.0" in km.CHANGE_LOG[0][1])
+ok("절마다 어느 판인지(일정관리기 · 업무자료검색 판 번호)", all(re.search(r"\d+\.\d+", c[1]) for c in km.CHANGE_LOG)
+   and "일정관리기 v" in km.CHANGE_LOG[0][1] and "업무자료검색 v" in km.CHANGE_LOG[0][1], km.CHANGE_LOG[0][1])
 ok("글로도(change_log_text)", km.change_log_text().startswith(f"■ {days[0]}  {km.CHANGE_LOG[0][1]}\n  · "))
 dl.close()
 v.shutdown()

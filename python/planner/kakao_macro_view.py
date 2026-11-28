@@ -14,18 +14,20 @@ from __future__ import annotations
 
 import csv
 import html
+import re
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QEventLoop, QModelIndex, QObject, QRectF, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPalette, QPixmap, QTextCharFormat, QTextCursor
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPalette, QPixmap,
+                           QTextCharFormat, QTextCursor)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
-    QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QTableView, QTabWidget,
-    QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox, QPlainTextEdit,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QTableView, QTabWidget, QTextBrowser, QTextEdit,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import kakao_history as kh
@@ -197,13 +199,14 @@ class _HistorySync(QObject):
 # 작은 부품
 # ---------------------------------------------------------------------------
 class _Preview(QLabel):
-    """ImageDisplay — 가운데 · 비율 유지 · 칸에 맞춰 늘리고 줄인다(Center · Proportional · Stretch)."""
+    """ImageDisplay — 가운데 · 비율 유지 · 칸에 맞춰 늘리고 줄인다(Center · Proportional · Stretch). 그림이 없으면 '그림 없음'."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pix = QPixmap()
-        self.setMinimumSize(120, 120)
+        self.setMinimumSize(64, 48)
         self.setObjectName("kmPreview")
+        self.setContentsMargins(4, 4, 4, 4)
 
     def set_pixmap(self, pix: QPixmap) -> None:
         self._pix = pix if pix is not None else QPixmap()
@@ -214,28 +217,180 @@ class _Preview(QLabel):
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
-        if self._pix.isNull():
-            return
         r = self.contentsRect()
+        p = QPainter(self)
+        if self._pix.isNull():
+            f = p.font()
+            f.setPixelSize(11)
+            p.setFont(f)
+            p.setPen(self.palette().color(QPalette.PlaceholderText))
+            p.drawText(r, Qt.AlignCenter, "그림 없음")
+            p.end()
+            return
         sz = self._pix.size().scaled(r.size(), Qt.KeepAspectRatio)
         x = r.x() + (r.width() - sz.width()) / 2
         y = r.y() + (r.height() - sz.height()) / 2
-        p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         p.drawPixmap(QRectF(x, y, sz.width(), sz.height()).toRect(), self._pix)
         p.end()
 
 
-def _card(caption: str) -> tuple:
-    fr = QFrame()
-    fr.setObjectName("kmCard")
-    fr.setFixedSize(112, 64)
-    lay = QVBoxLayout(fr)
-    lay.setContentsMargins(10, 0, 6, 0)
-    lb = QLabel(caption)
-    lb.setObjectName("kmCardText")
-    lay.addWidget(lb, 0, Qt.AlignVCenter)
-    return fr, lb
+def _label(text: str, name: str) -> QLabel:
+    lb = QLabel(text)
+    lb.setObjectName(name)
+    return lb
+
+
+def _rgba(color: str, alpha: float) -> str:
+    q = QColor(color)
+    return f"rgba({q.red()}, {q.green()}, {q.blue()}, {alpha})"
+
+
+class _ActionButton(QPushButton):
+    """시작 · 중지 단추(v1.39) — ▶ ■ 아이콘 · 글 · 키 모양(INSERT / DELETE). 누르는 것은 보통 단추와 같다.
+    도는 동안 시작 단추는 꺼지고 '● 보내는 중…' 으로 보인다(set_busy)."""
+
+    def __init__(self, icon: str, caption: str, key: str, parent=None):
+        super().__init__(parent)
+        self._icon, self._caption = icon, caption
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 0, 12, 0)
+        lay.setSpacing(8)
+        self.lbl_text = _label("", "kmActText")
+        self.lbl_key = _label(key, "kmKey")
+        self.lbl_key.setFixedHeight(22)
+        self.lbl_key.setAlignment(Qt.AlignCenter)
+        for w in (self.lbl_text, self.lbl_key):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        lay.addWidget(self.lbl_text)
+        lay.addStretch(1)
+        lay.addWidget(self.lbl_key, 0, Qt.AlignVCenter)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAccessibleName(f"{caption} ({key})")
+        self.setToolTip(f"{caption} — 키보드 {key.title()} 키로도 됩니다")
+        self.set_busy(False)
+
+    def set_busy(self, on: bool) -> None:
+        self.lbl_text.setText("●  보내는 중…" if on else f"{self._icon}  {self._caption}")
+        self.lbl_key.setVisible(not on)
+
+    def caption(self) -> str:
+        return self.lbl_text.text()
+
+    def key(self) -> str:
+        return "" if self.lbl_key.isHidden() else self.lbl_key.text()
+
+
+class _StatTile(QFrame):
+    """현황 카드(v1.39) — 이름은 작게, 숫자는 크게 · 색(성공 초록 · 중단 빨강 · 건너뜀 주황 · 0 이면 흐리게).
+    엔진은 예전처럼 '성공: 12' · '3.1건/분' 을 넣는다 — text() · setText() 는 그 글 그대로(A1Auto 카드 글)."""
+
+    _NUM = re.compile(r"\d+(?:\.\d+)?")
+
+    def __init__(self, name: str, tone: str, initial: str, unit: str = ""):
+        super().__init__()
+        self.setObjectName("kmTile")
+        self.name, self.tone, self._raw = name, tone, initial
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 8, 14, 10)
+        v.setSpacing(0)
+        self.lbl_name = _label("", "kmTileName")
+        v.addWidget(self.lbl_name)
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        self.lbl_num = _label("", "kmTileNum")
+        row.addWidget(self.lbl_num)
+        self.lbl_unit = _label(unit, "kmTileUnit")
+        self.lbl_unit.setVisible(bool(unit))
+        row.addWidget(self.lbl_unit, 0, Qt.AlignBottom)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.repaint_theme()
+
+    def text(self) -> str:
+        return self._raw
+
+    def setText(self, s: str) -> None:
+        self._raw = str(s)
+        self.repaint_theme()
+
+    def number(self) -> str:
+        m = self._NUM.search(self._raw)
+        return m.group(0) if m else "–"
+
+    def repaint_theme(self) -> None:
+        dot = theme.strong(self.tone) if self.tone else theme.c("subtext")
+        self.lbl_name.setText(f"<span style='color:{dot}'>●</span>&nbsp; {html.escape(self.name)}")
+        n = self.number()
+        quiet = n == "–" or float(n) == 0.0
+        color = theme.c("subtext") if quiet else (theme.strong(self.tone) if self.tone else theme.c("text"))
+        self.lbl_num.setText(n)
+        self.lbl_num.setStyleSheet(f"color: {color};")
+
+
+class _Headline(QWidget):
+    """진행 글(Label3 — '14 / 50 · 남은 약 4분 20초 · 현재: 홍길동') — 앞부분은 크게, 나머지는 작게(v1.39).
+    text() · setText() 는 엔진이 넣은 글 그대로. 나머지가 없으면 상태 띠가 정한 안내 글(set_hint)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.lbl_big = _label("", "kmBig")
+        self.lbl_unit = _label("처리", "kmSub")
+        row.addWidget(self.lbl_big)
+        row.addWidget(self.lbl_unit, 0, Qt.AlignBottom)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.lbl_sub = _label("", "kmSub")
+        self.lbl_sub.setWordWrap(True)
+        lay.addWidget(self.lbl_sub)
+        self._raw, self._hint = "", ""
+
+    def text(self) -> str:
+        return self._raw
+
+    def setText(self, s: str) -> None:
+        self._raw = str(s)
+        self._paint()
+
+    def set_hint(self, s: str) -> None:
+        self._hint = s
+        self._paint()
+
+    def _paint(self) -> None:
+        parts = self._raw.split(" · ")
+        head = parts[0] if parts else ""
+        self.lbl_big.setText(head)
+        self.lbl_unit.setVisible("/" in head)
+        self.lbl_sub.setText(" · ".join(parts[1:]) or self._hint)
+
+
+def _dialog_css() -> str:
+    """작은 창들(자주 쓰는 문구 · 환경설정 · 발송 기록 · 수정로그) — 매크로 화면과 같은 결(v1.39). 색은 테마에서."""
+    c = theme.c
+    white = theme.fill_text()
+    return f"""
+        QListWidget {{ background: {c('input_bg')}; border: 1px solid {c('border')}; border-radius: 10px; padding: 4px;
+            outline: none; }}
+        QListWidget::item {{ padding: 7px 10px; border-radius: 8px; }}
+        QListWidget::item:selected {{ background: {c('select_bg')}; color: {c('select_text')}; }}
+        QPushButton {{ background: {c('btn_bg')}; color: {c('text')}; border: 1px solid {c('border')}; border-radius: 9px;
+            padding: 6px 14px; }}
+        QPushButton:hover {{ background: {c('btn_hover')}; }}
+        QPushButton:disabled {{ color: {c('subtext')}; }}
+        QPushButton#kmPrimary {{ background: {c('primary')}; color: {white}; border: none; font-weight: 800; }}
+        QPushButton#kmPrimary:hover {{ background: {c('primary_hover')}; }}
+        QPushButton#kmDanger {{ color: {theme.strong('red')}; }}
+        QLineEdit {{ background: {c('input_bg')}; border: 1px solid {c('border')}; border-radius: 8px; padding: 4px 6px; }}
+        QLabel#kmDlgTitle {{ font-size: 15px; font-weight: 800; }}
+        QLabel#kmSub {{ color: {c('subtext')}; }}
+        QTextBrowser {{ background: {c('input_bg')}; border: 1px solid {c('border')}; border-radius: 10px; padding: 8px; }}
+        QTableView {{ border: 1px solid {c('border')}; border-radius: 10px; }}
+    """
 
 
 def _mix(a: QColor, b: QColor, t: float) -> QColor:
@@ -299,6 +454,9 @@ class KakaoMacroView(QWidget):
 
     # ------------------------------------------------------------ 만들기
     def _build(self):
+        """현황판(v1.39 — 지점장이 고른 시안 3): 맨 위 상태 띠(대기 중 / 보내는 중 / 끝) · 시작 · 중지, 현황 숫자 넷,
+        아래 두 칸(왼쪽 보낼 내용 · 오른쪽 발송 로그). A1Auto 의 부품(전송방식 · 이미지 · 메시지 · 시작/중지 · 카드 ·
+        진행 · 로그 · 도구 메뉴)은 모두 그대로 있고 이름 · 하는 일도 같다 — 자리와 꾸밈만 바꿨다."""
         self.setStyleSheet(self._css())
         # 내용은 스크롤 안에 — 창이 낮아도(노트북 768) 이 화면이 앱 창의 최소 높이를 끌어올리지 않게.
         # ⚠️ 색 규칙은 안쪽 바탕(#kmBody) 기준이다 — 일정관리기는 쪽마다 이름을 'pagecard' 로 바꿔 흰 카드로 칠하므로
@@ -316,9 +474,9 @@ class KakaoMacroView(QWidget):
         outer.addWidget(self.scroll)
         root = QVBoxLayout(self.body)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setSpacing(12)
 
-        # 도구 메뉴(A1Auto 메뉴줄 '도구')
+        # ---- 맨 위: 도구 메뉴(A1Auto 메뉴줄 '도구') · 저장 위치 ----
         top = QHBoxLayout()
         self.btn_tools = QToolButton()
         self.btn_tools.setObjectName("kmTools")
@@ -333,101 +491,147 @@ class KakaoMacroView(QWidget):
         self.btn_tools.setMenu(m)
         top.addWidget(self.btn_tools)
         top.addStretch(1)
-        self.lbl_where = QLabel("")
-        self.lbl_where.setObjectName("kmWhere")
+        self.lbl_where = _label("", "kmWhere")
         top.addWidget(self.lbl_where)
         root.addLayout(top)
 
-        body = QHBoxLayout()
-        body.setSpacing(12)
-        # ---- 왼쪽: 전송방식 · 이미지 불러오기 · 미리보기 ----
+        # ---- 상태 띠: 지금 하는 일 · 진행(Label3 · 진행 막대) · 시작 / 중지 ----
+        self.banner = QFrame()
+        self.banner.setObjectName("kmBanner")
+        bl = QHBoxLayout(self.banner)
+        bl.setContentsMargins(20, 14, 16, 14)
+        bl.setSpacing(16)
         left = QVBoxLayout()
-        left.setSpacing(8)
-        self.grp_mode = QGroupBox("전송방식")
-        self.grp_mode.setFixedWidth(192)
-        gl = QVBoxLayout(self.grp_mode)
-        gl.setContentsMargins(12, 8, 8, 8)
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.setExclusive(True)
-        self.rb_modes = []
-        for i, t in enumerate(km.MODES):
-            rb = QRadioButton(t)
-            self.mode_group.addButton(rb, i)
-            gl.addWidget(rb)
-            self.rb_modes.append(rb)
-        self.mode_group.idClicked.connect(self._on_mode_clicked)       # RadioGroup1Click
-        left.addWidget(self.grp_mode)
-        self.btn_image = QPushButton("이미지 불러오기")
-        self.btn_image.setFixedSize(192, 30)
-        self.btn_image.clicked.connect(self.pick_image)                # imageClick
-        left.addWidget(self.btn_image)
-        self.preview = _Preview()
-        self.preview.setFixedWidth(192)
-        self.preview.setMinimumHeight(100)       # 남는 높이를 받아 A1Auto 의 200 보다 커진다(낮은 노트북 화면에서도 맞게)
-        left.addWidget(self.preview, 1)
-        body.addLayout(left)
-
-        # ---- 오른쪽: 전송 메시지 · 시작/중지 ----
-        right = QVBoxLayout()
-        right.setSpacing(6)
-        right.addWidget(QLabel("전송 메시지"))
-        self.memo = QPlainTextEdit()
-        self.memo.setObjectName("kmMemo")
-        f = self.memo.font()
-        f.setPixelSize(13)
-        self.memo.setFont(f)
-        self.memo.setMinimumHeight(180)
-        right.addWidget(self.memo, 1)
-        btns = QHBoxLayout()
-        btns.setSpacing(12)
-        self.btn_start = QPushButton("매크로 시작 (INSERT)")
-        self.btn_start.setObjectName("kmStart")
-        self.btn_start.setFixedHeight(48)
-        self.btn_start.setCursor(Qt.PointingHandCursor)
-        self.btn_start.clicked.connect(lambda: self.engine.button1_click())     # Panel2Click
-        self.btn_stop = QPushButton("매크로 중지 (DELETE)")
-        self.btn_stop.setObjectName("kmStop")
-        self.btn_stop.setFixedHeight(48)
-        self.btn_stop.setCursor(Qt.PointingHandCursor)
-        self.btn_stop.clicked.connect(lambda: self.engine.button2_click())      # Panel1Click
-        btns.addWidget(self.btn_start, 1)
-        btns.addWidget(self.btn_stop, 1)
-        right.addLayout(btns)
-        body.addLayout(right, 1)
-        root.addLayout(body, 3)                  # 남는 높이는 메시지 쪽 3 : 로그 1(A1Auto 의 284 : 148 쯤)
-
-        # ---- 카드 · 발송인원수 ----
-        cards = QHBoxLayout()
-        cards.setSpacing(6)
-        self.card_success, self.lbl_success = _card("성공횟수")
-        self.card_stop, self.lbl_stop = _card("중단횟수")
-        self.card_speed, self.lbl_speed = _card("속도:")
-        self.card_skip, self.lbl_skip = _card("건너뜀")
-        for fr in (self.card_success, self.card_stop, self.card_speed, self.card_skip):
-            cards.addWidget(fr)
-        cards.addStretch(1)
-        cards.addWidget(QLabel("발송인원수"))
-        self.ed_count = QLineEdit("0")
-        self.ed_count.setFixedWidth(64)
-        self.ed_count.setAlignment(Qt.AlignCenter)
-        self.ed_count.setToolTip("0 = 끝까지")
-        cards.addWidget(self.ed_count)
-        root.addLayout(cards)
-
-        # ---- 진행 막대 · 진행 글(Label3) ----
+        left.setSpacing(4)
+        self.lbl_state = _label("", "kmState")
+        left.addWidget(self.lbl_state)
+        self.lbl_progress = _Headline()
+        left.addWidget(self.lbl_progress)
+        left.addSpacing(4)
         self.prog = QProgressBar()
         self.prog.setObjectName("kmProg")
         self.prog.setRange(0, 1000)
         self.prog.setValue(0)
         self.prog.setTextVisible(False)
-        self.prog.setFixedHeight(14)
-        root.addWidget(self.prog)
-        self.lbl_progress = QLabel("")
-        root.addWidget(self.lbl_progress)
+        self.prog.setFixedHeight(10)
+        left.addWidget(self.prog)
+        bl.addLayout(left, 1)
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        self.btn_start = _ActionButton("▶", "매크로 시작", "INSERT")
+        self.btn_start.setObjectName("kmStart")
+        self.btn_start.clicked.connect(lambda: self.engine.button1_click())     # Panel2Click
+        self.btn_stop = _ActionButton("■", "매크로 중지", "DELETE")
+        self.btn_stop.setObjectName("kmStop")
+        self.btn_stop.clicked.connect(lambda: self.engine.button2_click())      # Panel1Click
+        for b in (self.btn_start, self.btn_stop):
+            b.setFixedHeight(46)
+            b.setMinimumWidth(230)
+            right.addWidget(b)
+        right.addStretch(1)
+        bl.addLayout(right)
+        root.addWidget(self.banner)
 
-        # ---- 로그 · 로그 불러오기 ----
-        logs = QHBoxLayout()
-        logs.setSpacing(8)
+        # ---- 현황 숫자(성공 · 중단 · 건너뜀 · 속도 — Timer2 가 1초마다 고친다) ----
+        cards = QHBoxLayout()
+        cards.setSpacing(10)
+        self.lbl_success = _StatTile("성공", "green", "성공횟수")
+        self.lbl_stop = _StatTile("중단", "red", "중단횟수")
+        self.lbl_skip = _StatTile("건너뜀", "orange", "건너뜀")
+        self.lbl_speed = _StatTile("속도", "", "속도:", unit="건/분")
+        self.card_success, self.card_stop = self.lbl_success, self.lbl_stop
+        self.card_skip, self.card_speed = self.lbl_skip, self.lbl_speed
+        for t in (self.lbl_success, self.lbl_stop, self.lbl_skip, self.lbl_speed):
+            cards.addWidget(t, 1)
+        root.addLayout(cards)
+
+        # ---- 아래 두 칸 ----
+        cols = QHBoxLayout()
+        cols.setSpacing(12)
+        # 왼쪽 — 보낼 내용: 전송방식 · 전송 메시지 · 이미지 · 발송인원수
+        self.card_content = QFrame()
+        self.card_content.setObjectName("kmPanel")
+        cl = QVBoxLayout(self.card_content)
+        cl.setContentsMargins(16, 14, 16, 16)
+        cl.setSpacing(8)
+        cl.addWidget(_label("보낼 내용", "kmTitle"))
+        mrow = QHBoxLayout()
+        mrow.setSpacing(8)
+        self.lbl_mode = _label("전송방식", "kmSub")
+        mrow.addWidget(self.lbl_mode)
+        # 전송방식(RadioGroup1) — 한 줄 단추. 하나만 고른다 · 처음엔 아무것도 안 고름(A1Auto 그대로)
+        self.grp_mode = QFrame()
+        self.grp_mode.setObjectName("kmSeg")
+        self.grp_mode.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        gl = QHBoxLayout(self.grp_mode)
+        gl.setContentsMargins(3, 3, 3, 3)
+        gl.setSpacing(2)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        self.rb_modes = []
+        for i, t in enumerate(km.MODES):
+            b = QPushButton(t)
+            b.setObjectName("kmSegBtn")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            self.mode_group.addButton(b, i)
+            gl.addWidget(b)
+            self.rb_modes.append(b)
+        self.mode_group.idClicked.connect(self._on_mode_clicked)       # RadioGroup1Click
+        mrow.addWidget(self.grp_mode)
+        mrow.addStretch(1)
+        cl.addLayout(mrow)
+        cl.addWidget(_label("전송 메시지", "kmSub"))
+        self.memo = QPlainTextEdit()
+        self.memo.setObjectName("kmMemo")
+        f = self.memo.font()
+        f.setPixelSize(13)
+        self.memo.setFont(f)
+        self.memo.setMinimumHeight(150)
+        cl.addWidget(self.memo, 1)
+        irow = QHBoxLayout()
+        irow.setSpacing(10)
+        self.preview = _Preview()
+        self.preview.setFixedSize(104, 76)
+        irow.addWidget(self.preview)
+        iv = QVBoxLayout()
+        iv.setSpacing(6)
+        self.lbl_image = _label("그림을 고르지 않았습니다", "kmSub")
+        iv.addWidget(self.lbl_image)
+        self.btn_image = QPushButton("이미지 불러오기")
+        self.btn_image.setObjectName("kmGhost")
+        self.btn_image.clicked.connect(self.pick_image)                # imageClick
+        iv.addWidget(self.btn_image, 0, Qt.AlignLeft)
+        iv.addStretch(1)
+        irow.addLayout(iv, 1)
+        cl.addLayout(irow)
+        crow = QHBoxLayout()
+        crow.setSpacing(8)
+        crow.addWidget(_label("발송인원수", "kmSub"))
+        self.ed_count = QLineEdit("0")
+        self.ed_count.setObjectName("kmCount")
+        self.ed_count.setFixedWidth(64)
+        self.ed_count.setAlignment(Qt.AlignCenter)
+        self.ed_count.setToolTip("0 = 끝까지")
+        crow.addWidget(self.ed_count)
+        crow.addWidget(_label("0 = 끝까지", "kmHint"))
+        crow.addStretch(1)
+        cl.addLayout(crow)
+        cols.addWidget(self.card_content, 11)
+        # 오른쪽 — 발송 로그 · 로그 불러오기
+        self.card_log = QFrame()
+        self.card_log.setObjectName("kmPanel")
+        ll = QVBoxLayout(self.card_log)
+        ll.setContentsMargins(16, 14, 16, 16)
+        ll.setSpacing(8)
+        lt = QHBoxLayout()
+        lt.addWidget(_label("발송 로그", "kmTitle"))
+        lt.addStretch(1)
+        self.btn_loadlog = QPushButton("로그 불러오기")
+        self.btn_loadlog.setObjectName("kmGhost")
+        self.btn_loadlog.clicked.connect(self.load_log)                # BtnLoadLogClick
+        lt.addWidget(self.btn_loadlog)
+        ll.addLayout(lt)
         self.log = QTextEdit()
         self.log.setObjectName("kmLog")
         self.log.setReadOnly(True)
@@ -437,59 +641,120 @@ class KakaoMacroView(QWidget):
         lf.setStyleHint(QFont.Monospace)
         lf.setPixelSize(12)
         self.log.setFont(lf)
-        self.log.setMinimumHeight(100)
-        logs.addWidget(self.log, 1)
-        self.btn_loadlog = QPushButton("로그\n불러오기")
-        self.btn_loadlog.setFixedWidth(98)
-        self.btn_loadlog.setMinimumHeight(100)
-        self.btn_loadlog.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.btn_loadlog.clicked.connect(self.load_log)                # BtnLoadLogClick
-        logs.addWidget(self.btn_loadlog)
-        root.addLayout(logs, 1)
+        self.log.setMinimumHeight(160)
+        ll.addWidget(self.log, 1)
+        cols.addWidget(self.card_log, 10)
+        root.addLayout(cols, 1)
+        self._state, self._stop_reason = "idle", ""
         self._paint_where()
+        self._paint_banner()
 
     def _css(self) -> str:
-        """색은 지금 앱 팔레트에서 — 테마를 바꾸면 apply_theme 가 다시 부른다."""
+        """색은 지금 앱 테마에서 — 테마를 바꾸면 apply_theme 가 다시 부른다(색 글자를 코드에 박지 않는다)."""
+        c = theme.c
         pal = QApplication.palette()
-        win, base = pal.color(QPalette.Window), pal.color(QPalette.Base)
-        text, btn = pal.color(QPalette.Text), pal.color(QPalette.Button)
-        border = _mix(text, win, 0.22).name()
-        track = _mix(text, win, 0.12).name()
+        base, text, btn = pal.color(QPalette.Base), pal.color(QPalette.Text), pal.color(QPalette.Button)
+        panel = QColor(c("panel_bg"))
+        border = c("border")
+        track = _mix(text, panel, 0.10).name()
+        seg = _mix(text, panel, 0.07).name()
         hover = _mix(text, btn, 0.08).name()
         sub = pal.color(QPalette.PlaceholderText).name()
+        white = theme.fill_text()
+        seg_off = _mix(QColor(sub), panel, 0.6).name()
         return f"""
             QScrollArea#kmScroll {{ background: transparent; border: none; }}
             QScrollArea#kmScroll > QWidget#qt_scrollarea_viewport {{ background: transparent; }}
             QWidget#kmBody {{ background: transparent; }}
-            #kmBody QFrame#kmCard {{ border: 1px solid {border}; border-radius: 8px; background: {base.name()}; }}
-            #kmBody QLabel#kmCardText {{ font-size: 16px; }}
-            #kmBody QLabel#kmPreview {{ border: 1px solid {border}; border-radius: 6px; background: {base.name()}; }}
-            #kmBody QLabel#kmWhere {{ color: {sub}; }}
+            #kmBody QFrame#kmPanel {{ background: {panel.name()}; border: 1px solid {border}; border-radius: 14px; }}
+            #kmBody QFrame#kmTile {{ background: {panel.name()}; border: 1px solid {border}; border-radius: 12px; }}
+            #kmBody QLabel#kmTitle {{ font-size: 15px; font-weight: 800; }}
+            #kmBody QLabel#kmSub {{ color: {sub}; font-size: 12px; }}
+            #kmBody QLabel#kmHint {{ color: {sub}; font-size: 11px; }}
+            #kmBody QLabel#kmState {{ font-size: 13px; font-weight: 800; }}
+            #kmBody QLabel#kmBig {{ font-size: 30px; font-weight: 800; }}
+            #kmBody QLabel#kmTileName {{ color: {sub}; font-size: 12px; }}
+            #kmBody QLabel#kmTileNum {{ font-size: 26px; font-weight: 800; }}
+            #kmBody QLabel#kmTileUnit {{ color: {sub}; font-size: 12px; }}
+            #kmBody QLabel#kmWhere {{ border-radius: 12px; padding: 4px 12px; font-size: 12px; }}
+            #kmBody QLabel#kmWhere[tone="ok"] {{ background: {theme.strong_bg("green")}; color: {theme.strong("green")}; }}
+            #kmBody QLabel#kmWhere[tone="local"] {{ background: {track}; color: {sub}; }}
+            #kmBody QLabel#kmWhere[tone="warn"] {{ background: {theme.strong_bg("orange")};
+                color: {theme.strong("orange")}; }}
+            #kmBody QLabel#kmPreview {{ border: 1px solid {border}; border-radius: 10px; background: {base.name()}; }}
             #kmBody QPlainTextEdit#kmMemo, #kmBody QTextEdit#kmLog {{
-                border: 1px solid {border}; border-radius: 7px; background: {base.name()}; color: {text.name()};
-                padding: 4px 6px; }}
-            #kmBody QToolButton#kmTools {{ border: 1px solid {border}; border-radius: 6px; padding: 3px 12px;
+                border: 1px solid {border}; border-radius: 10px; background: {base.name()}; color: {text.name()};
+                padding: 6px 8px; }}
+            #kmBody QToolButton#kmTools {{ border: 1px solid {border}; border-radius: 9px; padding: 4px 14px;
                 background: {btn.name()}; color: {text.name()}; }}
             #kmBody QToolButton#kmTools:hover {{ background: {hover}; }}
             #kmBody QToolButton#kmTools::menu-indicator {{ image: none; width: 0px; }}
-            #kmBody QPushButton#kmStart, #kmBody QPushButton#kmStop {{
-                color: {theme.fill_text()}; border: none; border-radius: 8px; font-size: 14px; font-weight: 700;
-                padding: 0 8px; }}
+            #kmBody QPushButton#kmGhost {{ background: {btn.name()}; color: {text.name()}; border: 1px solid {border};
+                border-radius: 9px; padding: 6px 14px; font-size: 12px; }}
+            #kmBody QPushButton#kmGhost:hover {{ background: {hover}; }}
+            #kmBody QPushButton#kmGhost:disabled {{ color: {sub}; }}
+            #kmBody QLineEdit#kmCount {{ background: {base.name()}; border: 1px solid {border}; border-radius: 8px;
+                padding: 4px; font-size: 14px; }}
+            #kmBody QFrame#kmSeg {{ background: {seg}; border-radius: 10px; }}
+            #kmBody QPushButton#kmSegBtn {{ background: transparent; border: none; border-radius: 8px; padding: 7px 16px;
+                color: {sub}; font-size: 13px; }}
+            #kmBody QPushButton#kmSegBtn:hover {{ color: {text.name()}; }}
+            #kmBody QPushButton#kmSegBtn:checked {{ background: {c("primary")}; color: {white}; }}
+            #kmBody QPushButton#kmSegBtn:disabled {{ color: {seg_off}; }}
+            #kmBody QPushButton#kmSegBtn:checked:disabled {{ background: {c("primary")}; color: {white}; }}
+            #kmBody QPushButton#kmStart, #kmBody QPushButton#kmStop {{ border: none; border-radius: 12px; }}
             #kmBody QPushButton#kmStart {{ background: {theme.fill(START_TONE)}; }}
             #kmBody QPushButton#kmStart:hover {{ background: {theme.fill_hover(START_TONE)}; }}
-            #kmBody QPushButton#kmStart:disabled {{ background: {track}; color: {sub}; }}
+            #kmBody QPushButton#kmStart:disabled {{ background: {track}; }}
             #kmBody QPushButton#kmStop {{ background: {theme.fill(STOP_TONE)}; }}
             #kmBody QPushButton#kmStop:hover {{ background: {theme.fill_hover(STOP_TONE)}; }}
-            #kmBody QProgressBar#kmProg {{ border: none; border-radius: 4px; background: {track}; }}
-            #kmBody QProgressBar#kmProg::chunk {{ border-radius: 4px; background: {theme.strong("green")}; }}
+            #kmBody QLabel#kmActText {{ color: {white}; font-size: 15px; font-weight: 800; background: transparent; }}
+            #kmBody QLabel#kmActText:disabled {{ color: {sub}; }}
+            #kmBody QLabel#kmKey {{ color: {white}; background: {_rgba(white, 0.16)}; border: 1px solid {_rgba(white, 0.6)};
+                border-radius: 6px; padding: 0px 8px; font-size: 11px; font-weight: 800; }}
+            #kmBody QProgressBar#kmProg {{ border: none; border-radius: 5px; background: {track}; }}
+            #kmBody QProgressBar#kmProg::chunk {{ border-radius: 5px; background: {theme.strong("green")}; }}
         """
 
+    def _paint_banner(self) -> None:
+        """상태 띠 — 대기 중(회색) · 보내는 중(초록) · 정상 종료(초록) · 사용자 중단(회색) · 그 밖의 멈춤(주황)."""
+        st, why = self._state, self._stop_reason
+        e = getattr(self, "engine", None)
+        if st == "run":
+            tone, mark, hint = "green", "●  보내는 중", ""
+        elif st == "done":
+            if why == "정상 종료":
+                tone, mark = "green", "✓  정상 종료"
+            elif why == "사용자 중단":
+                tone, mark = "", "■  사용자 중단"
+            else:
+                tone, mark = "orange", f"■  멈춤 — {why or '중단'}"
+            hint = f"성공 {e.success_count} · 건너뜀 {e.skip_count} · 처리 {e.ni}건" if e is not None else ""
+        else:
+            tone, mark = "", "○  대기 중"
+            hint = "카톡 친구 목록에서 첫 사람을 고른 뒤 Insert 를 누르면 시작합니다"
+        panel = theme.c("panel_bg")
+        if tone:
+            bg, fg = theme.strong_bg(tone), theme.strong(tone)
+            line = _mix(QColor(fg), QColor(panel), 0.45).name()
+        else:
+            bg, fg, line = panel, theme.c("subtext"), theme.c("border")
+        self.banner.setStyleSheet(f"QFrame#kmBanner {{ background: {bg}; border: 1px solid {line}; border-radius: 16px; }}")
+        self.lbl_state.setText(mark)
+        self.lbl_state.setStyleSheet(f"color: {fg};")
+        self.lbl_progress.set_hint(hint)
+
     def apply_theme(self) -> None:
-        """앱 테마를 바꿨다 — 칸 · 카드 · 막대 색을 새 팔레트로."""
+        """앱 테마를 바꿨다 — 칸 · 카드 · 막대 · 상태 띠 · 작은 창 색을 새 팔레트로."""
         self.setStyleSheet(self._css())
+        for t in (self.lbl_success, self.lbl_stop, self.lbl_skip, self.lbl_speed):
+            t.repaint_theme()
+        self._paint_banner()
+        self._paint_where()
         for d in (self._dlg_phrases, self._dlg_env, self._dlg_hist, self._dlg_log):
             if d is not None:
                 d.setPalette(QApplication.palette())
+                d.setStyleSheet(_dialog_css())
 
     # ------------------------------------------------------------ 엔진이 부르는 것(Ui)
     def start_block(self) -> str:
@@ -517,8 +782,15 @@ class KakaoMacroView(QWidget):
         # button1.Enabled · RadioGroup1.Enabled := not on (메시지 · 이미지 · 인원수 칸은 A1Auto 처럼 그대로 둔다)
         self.btn_start.setEnabled(not on)
         self.grp_mode.setEnabled(not on)
-        if not on:
+        self.btn_start.set_busy(on)                # 도는 동안 '● 보내는 중…'(v1.39)
+        if on:
+            self._state, self._stop_reason = "run", ""
+        else:
+            # 돌다가 멈췄거나 멈춘 까닭(❌ 줄)이 있을 때만 '끝' — 아무 일 없이 꺼짐만 오면 대기 중 그대로
+            if self._state == "run" or self._stop_reason:
+                self._state = "done"
             self._history_wanted = True        # 끝났다 — 방금 보낸 것을 계정에 올린다(1초 타이머가 쉬는 걸 보고)
+        self._paint_banner()
         if self.tray is not None:
             try:
                 if on:
@@ -550,6 +822,9 @@ class KakaoMacroView(QWidget):
     def add_log(self, text: str, kind: str) -> None:
         """AddLogLine — 끝에 색을 정해 한 줄 · 맨 아래로. 발송 기록에도 한 줄(계정에 올릴 것 — v1.38)."""
         self._append(text, self._log_color(kind))
+        if kind == "stop":
+            m = re.search(r"→ 중단: (.*)$", text)
+            self._stop_reason = m.group(1).strip() if m else ""
         try:
             self.history.note(text)
         except Exception:
@@ -603,6 +878,10 @@ class KakaoMacroView(QWidget):
         pix = QPixmap(path)
         self.preview.set_pixmap(pix)            # 못 읽는 그림이면 미리보기만 비운다(경로는 그대로)
         self.preview.setToolTip(path)
+        name = Path(path).name if path else ""
+        fm = QFontMetrics(self.lbl_image.font())
+        self.lbl_image.setText(fm.elidedText(name, Qt.ElideMiddle, 220) if name else "그림을 고르지 않았습니다")
+        self.lbl_image.setToolTip(path)
 
     def load_log(self) -> None:
         """[로그 불러오기] — '===== 불러오기: 파일 =====' 아래에 이어 붙인다."""
@@ -691,14 +970,19 @@ class KakaoMacroView(QWidget):
         except Exception:
             locked = False
         if locked:
-            self.lbl_where.setText("⚠ 구글 로그인을 해야 매크로를 시작할 수 있습니다")
-            return
-        try:
-            io, _acct = self.io_getter()
-        except Exception:
-            io = None
-        self.lbl_where.setText("설정 · 문구 · 발송 기록: 내 구글 계정에 저장" if io is not None
-                               else "설정 · 문구 · 발송 기록: 이 PC 에 저장(로그인하면 구글 계정에)")
+            tone, text = "warn", "⚠  구글 로그인을 해야 매크로를 시작할 수 있습니다"
+        else:
+            try:
+                io, _acct = self.io_getter()
+            except Exception:
+                io = None
+            tone, text = (("ok", "●  설정 · 문구 · 발송 기록: 내 구글 계정에 저장") if io is not None
+                          else ("local", "○  설정 · 문구 · 발송 기록: 이 PC 에 저장(로그인하면 구글 계정에)"))
+        self.lbl_where.setText(text)
+        if self.lbl_where.property("tone") != tone:
+            self.lbl_where.setProperty("tone", tone)
+            self.lbl_where.style().unpolish(self.lbl_where)
+            self.lbl_where.style().polish(self.lbl_where)
 
     def _on_prefs_changed(self) -> None:
         if self._dlg_phrases is not None and self._dlg_phrases.isVisible():
@@ -742,12 +1026,18 @@ class PhrasesDialog(QDialog):
         super().__init__(view.window())
         self.view = view
         self.setWindowTitle("자주 쓰는 문구")
-        self.resize(360, 380)
+        self.resize(380, 420)
+        self.setStyleSheet(_dialog_css())                  # 매크로 화면과 같은 결(v1.39)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(8)
-        self.lbl_title = QLabel("자주 쓰는 문구")
-        lay.addWidget(self.lbl_title)
+        lay.setContentsMargins(16, 14, 16, 16)
+        lay.setSpacing(10)
+        head = QHBoxLayout()
+        self.lbl_title = _label("자주 쓰는 문구", "kmDlgTitle")
+        head.addWidget(self.lbl_title)
+        head.addStretch(1)
+        self.lbl_count = _label("", "kmSub")
+        head.addWidget(self.lbl_count)
+        lay.addLayout(head)
         self.list = QListWidget()
         f = self.list.font()
         f.setPixelSize(13)
@@ -761,8 +1051,10 @@ class PhrasesDialog(QDialog):
         self.btn_delete = QPushButton("삭제")
         self.btn_refresh = QPushButton("새로고침")
         self.btn_close = QPushButton("닫기")
+        self.btn_load.setObjectName("kmPrimary")
+        self.btn_delete.setObjectName("kmDanger")
         for b in (self.btn_load, self.btn_save, self.btn_delete, self.btn_refresh, self.btn_close):
-            b.setFixedHeight(32)
+            b.setFixedHeight(34)
         g.addWidget(self.btn_load, 0, 0, 1, 2)
         g.addWidget(self.btn_save, 0, 2, 1, 2)
         g.addWidget(self.btn_delete, 0, 4, 1, 2)
@@ -789,8 +1081,14 @@ class PhrasesDialog(QDialog):
         """RefreshList — 목록을 다시(이 PC 사본) · 계정과도 맞춘다(끝나면 저절로 다시 그린다)."""
         keep = self.selected()
         self.list.clear()
-        for t in self.view.prefs.titles():
+        titles = self.view.prefs.titles()
+        for t in titles:
             self.list.addItem(t)
+        try:
+            io, _acct = self.view.io_getter()
+        except Exception:
+            io = None
+        self.lbl_count.setText(f"{len(titles)}개 · " + ("내 구글 계정" if io is not None else "이 PC"))
         if keep:
             hits = self.list.findItems(keep, Qt.MatchExactly)
             if hits:
@@ -848,9 +1146,10 @@ class EnvDialog(QDialog):
         super().__init__(view.window())
         self.view = view
         self.setWindowTitle("환경설정")
-        self.setMinimumWidth(340)
+        self.setMinimumWidth(360)
+        self.setStyleSheet(_dialog_css())                  # 매크로 화면과 같은 결(v1.39)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 14, 12, 12)
+        lay.setContentsMargins(16, 14, 16, 16)
         lay.setSpacing(4)
 
         def row(text, sub, width=60):
@@ -883,9 +1182,10 @@ class EnvDialog(QDialog):
         lay.addSpacing(8)
         bot = QHBoxLayout()
         self.btn_default = QPushButton("기본값")
-        self.btn_default.setFixedSize(60, 32)
+        self.btn_default.setFixedSize(72, 34)
         self.btn_apply = QPushButton("닫기(적용)")
-        self.btn_apply.setFixedHeight(32)
+        self.btn_apply.setObjectName("kmPrimary")
+        self.btn_apply.setFixedHeight(34)
         bot.addWidget(self.btn_default)
         bot.addWidget(self.btn_apply, 1)
         lay.addLayout(bot)
@@ -945,6 +1245,7 @@ class ChangeLogDialog(QDialog):
         super().__init__(view.window())
         self.setWindowTitle("수정로그")
         self.resize(600, 480)
+        self.setStyleSheet(_dialog_css())                  # 매크로 화면과 같은 결(v1.39)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
         self.text = QTextBrowser()
@@ -954,7 +1255,8 @@ class ChangeLogDialog(QDialog):
         row = QHBoxLayout()
         row.addStretch(1)
         self.btn_close = QPushButton("닫기")
-        self.btn_close.setFixedHeight(32)
+        self.btn_close.setObjectName("kmPrimary")
+        self.btn_close.setFixedSize(96, 34)
         self.btn_close.clicked.connect(self.close)
         row.addWidget(self.btn_close)
         lay.addLayout(row)
@@ -1041,6 +1343,7 @@ class HistoryDialog(QDialog):
         self.doc = kh.empty()
         self.setWindowTitle("발송 기록")
         self.resize(820, 580)
+        self.setStyleSheet(_dialog_css())                  # 매크로 화면과 같은 결(v1.39)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(8)
@@ -1110,8 +1413,9 @@ class HistoryDialog(QDialog):
         self.btn_reload = QPushButton("새로고침")
         self.btn_export = QPushButton("엑셀로 저장")
         self.btn_close = QPushButton("닫기")
+        self.btn_export.setObjectName("kmPrimary")
         for b in (self.btn_reload, self.btn_export, self.btn_close):
-            b.setFixedHeight(32)
+            b.setFixedHeight(34)
             bot.addWidget(b)
         lay.addLayout(bot)
 
@@ -1294,7 +1598,7 @@ class KakaoMacroWindow(QWidget):
         lay.setContentsMargins(12, 10, 12, 12)
         self.view = KakaoMacroView(self, tray=tray, io_getter=io_getter, armed=self._armed, need_login=need_login)
         lay.addWidget(self.view)
-        self.resize(QSize(720, 720))
+        self.resize(QSize(840, 700))
 
     def _armed(self) -> bool:
         return self.isVisible() or self.isMinimized()
