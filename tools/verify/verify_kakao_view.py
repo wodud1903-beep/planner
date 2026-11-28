@@ -27,7 +27,7 @@ TMP = Path(tempfile.mkdtemp())
 
 from PySide6.QtCore import QTimer  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage  # noqa: E402
-from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QLabel, QMessageBox  # noqa: E402
 
 app = QApplication.instance() or QApplication([])
 _f = QFont("Malgun Gothic", 10)
@@ -206,13 +206,18 @@ def make_view(names=("김민", "이영희"), armed=None):
 
 
 # ===========================================================================
-print("[1] 화면 — A1Auto 글자 그대로")
+print("[1] 화면 — A1Auto 부품 그대로(v1.39 현황판 모양)")
 v, win, tray = make_view()
-ok("전송방식 셋 · 처음엔 아무것도 안 고름(A1Auto 그대로)",
-   v.grp_mode.title() == "전송방식" and [r.text() for r in v.rb_modes] == ["텍스트", "이미지", "이미지+텍스트"]
-   and v.mode() == -1)
-ok("단추 글자", (v.btn_image.text(), v.btn_start.text(), v.btn_stop.text()) ==
-   ("이미지 불러오기", "매크로 시작 (INSERT)", "매크로 중지 (DELETE)"))
+ok("전송방식 셋(한 줄 단추) · 처음엔 아무것도 안 고름(A1Auto 그대로)",
+   v.lbl_mode.text() == "전송방식" and [r.text() for r in v.rb_modes] == ["텍스트", "이미지", "이미지+텍스트"]
+   and v.mode() == -1 and not any(r.isChecked() for r in v.rb_modes))
+ok("단추 글자 — ▶ 매크로 시작 · INSERT / ■ 매크로 중지 · DELETE",
+   (v.btn_image.text(), v.btn_start.caption(), v.btn_start.key(), v.btn_stop.caption(), v.btn_stop.key()) ==
+   ("이미지 불러오기", "▶  매크로 시작", "INSERT", "■  매크로 중지", "DELETE"))
+ok("상태 띠 — 처음엔 '대기 중' · 시작 방법", v.lbl_state.text() == "○  대기 중"
+   and "Insert" in v.lbl_progress.lbl_sub.text(), v.lbl_progress.lbl_sub.text())
+ok("현황 숫자 — 처음엔 '–'(아직 모름)", [t.lbl_num.text() for t in (v.lbl_success, v.lbl_stop, v.lbl_skip, v.lbl_speed)]
+   == ["–", "–", "–", "–"])
 ok("카드 처음 글자 · 발송인원수 0", [lb.text() for lb in (v.lbl_success, v.lbl_stop, v.lbl_speed, v.lbl_skip)]
    == ["성공횟수", "중단횟수", "속도:", "건너뜀"] and v.ed_count.text() == "0")
 ok("도구 메뉴 — 자주 쓰는 문구 · 발송 기록(v1.38) · 환경설정 · 수정로그", [a.text() for a in v.btn_tools.menu().actions()]
@@ -223,17 +228,23 @@ ok("수정로그 → 실제 이력 창(v1.38 — A1Auto 는 '도움말 내용 �
    and km.CHANGE_LOG[0][0] in v._dlg_log.text.toPlainText())
 v._dlg_log.close()
 ok("1초마다 카드(Timer2) — '성공: 0'", wait(lambda: v.lbl_success.text() == "성공: 0", 2.5) and v.lbl_speed.text() == "속도:")
+ok("…숫자 칸은 '0'(흐리게)", v.lbl_success.lbl_num.text() == "0"
+   and theme.c("subtext").lower() in v.lbl_success.lbl_num.styleSheet().lower())
 v.rb_modes[0].click()
 ok("텍스트 → 이미지 불러오기 꺼짐", not v.btn_image.isEnabled())
 v.rb_modes[2].click()
 ok("이미지+텍스트 → 켜짐", v.btn_image.isEnabled())
+ok("한 줄 단추도 하나만 골린다(라디오처럼)", [r.isChecked() for r in v.rb_modes] == [False, False, True] and v.mode() == 2)
+v.rb_modes[2].click()
+ok("고른 것을 또 눌러도 그대로", v.mode() == 2 and v.rb_modes[2].isChecked())
 img = TMP / "명함.png"
 q = QImage(300, 200, QImage.Format_RGB32)
 q.fill(QColor("#2563EB"))
 q.save(str(img))
 QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (str(img), ""))
 v.btn_image.click()
-ok("이미지 고르면 경로 · 미리보기", v.image_path() == str(img) and v.preview.has_image())
+ok("이미지 고르면 경로 · 미리보기 · 파일 이름", v.image_path() == str(img) and v.preview.has_image()
+   and v.lbl_image.text() == "명함.png")
 
 print("[2] 텍스트로 2명 — 진짜 시계 · 클립보드 · 1ms 타이머")
 v.rb_modes[0].click()
@@ -242,6 +253,8 @@ v.ed_count.setText("2")
 QGuiApplication.clipboard().setText("내 클립보드")
 v.btn_start.click()
 ok("도는 동안 시작 단추 · 전송방식 꺼짐", not v.btn_start.isEnabled() and not v.grp_mode.isEnabled() and v.busy())
+ok("…시작 단추는 '● 보내는 중…'(키 표시 숨김) · 상태 띠 '보내는 중'", v.btn_start.caption() == "●  보내는 중…"
+   and v.btn_start.key() == "" and v.lbl_state.text() == "●  보내는 중")
 ok("트레이 풍선말에 진행", wait(lambda: tray.tip.startswith("A1Auto · "), 3), tray.tip)
 ok("끝까지", wait(lambda: not v.busy(), 20))
 ok("두 사람에게 메시지", win.sent == [("김민", "안녕하세요\n프로모션 안내"), ("이영희", "안녕하세요\n프로모션 안내")], win.sent)
@@ -256,8 +269,15 @@ ok("끝나면 풍선 알림 · 풍선말은 앱 이름으로", tray.shown[-1:] =
    and tray.tip == "일정관리기", (tray.shown, tray.tip))
 ok("진행 '2 / 2' · 막대 끝까지", v.lbl_progress.text() == "2 / 2" and v.prog.value() == 1000)
 ok("단추 다시 켜짐", v.btn_start.isEnabled() and v.grp_mode.isEnabled())
+ok("…'▶ 매크로 시작 · INSERT' 로 돌아옴", v.btn_start.caption() == "▶  매크로 시작" and v.btn_start.key() == "INSERT")
+ok("상태 띠 '✓ 정상 종료' · 큰 글 '2 / 2 처리' · 끝난 요약", v.lbl_state.text() == "✓  정상 종료"
+   and v.lbl_progress.lbl_big.text() == "2 / 2" and not v.lbl_progress.lbl_unit.isHidden()
+   and v.lbl_progress.lbl_sub.text() == "성공 2 · 건너뜀 0 · 처리 2건", v.lbl_progress.lbl_sub.text())
 ok("1초 뒤 카드 '성공: 2' · 속도", wait(lambda: v.lbl_success.text() == "성공: 2", 2.5)
    and v.lbl_speed.text().endswith("건/분"), v.lbl_speed.text())
+ok("…숫자 칸 '2'(초록) · 속도는 숫자만(단위 따로)", v.lbl_success.lbl_num.text() == "2"
+   and theme.strong("green").lower() in v.lbl_success.lbl_num.styleSheet().lower()
+   and v.lbl_speed.lbl_num.text() == v.lbl_speed.text().replace("건/분", "") and v.lbl_speed.lbl_unit.text() == "건/분")
 
 print("[3] Insert · Delete — 이 화면을 볼 때만")
 arm = {"on": False}
@@ -339,7 +359,7 @@ print("[5] 환경설정 — 지연 셋 + 중복 일수 · [기본값] 800/800/12
 v.act_env.trigger()
 e = v._dlg_env
 ok("지금 값을 칸에", (e.ed1.text(), e.ed2.text(), e.ed3.text(), e.ed4.text()) == ("60", "60", "120", "1"))
-ok("설명 글 그대로", all(t in [lb.text() for lb in e.findChildren(type(v.lbl_progress))] for t in (
+ok("설명 글 그대로", all(t in [lb.text() for lb in e.findChildren(QLabel)] for t in (
     "텍스트 입력 전 지연시간(ms) :", "└ 채팅창이 열리고 텍스트가 입력되기 전 지연시간",
     "다음 채팅창을 열기 전 지연시간(ms) : ", "└ 이번 채팅창이 닫히고 다음 채팅창이 열리기 전 지연시간",
     "이미지 전송 후 지연시간(ms) :", "└ 이미지 전송 후 다음 작업을 수행하기 전 지연시간")))
@@ -390,6 +410,74 @@ for th in ("dark", "light"):
     want = QColor(theme.c("input_bg")).name()
     ok(f"{th}: 메시지 칸 바탕", v.memo.palette().color(v.memo.backgroundRole()).name() == want
        or want in v.styleSheet(), want)
+
+print("[7b] 현황판(v1.39) — 멈춘 까닭 · 저장 위치 알약 · 작은 창 · 세 테마 글자 대비")
+
+
+def _lum(h):
+    c = QColor(h)
+    f = (lambda x: x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * f(c.redF()) + 0.7152 * f(c.greenF()) + 0.0722 * f(c.blueF())
+
+
+def _ratio(a, b):
+    la, lb = _lum(a), _lum(b)
+    return round((max(la, lb) + 0.05) / (min(la, lb) + 0.05), 2)
+
+
+vb, winb, trayb = make_view(("가",))
+vb.set_running(True)                       # 엔진 차례 그대로: 시작 → (멈춤) ❌ 줄 → 꺼짐
+vb.add_log("❌ 2026-11-28 09:00:00 → 중단: 카카오톡 창 이탈 — 오발송 방지", "stop")
+vb.set_running(False)
+ok("창 이탈로 멈추면 '■ 멈춤 — 까닭'(주황 띠)", vb.lbl_state.text() == "■  멈춤 — 카카오톡 창 이탈 — 오발송 방지"
+   and theme.strong_bg("orange").lower() in vb.banner.styleSheet().lower(), vb.lbl_state.text())
+vc, _wc, _tc = make_view(("가",))
+vc.set_running(False)
+ok("아무 일 없이 '꺼짐' 만 오면 대기 중 그대로", vc.lbl_state.text() == "○  대기 중")
+vc.engine.button2_click()
+ok("쉬는 중 Delete(A1Auto: '사용자 중단' 줄) → '■ 사용자 중단'(회색 띠)", vc.lbl_state.text() == "■  사용자 중단"
+   and theme.c("panel_bg").lower() in vc.banner.styleSheet().lower(), vc.lbl_state.text())
+LOGGED["on"] = True
+vc._paint_where()
+ok("저장 위치 알약 — 로그인: 초록", vc.lbl_where.property("tone") == "ok")
+LOGGED["on"] = False
+vc._paint_where()
+ok("…로그인 전: 회색", vc.lbl_where.property("tone") == "local")
+vc.need_login = lambda: "로그인하세요"
+vc._paint_where()
+ok("…시작 막힘: 주황 '⚠ 구글 로그인'", vc.lbl_where.property("tone") == "warn" and "구글 로그인" in vc.lbl_where.text())
+vc.open_phrases()
+vc.open_env()
+vc.show_change_log()
+vc.open_history()
+pump(0.3)
+dp, de, dl, dh = vc._dlg_phrases, vc._dlg_env, vc._dlg_log, vc._dlg_hist
+ok("작은 창도 같은 결 — 채운 단추 [불러오기] [닫기(적용)] [닫기] [엑셀로 저장] · 빨간 글자 [삭제]",
+   (dp.btn_load.objectName(), dp.btn_delete.objectName(), de.btn_apply.objectName(), dl.btn_close.objectName(),
+    dh.btn_export.objectName()) == ("kmPrimary", "kmDanger", "kmPrimary", "kmPrimary", "kmPrimary")
+   and all(theme.c("primary") in d.styleSheet() for d in (dp, de, dl, dh)))
+ok("자주 쓰는 문구 — 몇 개 · 어디에", dp.lbl_count.text().endswith("개 · 이 PC"), dp.lbl_count.text())
+for th in ("light", "warm", "dark"):
+    theme.set_theme(th)
+    theme.apply_to_app(app)
+    vb.apply_theme()
+    vc.apply_theme()
+    bad = []
+    for tone in ("green", "orange"):
+        r = _ratio(theme.strong(tone), theme.strong_bg(tone))
+        if r < 4.5:
+            bad.append((tone, r))
+    sub_on_green = _ratio(theme.c("subtext"), theme.strong_bg("green"))
+    white_on = [_ratio(theme.fill_text(), theme.fill(t)) for t in (kv.START_TONE, kv.STOP_TONE)]
+    white_primary = _ratio(theme.fill_text(), theme.c("primary"))
+    ok(f"{th}: 상태 띠 글자 4.5:1 · 회색 글자 4.4:1 · 시작/중지 흰 글자 · 고른 전송방식 흰 글자",
+       not bad and sub_on_green >= 4.4 and min(white_on) >= 4.5 and white_primary >= 4.5,
+       (bad, sub_on_green, white_on, white_primary))
+    ok(f"{th}: 작은 창도 새 테마 색으로", theme.c("input_bg") in dp.styleSheet())
+for d in (dp, de, dl, dh):
+    d.close()
+theme.set_theme("light")
+theme.apply_to_app(app)
 
 # ===========================================================================
 print("[8] 일정관리기 — '카톡 매크로' 메뉴 · 트레이 · 인증번호 · 업데이트 · 끄기")
