@@ -62,6 +62,35 @@ addEventListener("planner:reauthed", async () => {
   }
 });
 
+// 지점장이 이 계정의 사용을 제한했다(v1.40) — 이 기기에 받아 둔 자료를 지우고 화면 전체를 잠근다.
+// 다른 계정으로 로그인하거나 로그아웃만 할 수 있다.
+addEventListener("planner:blocked", async (e) => {
+  try { await store.wipe(); } catch (x) { /* 지울 것이 없거나 막힘 */ }
+  showBlocked(String((e && e.detail) || ""));
+});
+auth.onChange((st) => { if (st === auth.STATE.AUTHED) auth.checkBlocked(); });
+setInterval(() => { auth.checkBlocked(); }, 30 * 60 * 1000);
+function showBlocked(mail) {
+  if (document.getElementById("blockedwrap")) return;
+  const wrap = document.createElement("div");
+  wrap.id = "blockedwrap";
+  wrap.className = "blockedwrap";
+  wrap.setAttribute("role", "alertdialog");
+  wrap.innerHTML = `<div class="blockedcard">
+      <h2>사용이 제한된 계정입니다</h2>
+      <p class="blockedmail"></p>
+      <p>관리자(지점장)가 이 계정의 사용을 제한했습니다.<br>지점장에게 문의해 주세요.</p>
+      <div class="blockedbtns">
+        <button class="primary" id="blockedswitch">다른 계정으로 로그인</button>
+        <button class="chip" id="blockedout">로그아웃</button>
+      </div>
+    </div>`;
+  wrap.querySelector(".blockedmail").textContent = mail;
+  document.body.appendChild(wrap);
+  wrap.querySelector("#blockedswitch").onclick = () => auth.switchAccount();
+  wrap.querySelector("#blockedout").onclick = async () => { await auth.signOut(); location.reload(); };
+}
+
 // 구글·로그인 서버가 잠깐 탈났다(5xx) — 빈 화면 대신 알리고 조금 뒤 저절로 다시 받는다(v1.26).
 // 예전엔 화면이 빈 채로 아무 말이 없었다.
 const MODS = () => [kbui, cust, docs, agenda, calc];

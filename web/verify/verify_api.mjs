@@ -620,11 +620,82 @@ console.log("\n[회원] v1.37 — PC 앱에 로그인한 계정 목록 · 관리
      && st2.apps.kb.ver === "1.11.0", JSON.stringify(m2).slice(0, 300));
   ok("예전(v1.37) 묶음 파일도 읽고 · 처음 날 · 횟수를 이어 받는다", m2.length === 2 && kim.apps.planner.first === "2026-11-20T00:00:00.000Z"
      && kim.apps.planner.n === 5 && kim.apps.planner.ver === "1.38.0", JSON.stringify(kim));
-  ok("관리자 = PC config.RATES_ADMINS", (() => {
-    const py = readFileSync(join(ROOT, "python", "planner", "config.py"), "utf-8");
-    const mm = py.match(/RATES_ADMINS = \(([^)]*)\)/);
-    return mm && JSON.stringify([...mm[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])) === JSON.stringify(T.ADMINS);
+  ok("지점장 = PC config.OWNER_EMAIL · members.OWNER(두 앱 같은 파일)", (() => {
+    const cfg = readFileSync(join(ROOT, "python", "planner", "config.py"), "utf-8");
+    const mem = readFileSync(join(ROOT, "python", "planner", "members.py"), "utf-8");
+    const a = (cfg.match(/OWNER_EMAIL = "([^"]+)"/) || [])[1];
+    const b = (mem.match(/OWNER = "([^"]+)"/) || [])[1];
+    return a === T.OWNER && b === T.OWNER;
   })());
+
+  console.log("\n[회원-2] v1.40 — 사용 제한 · 관리자 지정(지점장만) · 내 상태 · 웹 토큰 막기");
+  const box2 = new Map();
+  T.setStore({ async get(id) { return box2.has(id) ? JSON.parse(box2.get(id)) : null; },
+               async put(id, rec) { box2.set(id, JSON.stringify(rec)); },
+               async list() { return [...box2.keys()]; } });
+  const call2 = async (method, tok, body, qs = "") => {
+    const rr = res();
+    await M({ method, url: "/api/members" + qs, headers: { authorization: tok ? "Bearer " + tok : "" }, body }, rr);
+    return rr;
+  };
+  await call2("POST", "T-staff", { app: "planner", ver: "1.40.0" });
+  r = await call2("GET", "T-staff", undefined, "?me=1");
+  ok("내 상태(?me=1) — 누구나 자기 것만", r.statusCode === 200
+     && JSON.stringify(r.json()) === JSON.stringify({ email: "staff@example.com", owner: false, blocked: false, admin: false }),
+     r.body);
+  r = await call2("GET", "T-admin", undefined, "?me=1");
+  ok("지점장은 늘 관리자 · 제한 없음", r.json().owner === true && r.json().admin === true && r.json().blocked === false);
+  r = await call2("POST", "T-staff", { action: "block", email: "kim@example.com" });
+  ok("지점장이 아니면 제한 · 지정을 못 한다(403)", r.statusCode === 403 && !box2.has("_roles"));
+  r = await call2("POST", "T-admin", { action: "block", email: "Staff@Example.com " });
+  ok("사용 제한 — 이메일은 소문자로 · 결과 상태", r.statusCode === 200 && r.json().status.blocked === true
+     && r.json().status.email === "staff@example.com", r.body);
+  ok("제한 목록은 회원 기록처럼 잠가서 저장(진짜 저장소는 put 에서 s.seal)", box2.has("_roles")
+     && /async put\(id, rec\) \{ await b\.put\(path\(id\), s\.seal\(rec\), opts\); \}/
+       .test(readFileSync(join(ROOT, "api", "_members.js"), "utf-8")));
+  r = await call2("GET", "T-staff", undefined, "?me=1");
+  ok("제한된 계정 — 내 상태 blocked", r.json().blocked === true && r.json().admin === false);
+  r = await call2("POST", "T-staff", { app: "kb", ver: "1.13.0" });
+  ok("제한돼도 로그인 기록은 남고 답에 blocked", r.statusCode === 200 && r.json().blocked === true);
+  for (const [act, em, want] of [["block", "wodud1903@gmail.com", "owner"], ["unadmin", "wodud1903@gmail.com", "owner"],
+                                  ["block", "not-an-email", "bad"], ["hack", "kim@example.com", "bad"]]) {
+    r = await call2("POST", "T-admin", { action: act, email: em });
+    ok(`${act} ${em} → 400 ${want}`, r.statusCode === 400 && r.json().error === want, r.body);
+  }
+  r = await call2("POST", "T-admin", { action: "admin", email: "kim@example.com" });
+  ok("관리자로 지정", r.statusCode === 200 && r.json().status.admin === true);
+  r = await call2("GET", "T-other", undefined, "?me=1");
+  ok("…그 계정의 내 상태 admin", r.json().admin === true && r.json().blocked === false);
+  await call2("POST", "T-admin", { action: "block", email: "kim@example.com" });
+  r = await call2("GET", "T-other", undefined, "?me=1");
+  ok("관리자를 제한하면 관리자도 풀린다", r.json().blocked === true && r.json().admin === false);
+  await call2("POST", "T-admin", { action: "admin", email: "kim@example.com" });
+  r = await call2("GET", "T-other", undefined, "?me=1");
+  ok("다시 관리자로 지정하면 제한도 풀린다", r.json().blocked === false && r.json().admin === true);
+  await call2("POST", "T-admin", { action: "unadmin", email: "kim@example.com" });
+  r = await call2("GET", "T-other", undefined, "?me=1");
+  ok("관리자 해제", r.json().admin === false);
+  await call2("POST", "T-admin", { action: "block", email: "never@example.com" });
+  r = await call2("GET", "T-admin");
+  const ml = r.json().members || [];
+  ok("목록 — 지점장 표시 · 줄마다 제한 · 관리자 · 로그인 기록이 없는 제한 계정도 · 제한 목록 파일은 빠진다",
+     r.json().owner === "wodud1903@gmail.com" && ml.some((x) => x.email === "staff@example.com" && x.blocked)
+     && ml.some((x) => x.email === "never@example.com" && x.blocked && JSON.stringify(x.apps) === "{}")
+     && !ml.some((x) => !x.email || x.email.startsWith("_")), JSON.stringify(ml).slice(0, 300));
+  ok("check() — 웹 로그인 서버가 쓰는 판단", (await M.check("STAFF@example.com")).blocked === true
+     && (await M.check("kim@example.com")).blocked === false && (await M.check("wodud1903@gmail.com")).owner === true);
+  // 웹 토큰 — 제한된 계정은 토큰을 받지 못한다(구글에 묻기 전에 막는다)
+  const TK = load("auth/token.js");
+  r = res();
+  await TK(req({ method: "POST", cookie: `${S.SESSION}=${S.seal({ rt: "rt-z", email: "staff@example.com" })}` }), r);
+  ok("일정관리기 웹 토큰 → 403 blocked(로그인 쿠키는 그대로)", r.statusCode === 403 && r.json().error === "blocked"
+     && r.json().email === "staff@example.com" && !r.cookies().length, r.body);
+  const KT = load("auth/kb-token.js");
+  r = res();
+  await KT({ method: "POST", url: "/api/auth/kb-token", headers: {}, body: { h: S.sealKb({ rt: "rt-z", email: "staff@example.com" }) } }, r);
+  ok("업무자료검색 웹 토큰(kb-token) → 403 blocked", r.statusCode === 403 && r.json().error === "blocked", r.body);
+  await call2("POST", "T-admin", { action: "unblock", email: "staff@example.com" });
+  ok("제한 풀기", (await M.check("staff@example.com")).blocked === false);
   T.setStore(null);
   delete process.env.BLOB_READ_WRITE_TOKEN; delete process.env.BLOB_STORE_ID;
   const M2 = load("_members.js");

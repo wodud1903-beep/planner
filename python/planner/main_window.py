@@ -22,7 +22,7 @@ from html import escape as html_escape
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout,
+    QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
     QStackedWidget, QSystemTrayIcon, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
@@ -47,6 +47,7 @@ from .customer_history import CustomerHistoryDialog
 from .greeting_tab import GreetingTab
 from . import bizcard, members
 from .members_dialog import MembersDialog
+from .member_lock import LockDialog
 from .kakao_macro_view import KakaoMacroView
 from .kb_tab import KbTab, QuickSearch
 from .promo_tab import PromoTab
@@ -185,6 +186,7 @@ class MainWindow(QMainWindow):
     # 방금 만든 출고 일정 (CalEvent) — 재조회 없이 목록에 얹는다
     sig_deliver_new = Signal(object)
     sig_account = Signal(str, str)     # 로그인 계정 이메일 확인됨 (이메일, 실패 이유 "auth"|"net")
+    sig_member = Signal(str, object)   # 내 계정 상태(사용 제한 · 관리자 — v1.40) (이메일, {blocked, admin…}|None)
     sig_sheet_done = Signal(int)       # 시트 읽기가 고객ID 까지 다 끝났다(그때의 epoch) — 월 마감
     sig_monthly = Signal(str, str, bool)   # 월 마감 시트 쓰기 끝 (YYYY-MM, 오류, 저절로였나)
     sig_google_login = Signal(bool, str)   # 메인 화면 [Google 로그인] 결과 (성공, 오류)
@@ -366,6 +368,15 @@ class MainWindow(QMainWindow):
         self.sig_deliver_cal.connect(self._on_deliver_cal)
         self.sig_deliver_new.connect(self.add_optimistic_event)
         self.sig_account.connect(self._on_account_ready)
+        # 사용 제한 · 관리자 지정(v1.40) — 켜자마자 이 PC 에 적어 둔 답으로, 계정이 확인되면 서버에 묻고, 30분마다 다시
+        self.sig_member.connect(self._on_member)
+        self._member_cache = members.StatusCache()
+        self._locking = False
+        self._member_timer = QTimer(self)
+        self._member_timer.setInterval(self.MEMBER_CHECK_MS)
+        self._member_timer.timeout.connect(lambda: self._check_member(getattr(self, "account_email", "")))
+        self._member_timer.start()
+        QTimer.singleShot(0, self._startup_gate)
         self.sig_google_login.connect(self._on_google_login_done)
         self.sig_synced.connect(self._on_synced)
         self.sig_acct_pushed.connect(self._on_acct_pushed)
@@ -646,9 +657,10 @@ class MainWindow(QMainWindow):
         self._acct_tries = 0
         self._account_verified = True
         self.account_email = email
-        # 회원 목록(v1.37) — 이 계정이 일정관리기를 쓴다고 서버에 알린다(하루 한 번 · 조용히). 관리자면 [회원 목록]
+        # 회원 목록(v1.37) — 이 계정이 일정관리기를 쓴다고 서버에 알린다(하루 한 번 · 조용히). 지점장이면 [회원 목록]
         members.report_async(self.gauth, email, "planner", config.APP_VERSION)
-        self.sidebar.btn_members.setVisible(config.is_rates_admin(email))
+        self.sidebar.btn_members.setVisible(config.is_owner(email))
+        self._check_member(email)            # 사용 제한 · 관리자 지정(v1.40)
         self.tab_macro._paint_where()
         config.set_account(email)
         config.remember_account(email)
@@ -1400,11 +1412,84 @@ class MainWindow(QMainWindow):
                 "대시보드 위의 구글 로그인 단추나 [설정] 에서 로그인한 뒤 다시 눌러 주세요.")
 
     def open_members(self):
-        """[회원 목록] — 관리자만(서버도 관리자인지 다시 확인한다)."""
-        if not config.is_rates_admin(getattr(self, "account_email", "")):
+        """[회원 목록] — 지점장만(서버도 다시 확인한다). 사용 제한 · 관리자 지정도 여기서(v1.40)."""
+        if not config.is_owner(getattr(self, "account_email", "")):
             return
         d = MembersDialog(self.gauth, self)
         d.exec()
+
+    # ------------------------------------------------------------ 사용 제한 · 관리자 지정(v1.40)
+    MEMBER_CHECK_MS = 30 * 60 * 1000
+
+    def _startup_gate(self):
+        """켜자마자 — 이 PC 에 적어 둔 답으로. 제한된 계정이면 잠그고, 관리자면 관리자 화면으로(서버 답을 기다리지 않고).
+        로그아웃해 둔 PC 라도 이 PC 에서 제한됐던 계정이 있으면 잠근다(로그아웃으로 비켜 가지 못하게)."""
+        email = (self._provisional_account or config.last_account() or "").strip().lower()
+        c = self._member_cache.get(email) if email else None
+        if c and c["blocked"]:
+            self._enforce_block(email)
+            return
+        if not email:
+            other = self._member_cache.blocked_email()
+            if other:
+                self._enforce_block(other)
+                return
+        if c and c["admin"]:
+            config.grant_admin(email, True)
+
+    def _check_member(self, email: str):
+        """서버에 내 상태를 묻는다(뒤에서). 로그인 · 계정 확인 전이면 묻지 않는다."""
+        email = (email or "").strip().lower()
+        if not email or not self.gauth.is_connected() or not members.ENABLED:
+            return
+
+        def work():
+            self.sig_member.emit(email, members.status(self.gauth))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_member(self, email: str, st):
+        if st is None:
+            return                              # 못 물었다 — 아무것도 바꾸지 않는다(다음에 다시)
+        self._member_cache.put(email, st)
+        if st.get("blocked"):
+            self._enforce_block(email)
+            return
+        was = config.is_rates_admin(email)
+        config.grant_admin(email, bool(st.get("admin")))
+        if config.is_rates_admin(email) != was and hasattr(self, "tab_kb"):
+            self.tab_kb.set_account(email)      # 회사 공통 자료 [편집] 단추 등을 새 권한으로
+
+    def _enforce_block(self, email: str):
+        """사용 제한 — 잠금 창. 풀리면 그대로 쓰고, [끝내기] 면 프로그램을 끝낸다."""
+        if self._locking:
+            return
+        self._locking = True
+        config.grant_admin(email, False)
+
+        def recheck():
+            st = members.status(self.gauth) if self.gauth.is_connected() else None
+            if st is not None:
+                self._member_cache.put(email, st)
+            return st
+
+        try:
+            dlg = LockDialog(email, recheck, config.APP_NAME, self)
+            ok = dlg.exec() == QDialog.Accepted
+        finally:
+            self._locking = False
+        if ok:
+            st = dlg.status or {}
+            config.grant_admin(email, bool(st.get("admin")))
+            return
+        self._force_quit()
+
+    def _force_quit(self):
+        """묻지 않고 끝낸다(사용 제한) — 끌 때 할 일(매크로 멈춤 · 저장)은 한다."""
+        self._really_close = True
+        try:
+            self._shutdown()
+        finally:
+            QApplication.quit()
 
     def _macro_io(self):
         """카톡 매크로 설정 · 문구를 맞출 곳 — 계정이 확인된 뒤에만(다른 계정 것을 덮지 않게). 아니면 (None, "")."""

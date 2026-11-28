@@ -5,11 +5,17 @@
 //                            401 {error:"signin"}   로그인 전이거나 구글에서 권한을 뺐다
 //                            503 {error:"not_configured"}  비밀 설정 전(앱은 예전 방식)
 const s = require("../_session.js");
+const members = require("../_members.js");
 
 module.exports = async (req, res) => {
   if (!s.guard(req, res)) return;
   const sess = s.unseal(s.cookie(req, s.SESSION));
   if (!sess || !sess.rt) { s.send(res, 401, { error: "signin" }); return; }
+  // 지점장이 사용을 제한한 계정이면 토큰을 주지 않는다(v1.40 — 로그인은 남겨 두고 화면이 '사용 제한' 을 알린다)
+  if ((await members.check(sess.email)).blocked) {
+    s.send(res, 403, { error: "blocked", email: sess.email || "" });
+    return;
+  }
   let g;
   try {
     g = await s.google({ refresh_token: sess.rt, grant_type: "refresh_token" });
